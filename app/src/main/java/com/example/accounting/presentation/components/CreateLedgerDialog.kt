@@ -43,6 +43,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.AccountGroup
+import com.example.accounting.domain.accounting.StandardSystemGroups
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +51,7 @@ fun CreateLedgerDialog(
     groups: List<AccountGroup>,
     initialGroupId: String? = null,
     onDismiss: () -> Unit,
-    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double) -> Unit
+    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String) -> Unit
 ) {
     var ledgerName by remember { mutableStateOf("") }
     var selectedGroupId by remember { mutableStateOf(initialGroupId ?: groups.firstOrNull()?.groupId ?: "") }
@@ -62,9 +63,20 @@ fun CreateLedgerDialog(
     var email by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var hsnSac by remember { mutableStateOf("") }
+    // Audit fix (Company/Profile/Ledger Setup) - the Ledger domain model already carried
+    // bankAccountNumber/bankIfsc with no UI ever collecting them; bankName/bankBranch are new
+    // sibling fields (MIGRATION_19_20). Only shown/collected for a ledger actually under the
+    // Bank group, mirroring the same groupId-prefix check every other Cash/Bank filter uses.
+    var bankName by remember { mutableStateOf("") }
+    var bankAccountNumber by remember { mutableStateOf("") }
+    var bankIfsc by remember { mutableStateOf("") }
+    var bankBranch by remember { mutableStateOf("") }
 
     var groupDropdownExpanded by remember { mutableStateOf(false) }
     val groupsMap = remember(groups) { groups.associateBy { it.groupId } }
+    val isBankGroup = remember(selectedGroupId) {
+        selectedGroupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_")
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -229,6 +241,49 @@ fun CreateLedgerDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                if (isBankGroup) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Bank Details",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = bankName,
+                        onValueChange = { bankName = it },
+                        label = { Text("Bank Name") },
+                        placeholder = { Text("HDFC Bank") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = bankAccountNumber,
+                            onValueChange = { bankAccountNumber = it },
+                            label = { Text("A/c Number") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = bankIfsc,
+                            onValueChange = { bankIfsc = it.uppercase() },
+                            label = { Text("IFSC") },
+                            placeholder = { Text("HDFC0000123") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = bankBranch,
+                        onValueChange = { bankBranch = it },
+                        label = { Text("Branch") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(18.dp))
 
                 Row(
@@ -253,7 +308,11 @@ fun CreateLedgerDialog(
                                 email,
                                 address,
                                 hsnSac,
-                                0.0
+                                0.0,
+                                if (isBankGroup) bankName else "",
+                                if (isBankGroup) bankAccountNumber else "",
+                                if (isBankGroup) bankIfsc else "",
+                                if (isBankGroup) bankBranch else ""
                             )
                             onDismiss()
                         },

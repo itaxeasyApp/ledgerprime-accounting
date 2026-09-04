@@ -9,9 +9,9 @@ import com.example.accounting.data.local.entity.CompanyEntity
 import com.example.accounting.data.local.entity.FinancialYearEntity
 import com.example.accounting.data.local.entity.LedgerEntity
 import com.example.accounting.data.repository.AccountingRepository
-import com.example.accounting.domain.accounting.AccountingMode
-import com.example.accounting.domain.accounting.BusinessType
 import com.example.accounting.domain.accounting.GstRegistrationStatus
+import com.example.accounting.domain.company.AccountingMode
+import com.example.accounting.domain.company.BusinessType
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.financialyear.PeriodStatus
 import com.example.accounting.domain.taxation.gst.GstChargeType

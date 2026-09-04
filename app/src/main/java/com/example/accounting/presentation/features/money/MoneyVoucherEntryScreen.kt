@@ -8,13 +8,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -24,9 +28,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.RoundOffEngine
@@ -68,6 +76,18 @@ fun MoneyVoucherEntryScreen(
      * `CreatePartyDialog` trigger every other screen already uses, never a second creation path.
      * Null/no-op for Transfer, which has no counterparty (Cash/Bank only). */
     onAddParty: ((PartyRole) -> Unit)? = null,
+    /** Bug #3 fix - QR/Barcode scan for the Receive Payment flow, available regardless of
+     * Accounting Mode/Inventory setting (never gated by Items tab). Reuses the exact same photo
+     * picker + `QrBarcodeAdapter.scanImage` pipeline the Items tab already uses - never a second
+     * scan mechanism. Only offered for RECEIPT (Receive Money); null/no-op for Pay Money/Transfer.
+     */
+    onScanBarcode: (() -> Unit)? = null,
+    /** The raw decoded value from the most recent scan requested via [onScanBarcode] - only ever
+     * prefills Reference (never overwrites text the user already typed). The user still reviews/
+     * edits and explicitly taps the primary action button; nothing here posts anything or creates
+     * a party/ledger. Caller clears this once applied (see [onScannedValueConsumed]). */
+    scannedBarcodeValue: String? = null,
+    onScannedValueConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val title = when (voucherType) {
@@ -79,11 +99,25 @@ fun MoneyVoucherEntryScreen(
     val cashBankLedgers = remember(ledgers) {
         ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }
     }
+    // PARTY/COUNTERPARTY audit fix - Customer/Supplier is an optional role, never a mandatory
+    // gate: this used to restrict Receive Money/Pay Money to Debtors-group/Creditors-group
+    // ledgers only, which made it impossible to receive against (e.g.) a general Income ledger
+    // or pay a general Expense ledger directly unless it had also been registered as a formal
+    // Customer/Supplier. Every non-Cash/Bank ledger is offered (Cash/Bank is excluded only
+    // because it is already the other side of this voucher, picked separately above); Debtor/
+    // Creditor-group ledgers (the common case) are sorted to the top for convenience.
     val counterpartyLedgers = remember(ledgers, voucherType) {
-        when (voucherType) {
-            VoucherType.RECEIPT -> ledgers.filter { it.groupId.startsWith(StandardSystemGroups.DEBTORS_GROUP_ID) }
-            VoucherType.PAYMENT -> ledgers.filter { it.groupId.startsWith(StandardSystemGroups.CREDITORS_GROUP_ID) }
-            else -> cashBankLedgers
+        val preferredGroupId = when (voucherType) {
+            VoucherType.RECEIPT -> StandardSystemGroups.DEBTORS_GROUP_ID
+            VoucherType.PAYMENT -> StandardSystemGroups.CREDITORS_GROUP_ID
+            else -> null
+        }
+        if (preferredGroupId == null) {
+            cashBankLedgers
+        } else {
+            ledgers.filterNot {
+                it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID)
+            }.sortedByDescending { it.groupId.startsWith(preferredGroupId) }
         }
     }
 
@@ -99,6 +133,29 @@ fun MoneyVoucherEntryScreen(
     val amountMoney = remember(amountInput) { Money.parse(amountInput) }
     val roundOffPreview = remember(amountMoney, applyRoundOff) {
         if (applyRoundOff) RoundOffEngine.roundInvoiceTotal(amountMoney) else null
+    }
+
+    // Follow-up fix - a visible summary of what a Receive Payment scan actually found/applied
+    // (the user's own feedback: a silent prefill with "no display and details" is not enough).
+    var lastScanSummary by remember { mutableStateOf<String?>(null) }
+
+    // Bug #3 fix - apply a Receive Payment barcode scan result: a matched Customer (by GSTIN
+    // found in the scanned text, against already-loaded `ledgers` - no new lookup/service) only
+    // ever pre-selects an existing counterparty (never creates one); the raw scanned value only
+    // ever prefills Reference when it is still blank (never overwrites what the user already
+    // typed). Never posts, never creates a party/ledger.
+    LaunchedEffect(scannedBarcodeValue) {
+        val scanned = scannedBarcodeValue ?: return@LaunchedEffect
+        if (voucherType == VoucherType.RECEIPT) {
+            val matchedCustomer = counterpartyLedgers.firstOrNull { it.gstin.isNotBlank() && scanned.contains(it.gstin) }
+            if (matchedCustomer != null) counterpartyLedgerId = matchedCustomer.ledgerId
+            if (refNumber.isBlank()) refNumber = scanned
+            lastScanSummary = buildString {
+                append(if (matchedCustomer != null) "Receiving from: ${matchedCustomer.name}" else "No Customer matched this code")
+                append(" • Ref: $scanned")
+            }
+        }
+        onScannedValueConsumed()
     }
 
     // Receive Money: Dr Cash/Bank, Cr Customer. Pay Money: Dr Supplier, Cr Cash/Bank.
@@ -165,6 +222,35 @@ fun MoneyVoucherEntryScreen(
         Spacer(modifier = Modifier.height(Spacing.sm))
 
         FormField(value = refNumber, onValueChange = { refNumber = it }, label = "Reference (optional)", modifier = Modifier.fillMaxWidth())
+        if (voucherType == VoucherType.RECEIPT && onScanBarcode != null) {
+            TextButton(onClick = { lastScanSummary = null; onScanBarcode() }) {
+                Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Scan QR / Barcode")
+            }
+            // Follow-up fix - a visible confirmation of what the scan found/applied, never a
+            // silent prefill. Dismissible; the primary action button below is still a separate,
+            // explicit step - nothing here posts anything.
+            lastScanSummary?.let { summary ->
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Scanned - $summary",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { lastScanSummary = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(Spacing.sm))
         FormField(value = narration, onValueChange = { narration = it }, label = "Note (optional)", modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(Spacing.md))

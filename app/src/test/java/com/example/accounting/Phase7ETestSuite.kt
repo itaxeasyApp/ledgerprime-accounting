@@ -75,7 +75,7 @@ class Phase7ETestSuite {
 
     private fun ledger(id: String, targetCompanyId: String, bareGroup: String, openingType: DrCr = DrCr.DEBIT) = LedgerEntity(
         id, targetCompanyId, "${bareGroup}_$targetCompanyId", id, "", 0L, openingType, 0L, openingType,
-        "27AAAAA0000A1Z5", "AAAAA0000A", "27", "", "", "1 Buyer Lane, Ünicode Städt", "", "", false, true, "", 0.0
+        "27AAAAA0000A1Z5", "AAAAA0000A", "27", "", "", "1 Buyer Lane, Ünicode Städt", "", "", "", "", false, true, "", 0.0
     )
 
     private suspend fun postVoucher(

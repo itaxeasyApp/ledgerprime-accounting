@@ -147,7 +147,7 @@ class Phase4TestSuite {
         fun ledger(id: String, groupBare: String, openingPaise: Long = 0L, openingType: DrCr = DrCr.DEBIT) =
             com.example.accounting.data.local.entity.LedgerEntity(
                 id, company, "${groupBare}_$company", id, id, openingPaise, openingType, openingPaise, openingType,
-                "", "", "27", "", "", "", "", "", false, true, "", 0.0
+                "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
             )
         insertLedger(ledger("LED_PUR", StandardSystemGroups.PURCHASE_GROUP_ID))
         insertLedger(ledger("LED_BANK", StandardSystemGroups.BANK_GROUP_ID))
@@ -424,11 +424,11 @@ class Phase4TestSuite {
         dao.insertStockItem(stockItem("ITEM_1"))
         dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity(
             "LED_PUR", companyId, "GRP_PURCHASE_$companyId", "Purchases", "P1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT,
-            "", "", "27", "", "", "", "", "", false, true, "", 0.0
+            "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
         ))
         dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity(
             "LED_BANK", companyId, "GRP_BANK_$companyId", "Bank", "B1", 100000_00L, DrCr.DEBIT, 100000_00L, DrCr.DEBIT,
-            "", "", "27", "", "", "", "", "", false, true, "", 0.0
+            "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
         ))
 
         val repo = AccountingRepository(dao)
@@ -604,9 +604,9 @@ class Phase4TestSuite {
 
         // Ledgers referenced above only need to exist for group classification (via groupId lookup
         // in generateTrialBalance) - insert them directly under the correct standard groups.
-        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_BANK", companyId, "GRP_BANK_$companyId", "Bank", "B1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
-        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_FEES", companyId, "GRP_INDIR_INCOME_$companyId", "Professional Fees", "F1", 0L, DrCr.CREDIT, 0L, DrCr.CREDIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
-        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_INDIR_EXP", companyId, "GRP_INDIR_EXP_$companyId", "Office Expenses", "E1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
+        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_BANK", companyId, "GRP_BANK_$companyId", "Bank", "B1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
+        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_FEES", companyId, "GRP_INDIR_INCOME_$companyId", "Professional Fees", "F1", 0L, DrCr.CREDIT, 0L, DrCr.CREDIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
+        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_INDIR_EXP", companyId, "GRP_INDIR_EXP_$companyId", "Office Expenses", "E1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
 
         val repo = AccountingRepository(dao)
         val report = repo.generateIncomeAndExpenditure(companyId, fyId)
@@ -620,8 +620,8 @@ class Phase4TestSuite {
     fun i3_IncomeAndExpenditure_Deficit_SignPreserved() = runBlocking {
         val dao = freshDao()
         dao.seedCompany(businessType = BusinessType.SERVICE, accountingMode = AccountingMode.ACCOUNT_ONLY)
-        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_BANK", companyId, "GRP_BANK_$companyId", "Bank", "B1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
-        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_INDIR_EXP", companyId, "GRP_INDIR_EXP_$companyId", "Office Expenses", "E1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
+        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_BANK", companyId, "GRP_BANK_$companyId", "Bank", "B1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
+        dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity("LED_INDIR_EXP", companyId, "GRP_INDIR_EXP_$companyId", "Office Expenses", "E1", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
 
         val v = voucherEntity("V1", "PMT-1", VoucherType.PAYMENT)
         VoucherPostingEngine.post(dao, v, listOf(
@@ -701,7 +701,7 @@ class Phase4TestSuite {
         val outputCgstId = "${com.example.accounting.domain.taxation.gst.GstLedgerIds.OUTPUT_CGST_LEDGER_ID}_$companyId"
         dao.insertLedger(com.example.accounting.data.local.entity.LedgerEntity(
             outputCgstId, companyId, "GRP_DUTIES_$companyId", "Output CGST A/c", "5001",
-            1000_00L, DrCr.CREDIT, 1000_00L, DrCr.CREDIT, "", "", "27", "", "", "", "", "", true, true, "", 0.0
+            1000_00L, DrCr.CREDIT, 1000_00L, DrCr.CREDIT, "", "", "27", "", "", "", "", "", "", "", true, true, "", 0.0
         ))
 
         repo.ensureGstLedgersExist(companyId)

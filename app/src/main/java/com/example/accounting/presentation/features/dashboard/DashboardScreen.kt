@@ -71,7 +71,6 @@ fun DashboardScreen(
     val purchasesFigure = uiState.profitAndLoss?.purchases ?: Money.ZERO
     val receivables = uiState.receivablesReport?.totalOutstanding ?: (uiState.balanceSheet?.sundryDebtors ?: Money.ZERO)
     val payables = uiState.payablesReport?.totalOutstanding ?: (uiState.balanceSheet?.currentLiabilities ?: Money.ZERO)
-    val outstanding = uiState.outstandingReport?.totalOutstanding ?: Money.ZERO
     val gstPayable = uiState.gstSummary?.netTaxPayable ?: Money.ZERO
     val cashBalance = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
     val bankBalance = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
@@ -91,8 +90,8 @@ fun DashboardScreen(
                 // rolled Rows of QuickAction calls - same items, same order, same colors/icons.
                 QuickActions(
                     items = listOf(
-                        QuickActionSpec("Sale", Icons.Default.ReceiptLong, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer) { onOpenCreateVoucher(VoucherType.SALES) },
-                        QuickActionSpec("Purchase", Icons.Default.ShoppingCart, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onOpenCreateVoucher(VoucherType.PURCHASE) },
+                        QuickActionSpec(if (isService) "Income" else "Sale", Icons.Default.ReceiptLong, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer) { onOpenCreateVoucher(VoucherType.SALES) },
+                        QuickActionSpec(if (isService) "Expenditure" else "Purchase", Icons.Default.ShoppingCart, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onOpenCreateVoucher(VoucherType.PURCHASE) },
                         QuickActionSpec("Receive", Icons.Default.CallReceived, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer) { onOpenCreateVoucher(VoucherType.RECEIPT) },
                         QuickActionSpec("Pay", Icons.Default.CallMade, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) { onOpenCreateVoucher(VoucherType.PAYMENT) }
                     ),
@@ -129,7 +128,6 @@ fun DashboardScreen(
                     netProfit = netProfit,
                     netProfitLabel = if (isService) "Surplus / Deficit" else "Profit / Loss",
                     gstPayable = gstPayable,
-                    outstanding = outstanding,
                     income = if (isService) uiState.incomeAndExpenditure?.income else null,
                     expenditure = if (isService) uiState.incomeAndExpenditure?.expenditure else null,
                     onOpenCash = onOpenCash,
@@ -170,6 +168,7 @@ fun VoucherSummaryCard(
                         VoucherType.PAYMENT -> MaterialTheme.colorScheme.errorContainer
                         VoucherType.RECEIPT -> MaterialTheme.colorScheme.secondaryContainer
                         VoucherType.SALES -> MaterialTheme.colorScheme.primaryContainer
+                        VoucherType.PURCHASE -> MaterialTheme.colorScheme.tertiaryContainer
                         else -> MaterialTheme.colorScheme.surfaceVariant
                     }
                 ) {

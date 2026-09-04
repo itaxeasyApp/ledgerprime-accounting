@@ -105,7 +105,7 @@ class Phase7CTestSuite {
 
     private fun ledger(id: String, bareGroup: String, openingType: DrCr = DrCr.DEBIT) = LedgerEntity(
         id, companyId, "${bareGroup}_$companyId", id, "", 0L, openingType, 0L, openingType,
-        "", "", "27", "", "", "", "", "", false, true, "", 0.0
+        "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
     )
 
     private suspend fun postVoucher(
@@ -249,6 +249,42 @@ class Phase7CTestSuite {
 
         val payables = repo.generatePayablesReport(companyId, today = LocalDate.of(2026, 5, 20))
         assertEquals(listOf("INV_PURCHASE"), payables.rows.map { it.invoiceId })
+    }
+
+    /**
+     * Root-cause regression (business-model audit): Receivable/Payable must reflect every real
+     * outstanding posting, never only ones with a registered Customer/Supplier [Party] or a linked
+     * [com.example.accounting.data.local.entity.InvoiceEntity] - most Sale/Purchase vouchers posted
+     * through the real UI ([com.example.accounting.domain.trading.TradingWorkflowEngine] ->
+     * `postVoucher`) never create either. A plain ledger with neither must still appear while
+     * outstanding, and disappear once fully settled or cancelled.
+     */
+    @Test
+    fun testGenerateReceivablesReport_includesPlainLedgerWithNoPartyOrInvoice() = runBlocking {
+        val dao = freshDao()
+        val ledgers = dao.seed()
+        val repo = AccountingRepository(dao)
+        val walkInLedgerId = "LED_WALKIN"
+        dao.insertLedger(ledger(walkInLedgerId, StandardSystemGroups.DEBTORS_GROUP_ID).copy(name = "Walk-in Counter Sale"))
+
+        postVoucher(dao, "V_WALKIN", VoucherType.SALES, "2026-05-01", walkInLedgerId, ledgers.getValue("sales"), 4_000_00L)
+
+        val receivables = repo.generateReceivablesReport(companyId, today = LocalDate.of(2026, 5, 20))
+        val row = receivables.rows.single { it.voucherId == "V_WALKIN" }
+        assertEquals(walkInLedgerId, row.partyId)
+        assertEquals("Walk-in Counter Sale", row.partyName)
+        assertEquals(4_000_00L, row.outstandingAmount.paise)
+
+        // Fully settled -> no longer outstanding.
+        dao.insertSettlementAllocations(listOf(SettlementAllocationEntity("ALLOC_WALKIN", companyId, fyId, "V_WALKIN_RCT", "V_WALKIN", 4_000_00L, 0L)))
+        val afterSettlement = repo.generateReceivablesReport(companyId, today = LocalDate.of(2026, 5, 20))
+        assertTrue(afterSettlement.rows.none { it.voucherId == "V_WALKIN" })
+
+        // A second, cancelled walk-in sale must not appear either.
+        postVoucher(dao, "V_WALKIN_CANCELLED", VoucherType.SALES, "2026-05-02", walkInLedgerId, ledgers.getValue("sales"), 1_500_00L)
+        VoucherPostingEngine.cancel(dao, companyId, fyId, "V_WALKIN_CANCELLED", "IK_CANCEL_WALKIN", "TESTER")
+        val afterCancel = repo.generateReceivablesReport(companyId, today = LocalDate.of(2026, 5, 20))
+        assertTrue(afterCancel.rows.none { it.voucherId == "V_WALKIN_CANCELLED" })
     }
 
     // ==========================================

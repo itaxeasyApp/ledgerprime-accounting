@@ -122,7 +122,7 @@ class GstReturnDashboardTestSuite {
     }
 
     private fun ledger(id: String, groupBare: String, openingType: DrCr = DrCr.DEBIT, stateCode: String = "27") =
-        LedgerEntity(id, companyId, "${groupBare}_$companyId", id, id, 0L, openingType, 0L, openingType, "", "", stateCode, "", "", "", "", "", false, true, "", 0.0)
+        LedgerEntity(id, companyId, "${groupBare}_$companyId", id, id, 0L, openingType, 0L, openingType, "", "", stateCode, "", "", "", "", "", "", "", false, true, "", 0.0)
 
     private suspend fun AccountingDao.seedTradingLedgers() {
         insertLedger(ledger("LED_DEBTOR", StandardSystemGroups.DEBTORS_GROUP_ID))

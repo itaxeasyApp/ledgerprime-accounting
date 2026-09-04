@@ -163,6 +163,12 @@ fun MoneyTabContent(
     onDiscardDraft: (String) -> Unit,
     onSubmitMoneyVoucher: (VoucherType, LocalDate, String, String, Money, String, String, Boolean) -> Unit,
     onAddParty: (PartyRole) -> Unit,
+    /** Bug #3 fix - QR/Barcode scan for Receive Payment, threaded down to
+     * [MoneyVoucherEntryScreen] only while its Entry sub-screen is a RECEIPT. Never gated by
+     * Inventory Mode/Items tab. */
+    onScanBarcode: (() -> Unit)? = null,
+    scannedBarcodeValue: String? = null,
+    onScannedValueConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var sub by remember { mutableStateOf<MoneySubScreen>(MoneySubScreen.Home) }
@@ -216,6 +222,9 @@ fun MoneyTabContent(
                 sub = MoneySubScreen.Home
             },
             onAddParty = onAddParty,
+            onScanBarcode = onScanBarcode,
+            scannedBarcodeValue = scannedBarcodeValue,
+            onScannedValueConsumed = onScannedValueConsumed,
             modifier = modifier
         )
     }

@@ -118,7 +118,7 @@ class Phase7BTestSuite {
         val debtorsGroupId = "${StandardSystemGroups.DEBTORS_GROUP_ID}_$companyId"
         insertGroup(GroupEntity(debtorsGroupId, companyId, "Sundry Debtors", PrimaryGroup.ASSETS, null, true, false, 1))
         val ledgerId = "LED_CUSTOMER_1"
-        insertLedger(LedgerEntity(ledgerId, companyId, debtorsGroupId, "Acme Corp", "", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", false, true, "", 0.0))
+        insertLedger(LedgerEntity(ledgerId, companyId, debtorsGroupId, "Acme Corp", "", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0))
         return ledgerId
     }
 

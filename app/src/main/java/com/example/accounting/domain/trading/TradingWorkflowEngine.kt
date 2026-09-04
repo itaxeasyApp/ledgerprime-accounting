@@ -102,13 +102,20 @@ object TradingWorkflowEngine {
         companyStateCode: String, placeOfSupply: String,
         lines: List<TradingLineInput>,
         gstLedgers: TradingGstLedgers,
-        roundOffLedgerId: String, roundOffLedgerName: String
+        roundOffLedgerId: String, roundOffLedgerName: String,
+        /** Accounting-flow audit fix - Inventory Mode must only affect stock/COGS, never whether
+         * GST accounting exists (see [buildAccountOnlySale]'s own doc comment for the bug this
+         * closes). `true` (every existing caller, unchanged) produces [VoucherStockLine]s exactly
+         * as before; `false` (Account-Only + GST-applicable) skips them while still computing the
+         * full CGST/SGST/IGST/CESS breakdown and tax-ledger postings via the same code below. */
+        trackInventory: Boolean = true
     ): TradingWorkflowResult = build(
         isSale = true, voucherId = voucherId, companyId = companyId, financialYearId = financialYearId,
         partyLedgerId = customerLedgerId, partyName = customerName, partyGstin = customerGstin,
         tradeLedgerId = salesLedgerId, tradeLedgerName = salesLedgerName,
         companyStateCode = companyStateCode, placeOfSupply = placeOfSupply, lines = lines,
-        gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName
+        gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName,
+        trackInventory = trackInventory
     )
 
     /**
@@ -354,13 +361,15 @@ object TradingWorkflowEngine {
         companyStateCode: String, placeOfSupply: String,
         lines: List<TradingLineInput>,
         gstLedgers: TradingGstLedgers,
-        roundOffLedgerId: String, roundOffLedgerName: String
+        roundOffLedgerId: String, roundOffLedgerName: String,
+        trackInventory: Boolean = true
     ): TradingWorkflowResult = build(
         isSale = false, voucherId = voucherId, companyId = companyId, financialYearId = financialYearId,
         partyLedgerId = supplierLedgerId, partyName = supplierName, partyGstin = supplierGstin,
         tradeLedgerId = purchaseLedgerId, tradeLedgerName = purchaseLedgerName,
         companyStateCode = companyStateCode, placeOfSupply = placeOfSupply, lines = lines,
-        gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName
+        gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName,
+        trackInventory = trackInventory
     )
 
     private fun build(
@@ -370,7 +379,8 @@ object TradingWorkflowEngine {
         companyStateCode: String, placeOfSupply: String,
         lines: List<TradingLineInput>,
         gstLedgers: TradingGstLedgers,
-        roundOffLedgerId: String, roundOffLedgerName: String
+        roundOffLedgerId: String, roundOffLedgerName: String,
+        trackInventory: Boolean = true
     ): TradingWorkflowResult {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // Rule 31 (Purchase/RCM Foundation): authoritative backstops, matching the
@@ -447,12 +457,14 @@ object TradingWorkflowEngine {
                 igstTotal += breakdown.igstAmount
             }
 
-            stockLines += VoucherStockLine(
-                lineId = UUID.randomUUID().toString(), voucherId = voucherId, companyId = companyId,
-                financialYearId = financialYearId, itemId = line.itemId, itemName = line.itemName,
-                direction = stockDirection, quantity = line.quantity, rate = line.rate,
-                amount = lineTaxable, lineOrder = index + 1
-            )
+            if (trackInventory) {
+                stockLines += VoucherStockLine(
+                    lineId = UUID.randomUUID().toString(), voucherId = voucherId, companyId = companyId,
+                    financialYearId = financialYearId, itemId = line.itemId, itemName = line.itemName,
+                    direction = stockDirection, quantity = line.quantity, rate = line.rate,
+                    amount = lineTaxable, lineOrder = index + 1
+                )
+            }
 
             gstTransactions += GstTransaction(
                 gstTransactionId = UUID.randomUUID().toString(), companyId = companyId, financialYearId = financialYearId,

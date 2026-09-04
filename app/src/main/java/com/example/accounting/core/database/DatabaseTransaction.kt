@@ -270,6 +270,34 @@ internal object VoucherPostingEngine {
         }
         dao.insertJournalItems(reversalItems)
 
+        // 3.5. Audit fix (accounting-flow audit) - reverse this voucher's GST facts too, if it had
+        // any (Sale/Purchase/Credit-Debit Note). Previously cancellation only reversed
+        // journal_items/stock movements, leaving gst_transactions untouched - a cancelled GST-
+        // bearing voucher's tax liability stayed fully counted in GSTSummaryReport/filing figures
+        // forever. Mirrors TradingWorkflowEngine.buildNote's own negation pattern exactly: NEGATED
+        // taxable/CGST/SGST/IGST/CESS at the SAME direction as the original (never a new opposite-
+        // direction transaction - the standard GST-return representation), never a mutation of the
+        // original rows (Rule 12 - append-only), same voucherId as the cancelled voucher.
+        val originalGstTransactions = dao.getGstTransactionsForVoucher(voucherId)
+        val reversalGstTransactions = if (originalGstTransactions.isNotEmpty()) {
+            val reversalGroupId = UUID.randomUUID().toString()
+            originalGstTransactions.mapIndexed { index, gt ->
+                gt.copy(
+                    gstTransactionId = UUID.randomUUID().toString(),
+                    taxableAmountPaise = -gt.taxableAmountPaise,
+                    cgstPaise = -gt.cgstPaise,
+                    sgstPaise = -gt.sgstPaise,
+                    igstPaise = -gt.igstPaise,
+                    cessPaise = -gt.cessPaise,
+                    lineOrder = index + 1,
+                    createdAt = System.currentTimeMillis(),
+                    transactionGroupId = reversalGroupId
+                )
+            }.also { dao.insertGstTransactions(it) }
+        } else {
+            emptyList()
+        }
+
         // 4. Mark voucher cancelled (append-only; header row itself is updated, never deleted)
         dao.cancelVoucher(companyId, voucherId, System.currentTimeMillis())
 
@@ -318,6 +346,13 @@ internal object VoucherPostingEngine {
                         ),
                         journalLines = reversalItems.map {
                             SyncJournalLineDto(it.itemId, it.ledgerId, "", it.type.name, it.amountPaise, it.narration, it.lineOrder)
+                        },
+                        gstTransactions = reversalGstTransactions.map {
+                            SyncGstTransactionDto(
+                                it.gstTransactionId, it.voucherType.name, it.partyLedgerId, it.partyGstin, it.placeOfSupply, it.supplyType.name,
+                                it.itemId, it.hsnSacCode, it.quantityRaw, it.taxableAmountPaise, it.gstRatePercent,
+                                it.cgstPaise, it.sgstPaise, it.igstPaise, it.cessPaise, it.direction.name, it.lineOrder
+                            )
                         }
                     )
                 ),

@@ -30,8 +30,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +58,16 @@ import com.example.accounting.domain.trading.OutstandingInvoice
 import com.example.accounting.presentation.viewmodel.AccountingViewModel
 import java.time.LocalDate
 
+/** SERVICE-mode audit fix - the user-facing label for a [VoucherType] in the voucher-creation
+ * workflow. Identical to [VoucherType.displayName] for every type/company except SALES/PURCHASE
+ * on a SERVICE company, which read as "Income"/"Expenditure" instead - this app's canonical
+ * [VoucherType] enum is never duplicated or renamed to achieve this, only its on-screen label. */
+private fun voucherNatureLabel(type: VoucherType, isServiceCompany: Boolean): String = when {
+    isServiceCompany && type == VoucherType.SALES -> "Income"
+    isServiceCompany && type == VoucherType.PURCHASE -> "Expenditure"
+    else -> type.displayName
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateVoucherDialog(
@@ -69,7 +81,19 @@ fun CreateVoucherDialog(
      * related call site reads. Defaults to `true` so any caller that doesn't yet pass it explicitly
      * keeps today's item-driven Sale/Purchase behavior unchanged. */
     isInventoryEnabled: Boolean = true,
+    /** Accounting-flow audit fix - whether this company's [com.example.accounting.domain.company.GstOperatingMode]
+     * says GST applies at all, independent of [isInventoryEnabled]. Only meaningful for the
+     * Account-Only Sale/Purchase form (the item-driven form always carries GST per line
+     * regardless of this flag). */
+    gstApplicable: Boolean = false,
     defaultVoucherType: VoucherType = VoucherType.PAYMENT,
+    /** SERVICE-mode audit fix - when this company's [com.example.accounting.domain.company.BusinessType]
+     * is SERVICE, the Sale/Purchase workflow is presented to the user as Income/Expenditure (this
+     * company has no Trading Account/Gross Profit concept - see [com.example.accounting.domain.company.BusinessType]).
+     * Purely a display relabel: still posts the same canonical [VoucherType.SALES]/[VoucherType.PURCHASE]
+     * through the same unmodified posting engine - never a third voucher type, never inferred from
+     * direction. */
+    isServiceCompany: Boolean = false,
     /** When true, this dialog was opened from a screen already dedicated to one voucher type (e.g.
      * Sales' "New Sale") - the "Voucher Nature" type switcher is hidden so the user can't wander
      * into a different voucher type by accident. Left false for genuinely generic entry points
@@ -78,6 +102,10 @@ fun CreateVoucherDialog(
     onDismiss: () -> Unit,
     onAddNewParty: (PartyRole) -> Unit = {},
     onAddNewBankLedger: () -> Unit = {},
+    /** Follow-up to the user's Bug #3 device-testing feedback - lets Sale/Purchase creation add a
+     * missing Sales/Purchase Account ledger inline (mirrors [onAddNewBankLedger] exactly) instead
+     * of a hard-blocking "create one from Ledgers" dead end. `true` = Sales, `false` = Purchase. */
+    onAddNewTradeLedger: (Boolean) -> Unit = {},
     onPostQuickVoucher: (VoucherType, LocalDate, String, String, Money, String, String) -> Unit,
     /** Save this Contra/Journal/Receipt/Payment as a [com.example.accounting.application.voucher.VoucherDraft]
      * instead of posting - Phase 7J-B.1. Same flat (type, date, debitLedgerId, creditLedgerId, amount,
@@ -87,15 +115,35 @@ fun CreateVoucherDialog(
     onSaveAsDraft: (VoucherType, LocalDate, String, String, Money, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
     onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
-    /** D1a - Sale/Purchase for an ACCOUNT_ONLY company (no Item, no GST): Party ledger, Trade
-     * ledger, amount, date, reference number, narration. */
-    onPostAccountOnlySale: (String, String, Money, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
-    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    /** D1a - Sale/Purchase for an ACCOUNT_ONLY company: Party ledger, Trade ledger, amount, date,
+     * reference number, narration, GST rate % (0.0 = no GST), HSN/SAC. Accounting-flow audit fix -
+     * the trailing (Double, String) pair was added so Account-Only can still charge/claim GST when
+     * [gstApplicable] is true; every existing caller that doesn't pass them keeps posting with
+     * gstRatePercent = 0.0 (byte-identical to the pre-fix no-GST behavior). */
+    onPostAccountOnlySale: (String, String, Money, LocalDate, String, String, Double, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
     onPostCreditNote: (String, LocalDate, String, String) -> Unit = { _, _, _, _ -> },
     onPostDebitNote: (String, LocalDate, String, String) -> Unit = { _, _, _, _ -> },
     onPostSettlement: (VoucherType, LocalDate, String, String, Money, String, String, String, List<Pair<String, Money>>) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     onLoadOutstandingInvoices: (String) -> Unit = {},
-    onClearOutstandingInvoices: () -> Unit = {}
+    onClearOutstandingInvoices: () -> Unit = {},
+    /** Bug #3 fix - QR/Barcode scan for Purchase Voucher creation, available regardless of
+     * [isInventoryEnabled]/Accounting Mode (never gated by Items tab or Inventory Mode, per the
+     * user's explicit instruction). Launches the same photo picker + [QrBarcodeAdapter.scanImage]
+     * pipeline the Items tab already uses - never a second scan mechanism. `null` (the default)
+     * hides the "Scan Bill" affordance entirely for callers that don't wire it. */
+    onScanBarcode: (() -> Unit)? = null,
+    /** The raw decoded value from the most recent scan requested via [onScanBarcode] - only ever
+     * *populates* a field (Reference Number, or an Item line when a [StockItem] match exists); the
+     * user still reviews/edits and explicitly taps "Post to Ledger". Never auto-posts, never
+     * creates a party/ledger/item. Caller clears this (via [onScannedValueConsumed]) once applied
+     * so it doesn't reapply on recomposition. */
+    scannedBarcodeValue: String? = null,
+    /** [com.example.accounting.domain.qrbarcode.BarcodeScanSuggestion.matchedStockItemId] - a
+     * *suggestion* only, exactly as the frozen [QrBarcodeAdapter] contract promises; still just
+     * pre-selects an existing item into a new line, never creates one. */
+    scannedMatchedItemId: String? = null,
+    onScannedValueConsumed: () -> Unit = {}
 ) {
     var selectedType by remember { mutableStateOf(defaultVoucherType) }
     val isSaleFlow = selectedType == VoucherType.SALES
@@ -145,9 +193,52 @@ fun CreateVoucherDialog(
         mutableStateOf(ledgers.firstOrNull { if (isSaleFlow) isSalesLedger(it) else isPurchaseLedger(it) }?.ledgerId ?: "")
     }
     var lines by remember { mutableStateOf(listOf(LineFormState())) }
+    // Accounting-flow audit fix - Account-Only Sale/Purchase GST rate/HSN, only ever read when
+    // isInventoryEnabled is false and gstApplicable is true (see TradingForm's own gating).
+    var accountOnlyGstRateInput by remember { mutableStateOf("0") }
+    var accountOnlyHsnSacInput by remember { mutableStateOf("") }
     var partyDropdownExpanded by remember { mutableStateOf(false) }
     var tradeDropdownExpanded by remember { mutableStateOf(false) }
     val itemsMap = remember(stockItems) { stockItems.associateBy { it.itemId } }
+
+    // Follow-up fix - a visible summary of what a Purchase-flow scan actually found/applied
+    // (the user's own feedback: a silent prefill with "no display and details" is not enough).
+    // Cleared whenever a new scan starts or the user dismisses it.
+    var lastScanSummary by remember { mutableStateOf<String?>(null) }
+
+    // Bug #3 fix - apply a Purchase-flow barcode scan result: works identically in
+    // ACCOUNT_ONLY and ACCOUNT_WITH_INVENTORY (never gated by isInventoryEnabled/Items tab). A
+    // matched StockItem only ever pre-selects an existing item into a new line (never creates
+    // one); a matched Supplier (by GSTIN found in the scanned text, against already-loaded
+    // `ledgers` - no new lookup/service) only ever pre-selects an existing Supplier (never
+    // creates one); otherwise the raw scanned value only ever prefills Reference Number when it
+    // is still blank (never overwrites what the user already typed). Purely a form-state prefill
+    // - posting still requires the user to review the form and explicitly tap "Post to Ledger".
+    LaunchedEffect(scannedBarcodeValue) {
+        val scanned = scannedBarcodeValue ?: return@LaunchedEffect
+        if (isPurchaseFlow) {
+            val matchedSupplier = ledgers.firstOrNull { isCreditorLedger(it) && it.gstin.isNotBlank() && scanned.contains(it.gstin) }
+            if (matchedSupplier != null) partyLedgerId = matchedSupplier.ledgerId
+
+            val matchedItem = scannedMatchedItemId?.let { itemsMap[it] }
+            val itemApplied = if (isInventoryEnabled && matchedItem != null) {
+                val alreadyOnALine = lines.any { it.itemId == matchedItem.itemId }
+                if (!alreadyOnALine) {
+                    val newLine = LineFormState(itemId = matchedItem.itemId, rateInput = (matchedItem.standardCost.paise / 100.0).toString())
+                    lines = if (lines.size == 1 && lines[0].itemId.isBlank()) listOf(newLine) else lines + newLine
+                }
+                true
+            } else false
+            if (!itemApplied && referenceNumber.isBlank()) referenceNumber = scanned
+
+            lastScanSummary = buildString {
+                append(if (matchedSupplier != null) "Supplier: ${matchedSupplier.name}" else "No Supplier matched this code")
+                if (itemApplied && matchedItem != null) append(" • Item: ${matchedItem.name}")
+                append(" • Ref: $scanned")
+            }
+        }
+        onScannedValueConsumed()
+    }
 
     // ==== Credit/Debit Note form state ====
     var originalVoucherId by remember { mutableStateOf("") }
@@ -201,7 +292,7 @@ fun CreateVoucherDialog(
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Sale, Purchase, Receipt, Payment & More",
+                            text = if (isServiceCompany) "Income, Expenditure, Receipt, Payment & More" else "Sale, Purchase, Receipt, Payment & More",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -266,10 +357,44 @@ fun CreateVoucherDialog(
                                     else -> {}
                                 }
                             },
-                            label = { Text(type.displayName, fontSize = 12.sp) }
+                            label = { Text(voucherNatureLabel(type, isServiceCompany), fontSize = 12.sp) }
                         )
                     }
                 }
+                }
+
+                // Bug #3 fix - QR/Barcode scan for Purchase Voucher creation, available in both
+                // ACCOUNT_ONLY and ACCOUNT_WITH_INVENTORY (never gated by Inventory Mode/Items
+                // tab). Only ever populates the form above via LaunchedEffect(scannedBarcodeValue)
+                // - the user still reviews/edits and explicitly taps "Post to Ledger".
+                if (isPurchaseFlow && onScanBarcode != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(onClick = { lastScanSummary = null; onScanBarcode() }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan Bill Barcode / QR")
+                    }
+                    // Follow-up fix - a visible confirmation of what the scan found/applied,
+                    // never a silent prefill. Dismissible; posting is still a separate, explicit step.
+                    lastScanSummary?.let { summary ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Scanned - $summary",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { lastScanSummary = null }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -277,6 +402,7 @@ fun CreateVoucherDialog(
                 when {
                     isTradingFlow -> TradingForm(
                         isSale = isSaleFlow,
+                        isServiceCompany = isServiceCompany,
                         ledgers = ledgers,
                         stockItems = stockItems,
                         itemsMap = itemsMap,
@@ -297,9 +423,15 @@ fun CreateVoucherDialog(
                         tradeDropdownExpanded = tradeDropdownExpanded,
                         onTradeDropdownExpandedChange = { tradeDropdownExpanded = it },
                         onAddNewParty = { onAddNewParty(if (isSaleFlow) PartyRole.CUSTOMER else PartyRole.SUPPLIER) },
+                        onAddNewTradeLedger = { onAddNewTradeLedger(isSaleFlow) },
                         isInventoryEnabled = isInventoryEnabled,
                         amountInput = amountInput,
-                        onAmountChange = { amountInput = it }
+                        onAmountChange = { amountInput = it },
+                        gstApplicable = gstApplicable,
+                        gstRateInput = accountOnlyGstRateInput,
+                        onGstRateChange = { accountOnlyGstRateInput = it },
+                        hsnSacInput = accountOnlyHsnSacInput,
+                        onHsnSacChange = { accountOnlyHsnSacInput = it }
                     )
 
                     isNoteFlow -> NoteForm(
@@ -495,7 +627,7 @@ fun CreateVoucherDialog(
                                 }
                                 onSaveAsDraft(
                                     selectedType, LocalDate.now(), draftDebitId, draftCreditId, draftAmount,
-                                    narration.ifBlank { "Being ${selectedType.displayName.lowercase()} transaction (draft)" },
+                                    narration.ifBlank { "Being ${voucherNatureLabel(selectedType, isServiceCompany).lowercase()} transaction (draft)" },
                                     referenceNumber
                                 )
                                 onDismiss()
@@ -515,7 +647,7 @@ fun CreateVoucherDialog(
                                     },
                                     LocalDate.now(), referenceNumber, narration
                                 )
-                                isSaleFlow -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration)
+                                isSaleFlow -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
                                 isPurchaseFlow && isInventoryEnabled -> onPostPurchaseBill(
                                     partyLedgerId, tradeLedgerId,
                                     lines.filter { it.itemId.isNotBlank() }.map {
@@ -523,7 +655,7 @@ fun CreateVoucherDialog(
                                     },
                                     LocalDate.now(), referenceNumber, narration
                                 )
-                                isPurchaseFlow -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration)
+                                isPurchaseFlow -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
                                 isCreditNoteFlow -> onPostCreditNote(originalVoucherId, LocalDate.now(), referenceNumber, narration)
                                 isDebitNoteFlow -> onPostDebitNote(originalVoucherId, LocalDate.now(), referenceNumber, narration)
                                 isSettlementFlow -> {
@@ -541,7 +673,7 @@ fun CreateVoucherDialog(
                                 }
                                 else -> onPostQuickVoucher(
                                     selectedType, LocalDate.now(), debitLedgerId, creditLedgerId, amountMoney,
-                                    narration.ifBlank { "Being ${selectedType.displayName} transaction" }, referenceNumber
+                                    narration.ifBlank { "Being ${voucherNatureLabel(selectedType, isServiceCompany)} transaction" }, referenceNumber
                                 )
                             }
                             onDismiss()

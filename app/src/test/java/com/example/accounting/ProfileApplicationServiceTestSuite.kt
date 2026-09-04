@@ -101,7 +101,7 @@ class ProfileApplicationServiceTestSuite {
         insertLedger(LedgerEntity(
             "LED_CASH_$targetCompanyId", targetCompanyId, "${StandardSystemGroups.CASH_GROUP_ID}_$targetCompanyId", "Cash", "",
             0L, com.example.accounting.core.common.DrCr.DEBIT, 0L, com.example.accounting.core.common.DrCr.DEBIT,
-            "", "", "27", "", "", "", "", "", false, true, "", 0.0
+            "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
         ))
     }
 

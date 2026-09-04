@@ -1,5 +1,6 @@
 package com.example.accounting.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -56,16 +57,16 @@ data class CompanyEntity(
     val financialYearStartMonth: Int,
     val isDefault: Boolean,
     val createdAt: Long,
-    val accountingMode: AccountingMode = AccountingMode.ACCOUNT_ONLY,
-    val businessType: BusinessType = BusinessType.TRADING,
-    val gstEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "'ACCOUNT_ONLY'") val accountingMode: AccountingMode = AccountingMode.ACCOUNT_ONLY,
+    @ColumnInfo(defaultValue = "'TRADING'") val businessType: BusinessType = BusinessType.TRADING,
+    @ColumnInfo(defaultValue = "1") val gstEnabled: Boolean = true,
     /** D1a - see [com.example.accounting.domain.company.Company.gstOperatingMode]. */
-    val gstOperatingMode: GstOperatingMode = GstOperatingMode.ACCOUNT_WITH_GST,
+    @ColumnInfo(defaultValue = "'ACCOUNT_WITH_GST'") val gstOperatingMode: GstOperatingMode = GstOperatingMode.ACCOUNT_WITH_GST,
     /** Rule 33 (GST Return Dashboard & Filing Foundation) - see
      * [com.example.accounting.domain.company.Company.gstScheme]. */
-    val gstScheme: GstScheme = GstScheme.REGULAR,
+    @ColumnInfo(defaultValue = "'REGULAR'") val gstScheme: GstScheme = GstScheme.REGULAR,
     /** Rule 33 - see [com.example.accounting.domain.company.Company.gstFilingFrequency]. */
-    val gstFilingFrequency: GstReturnPeriodicity = GstReturnPeriodicity.MONTHLY
+    @ColumnInfo(defaultValue = "'MONTHLY'") val gstFilingFrequency: GstReturnPeriodicity = GstReturnPeriodicity.MONTHLY
 )
 
 @Entity(
@@ -197,8 +198,10 @@ data class LedgerEntity(
     val email: String,
     val phone: String,
     val address: String,
+    @ColumnInfo(defaultValue = "''") val bankName: String = "",
     val bankAccountNumber: String,
     val bankIfsc: String,
+    @ColumnInfo(defaultValue = "''") val bankBranch: String = "",
     val isSystem: Boolean,
     val isActive: Boolean,
     val hsnSacCode: String,
@@ -252,7 +255,7 @@ data class VoucherEntity(
     val referenceVoucherId: String? = null,
     /** Metadata only ("CASH"/"BANK"/"UPI") - the actual settlement ledger is whatever Cash/Bank
      * ledger the journal lines reference; UPI never becomes its own ledger type (Phase 5, Priority 8). */
-    val paymentMode: String = ""
+    @ColumnInfo(defaultValue = "''") val paymentMode: String = ""
 )
 
 @Entity(
@@ -315,7 +318,7 @@ data class StockItemEntity(
      * Performance cache only - [StockMovementEntity] history remains the authoritative source of
      * truth and this value must always be reproducible by replaying movements from scratch.
      */
-    val currentAvgCostPaise: Long = 0L
+    @ColumnInfo(defaultValue = "0") val currentAvgCostPaise: Long = 0L
 )
 
 @Entity(
@@ -457,7 +460,7 @@ data class OutboxSyncEntity(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("companyId"), Index("financialYearId"), Index("voucherId"), Index("partyLedgerId"), Index("direction")]
+    indices = [Index("companyId"), Index("financialYearId"), Index("voucherId"), Index("partyLedgerId"), Index("direction"), Index("transactionGroupId")]
 )
 data class GstTransactionEntity(
     @PrimaryKey val gstTransactionId: String,
@@ -488,17 +491,17 @@ data class GstTransactionEntity(
     /** Rule 31 (Purchase/RCM Foundation) - see [com.example.accounting.domain.taxation.gst.GstTransaction.chargeType].
      * Defaults to FORWARD_CHARGE - every pre-existing row (RCM never existed before this) really
      * was forward-charge, so the migration backfill default is a genuine fact, not a guess. */
-    val chargeType: GstChargeType = GstChargeType.FORWARD_CHARGE,
+    @ColumnInfo(defaultValue = "'FORWARD_CHARGE'") val chargeType: GstChargeType = GstChargeType.FORWARD_CHARGE,
     /** D1b - see [com.example.accounting.domain.taxation.gst.GstTransaction.supplyNature]. Defaults
      * to NORMAL; `MIGRATION_18_19` backfills existing rows from their own `supplyType` (see that
      * migration's own comment for the exact, disclosed EXEMPT-vs-NIL_RATED limitation). */
-    val supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+    @ColumnInfo(defaultValue = "'NORMAL'") val supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
     /** D1b - see [com.example.accounting.domain.taxation.gst.GstTransaction.transactionGroupId].
      * Never blank in practice - `MIGRATION_18_19` backfills every existing row from its own
      * `voucherId` (accounting-integrated) or, failing that, its own `gstTransactionId` (a
      * pre-migration GST-only row, treated as its own one-line group - none exist in production
      * per the D1a-era audit, but this is still the honest, non-destructive backfill). */
-    val transactionGroupId: String = "",
+    @ColumnInfo(defaultValue = "''") val transactionGroupId: String = "",
     /** D1b - see [com.example.accounting.domain.taxation.gst.GstTransaction.transactionDate]. ISO-
      * 8601 (`YYYY-MM-DD`), matching [VoucherEntity.date]'s own convention - `null` for every
      * accounting-integrated row (unchanged; that row's real date is [VoucherEntity.date] via the
@@ -791,19 +794,19 @@ data class BusinessProfileEntity(
     val companyId: String,
     val businessName: String,
     val legalName: String,
-    val constitutionType: ConstitutionType = ConstitutionType.PROPRIETORSHIP,
+    @ColumnInfo(defaultValue = "'PROPRIETORSHIP'") val constitutionType: ConstitutionType = ConstitutionType.PROPRIETORSHIP,
     val address: String,
-    val pinCode: String = "",
-    val city: String = "",
-    val state: String = "",
-    val country: String = "",
+    @ColumnInfo(defaultValue = "''") val pinCode: String = "",
+    @ColumnInfo(defaultValue = "''") val city: String = "",
+    @ColumnInfo(defaultValue = "''") val state: String = "",
+    @ColumnInfo(defaultValue = "''") val country: String = "",
     val phone: String,
     val email: String,
     val website: String,
     val gstin: String,
     val pan: String,
-    val tan: String = "",
-    val udyam: String = "",
+    @ColumnInfo(defaultValue = "''") val tan: String = "",
+    @ColumnInfo(defaultValue = "''") val udyam: String = "",
     val logoAssetId: String?,
     val bankName: String,
     val bankAccountNumber: String,
@@ -830,10 +833,10 @@ data class IndividualProfileEntity(
     val companyId: String,
     val name: String,
     val address: String,
-    val pinCode: String = "",
-    val city: String = "",
-    val state: String = "",
-    val country: String = "",
+    @ColumnInfo(defaultValue = "''") val pinCode: String = "",
+    @ColumnInfo(defaultValue = "''") val city: String = "",
+    @ColumnInfo(defaultValue = "''") val state: String = "",
+    @ColumnInfo(defaultValue = "''") val country: String = "",
     val pan: String,
     val phone: String,
     val email: String,

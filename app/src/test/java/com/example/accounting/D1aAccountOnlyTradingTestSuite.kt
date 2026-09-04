@@ -66,7 +66,7 @@ class D1aAccountOnlyTradingTestSuite {
 
     private fun ledger(id: String, groupBare: String, openingType: DrCr = DrCr.DEBIT) = LedgerEntity(
         id, companyId, "${groupBare}_$companyId", id, id, 0L, openingType, 0L, openingType,
-        "", "", "27", "", "", "", "", "", false, true, "", 0.0
+        "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
     )
 
     private suspend fun AccountingDao.seedTradingLedgers() {
@@ -377,5 +377,156 @@ class D1aAccountOnlyTradingTestSuite {
 
         val companyAfter = repo.getCompanies().first().first { it.companyId == companyId }
         assertEquals(GstOperatingMode.GST_ONLY, companyAfter.gstOperatingMode)
+    }
+
+    // ==========================================
+    // Accounting-flow audit fix - Inventory Mode must only gate stock/COGS, never whether GST
+    // accounting exists. Account-Only Sale/Purchase can now compute GST via the same build()/
+    // GstCalculationEngine every item-driven posting already uses, just with trackInventory=false.
+    // ==========================================
+
+    @Test
+    fun t18_AccountOnlySale_WithGstRate_ComputesGstAndSkipsStockLines() {
+        val syntheticLine = TradingLineInput(
+            itemId = "", itemName = "Sale (Account Only)", hsnSacCode = "9983",
+            quantity = Quantity.fromDouble(1.0, "Nos"), rate = Money.fromRupees(1000L), gstRatePercent = 18.0
+        )
+        val result = TradingWorkflowEngine.buildSale(
+            "V18", companyId, fyId, "LED_DEBTOR", "Cust", "",
+            "LED_SALES", "Sales", "27", "27",
+            lines = listOf(syntheticLine),
+            gstLedgers = com.example.accounting.domain.trading.TradingGstLedgers(
+                ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref()
+            ),
+            roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off",
+            trackInventory = false
+        )
+        assertTrue("Account-Only + GST must never produce a stock line", result.stockLines.isEmpty())
+        assertEquals("Account-Only + GST must still compute one GST transaction", 1, result.gstTransactions.size)
+        val gt = result.gstTransactions.first()
+        assertEquals(90_00L, gt.cgst.paise)
+        assertEquals(90_00L, gt.sgst.paise)
+        assertEquals(0L, gt.igst.paise)
+        assertEquals(1000_00L, gt.taxableAmount.paise)
+    }
+
+    @Test
+    fun t19_AccountOnlyPurchase_WithGstRate_ComputesGstAndSkipsStockLines() {
+        val syntheticLine = TradingLineInput(
+            itemId = "", itemName = "Purchase (Account Only)", hsnSacCode = "9983",
+            quantity = Quantity.fromDouble(1.0, "Nos"), rate = Money.fromRupees(500L), gstRatePercent = 12.0
+        )
+        // Inter-state (companyStateCode "27" vs placeOfSupply "09") - must route to IGST, not CGST/SGST.
+        val result = TradingWorkflowEngine.buildPurchase(
+            "V19", companyId, fyId, "LED_CREDITOR", "Supp", "",
+            "LED_PURCHASE", "Purchase", "27", "09",
+            lines = listOf(syntheticLine),
+            gstLedgers = com.example.accounting.domain.trading.TradingGstLedgers(
+                ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref()
+            ),
+            roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off",
+            trackInventory = false
+        )
+        assertTrue(result.stockLines.isEmpty())
+        assertEquals(1, result.gstTransactions.size)
+        val gt = result.gstTransactions.first()
+        assertEquals(0L, gt.cgst.paise)
+        assertEquals(0L, gt.sgst.paise)
+        assertEquals(60_00L, gt.igst.paise)
+        assertEquals(com.example.accounting.domain.taxation.gst.GstDirection.INPUT, gt.direction)
+    }
+
+    @Test
+    fun t20_CancelVoucher_ReversesGstTransactions_NetsToZero() = runBlocking {
+        val dao = Phase5TestSuite.Phase5AwareDao(freshDao())
+        dao.seedCompany(AccountingMode.ACCOUNT_ONLY)
+        dao.seedTradingLedgers()
+
+        val syntheticLine = TradingLineInput(
+            itemId = "", itemName = "Sale (Account Only)", hsnSacCode = "9983",
+            quantity = Quantity.fromDouble(1.0, "Nos"), rate = Money.fromRupees(2000L), gstRatePercent = 18.0
+        )
+        val result = TradingWorkflowEngine.buildSale(
+            "V20", companyId, fyId, "LED_DEBTOR", "Cust", "",
+            "LED_SALES", "Sales", "27", "27",
+            lines = listOf(syntheticLine),
+            gstLedgers = com.example.accounting.domain.trading.TradingGstLedgers(
+                ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref(), ref()
+            ),
+            roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off",
+            trackInventory = false
+        )
+        val voucherEntity = VoucherEntity(
+            voucherId = "V20", companyId = companyId, financialYearId = fyId, voucherNumber = "V20",
+            voucherType = VoucherType.SALES, date = "2026-05-10", referenceNumber = "", narration = "",
+            totalAmountPaise = result.totalAmount.paise, isPosted = true, isCancelled = false, syncState = SyncState.PENDING,
+            createdAt = 0L, updatedAt = 0L, createdBy = "TESTER", partyGstin = "", isGstApplicable = true,
+            referenceVoucherId = null, paymentMode = ""
+        )
+        VoucherPostingEngine.post(
+            dao, voucherEntity, result.journalItems.map { it.toEntity() }, "IK_V20", "TESTER",
+            gstTransactions = result.gstTransactions.map {
+                com.example.accounting.data.local.entity.GstTransactionEntity(
+                    it.gstTransactionId, companyId, fyId, "V20", it.voucherType, it.partyLedgerId, it.partyGstin,
+                    it.placeOfSupply, it.supplyType, it.itemId, it.hsnSacCode, it.quantity?.rawValue,
+                    it.taxableAmount.paise, it.gstRatePercent, it.cgst.paise, it.sgst.paise, it.igst.paise,
+                    it.cess.paise, it.direction, it.lineOrder, createdAt = 0L, chargeType = it.chargeType
+                )
+            }
+        )
+
+        val beforeCancel = dao.getGstTransactionsForVoucher("V20")
+        assertEquals("Posting must create exactly one GST transaction", 1, beforeCancel.size)
+        // ₹2000 taxable @ 18% intra-state = ₹360 total tax, split 9%/9% CGST/SGST = ₹180 each.
+        assertEquals(180_00L, beforeCancel.sumOf { it.cgstPaise })
+
+        VoucherPostingEngine.cancel(dao, companyId, fyId, "V20", "IK_V20_CANCEL", "TESTER")
+
+        val afterCancel = dao.getGstTransactionsForVoucher("V20")
+        assertEquals(
+            "Cancellation must append a compensating reversal row, never delete/mutate the original",
+            2, afterCancel.size
+        )
+        assertEquals("Net taxable value across original+reversal must be zero", 0L, afterCancel.sumOf { it.taxableAmountPaise })
+        assertEquals("Net CGST across original+reversal must be zero", 0L, afterCancel.sumOf { it.cgstPaise })
+        assertEquals("Net SGST across original+reversal must be zero", 0L, afterCancel.sumOf { it.sgstPaise })
+    }
+
+    // ==========================================
+    // Accounting-flow audit fix - Service businesses get Income/Expenditure-labeled default
+    // ledgers instead of Sales/Purchase Account, without any change to the underlying groupId/
+    // VoucherType plumbing.
+    // ==========================================
+
+    @Test
+    fun t21_ServiceCompany_CreateCompany_GetsIncomeExpenditureLedgerNames() = runBlocking {
+        val dao = FakeAccountingDao()
+        val repo = AccountingRepository(dao)
+        val serviceCompanyId = "COMP_SERVICE_D1A"
+        repo.createCompany(
+            Company(
+                companyId = serviceCompanyId, name = "Service Co", stateCode = "27", stateName = "Maharashtra",
+                businessType = BusinessType.SERVICE
+            )
+        )
+        val ledgers = repo.getLedgers(serviceCompanyId).first().associateBy { it.ledgerId }
+        assertEquals("Income Account", ledgers["LED_SALES_$serviceCompanyId"]?.name)
+        assertEquals("Expenditure Account", ledgers["LED_PURCHASE_$serviceCompanyId"]?.name)
+    }
+
+    @Test
+    fun t22_TradingCompany_CreateCompany_StillGetsSalesPurchaseLedgerNames() = runBlocking {
+        val dao = FakeAccountingDao()
+        val repo = AccountingRepository(dao)
+        val tradingCompanyId = "COMP_TRADING_D1A"
+        repo.createCompany(
+            Company(
+                companyId = tradingCompanyId, name = "Trading Co", stateCode = "27", stateName = "Maharashtra",
+                businessType = BusinessType.TRADING
+            )
+        )
+        val ledgers = repo.getLedgers(tradingCompanyId).first().associateBy { it.ledgerId }
+        assertEquals("Sales Account", ledgers["LED_SALES_$tradingCompanyId"]?.name)
+        assertEquals("Purchase Account", ledgers["LED_PURCHASE_$tradingCompanyId"]?.name)
     }
 }

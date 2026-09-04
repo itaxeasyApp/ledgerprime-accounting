@@ -134,7 +134,7 @@ class Phase5TestSuite {
     }
 
     private fun ledger(id: String, company: String, groupBare: String, openingPaise: Long = 0L, openingType: DrCr = DrCr.DEBIT, stateCode: String = "27") =
-        LedgerEntity(id, company, "${groupBare}_$company", id, id, openingPaise, openingType, openingPaise, openingType, "", "", stateCode, "", "", "", "", "", false, true, "", 0.0)
+        LedgerEntity(id, company, "${groupBare}_$company", id, id, openingPaise, openingType, openingPaise, openingType, "", "", stateCode, "", "", "", "", "", "", "", false, true, "", 0.0)
 
     private suspend fun AccountingDao.seedTradingLedgers(company: String = companyId) {
         insertLedger(ledger("LED_BANK", company, StandardSystemGroups.BANK_GROUP_ID, 1_00_00_000_00L))
@@ -1245,7 +1245,7 @@ class Phase5TestSuite {
         dao.insertLedger(
             LedgerEntity(
                 "LED_LEGACY", companyId, "${StandardSystemGroups.DEBTORS_GROUP_ID}_$companyId", "Legacy Customer", "",
-                0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "", "", "", "", "", "", false, true, "", 0.0
+                0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", "", "", "", "", "", "", "", "", false, true, "", 0.0
             )
         )
         val repo = AccountingRepository(dao)

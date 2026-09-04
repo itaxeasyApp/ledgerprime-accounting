@@ -40,8 +40,15 @@ data class Ledger(
     val email: String = "",
     val phone: String = "",
     val address: String = "",
+    /** Audit fix (Company/Profile/Ledger Setup) - a Bank-group ledger previously had no field for
+     * the bank's own name, even though [bankAccountNumber]/[bankIfsc] already existed; the UI
+     * never actually collected any of the three. [bankBranch] is the fourth, matching what
+     * [com.example.accounting.domain.rendering.BusinessProfile] already carries for the same
+     * concept (document-branding scope, never conflated with this per-ledger fact). */
+    val bankName: String = "",
     val bankAccountNumber: String = "",
     val bankIfsc: String = "",
+    val bankBranch: String = "",
     val isSystem: Boolean = false,
     val isActive: Boolean = true,
     val hsnSacCode: String = "",

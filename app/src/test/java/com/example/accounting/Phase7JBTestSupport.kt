@@ -147,6 +147,6 @@ object Phase7JBFixtures {
     fun ledgerEntity(id: String, companyId: String, bareGroupId: String, name: String = id, openingType: com.example.accounting.core.common.DrCr = com.example.accounting.core.common.DrCr.DEBIT) =
         LedgerEntity(
             id, companyId, "${bareGroupId}_$companyId", name, "", 0L, openingType, 0L, openingType,
-            "", "", "27", "", "", "", "", "", false, true, "", 0.0
+            "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
         )
 }

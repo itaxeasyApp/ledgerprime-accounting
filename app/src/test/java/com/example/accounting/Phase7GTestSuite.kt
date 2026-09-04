@@ -96,7 +96,7 @@ class Phase7GTestSuite {
 
     private fun ledger(id: String, targetCompanyId: String, bareGroup: String, openingPaise: Long = 0L, openingType: DrCr = DrCr.DEBIT) = LedgerEntity(
         id, targetCompanyId, "${bareGroup}_$targetCompanyId", id, "", openingPaise, openingType, openingPaise, openingType,
-        "27AABCB1234D1Z5", "AABCB1234D", "27", "", "", "", "", "", false, true, "", 0.0
+        "27AABCB1234D1Z5", "AABCB1234D", "27", "", "", "", "", "", "", "", false, true, "", 0.0
     )
 
     // ==========================================

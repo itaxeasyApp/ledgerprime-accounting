@@ -154,7 +154,7 @@ class Phase7FTestSuite {
 
     private fun ledger(id: String, bareGroup: String, openingType: DrCr = DrCr.DEBIT) = LedgerEntity(
         id, companyId, "${bareGroup}_$companyId", id, "", 0L, openingType, 0L, openingType,
-        "", "", "27", "", "", "", "", "", false, true, "", 0.0
+        "", "", "27", "", "", "", "", "", "", "", false, true, "", 0.0
     )
 
     private fun voucher(id: String, type: VoucherType, date: String, referenceNumber: String = "", isCancelled: Boolean = false) = VoucherEntity(

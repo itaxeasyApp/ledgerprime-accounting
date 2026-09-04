@@ -90,6 +90,35 @@ data class NavItem(
     val tag: String
 )
 
+/** Bug #3 fix - which form a pending QR/Barcode scan result should be routed into once the photo
+ * picker returns. Purely a presentation-layer routing concern (never touches domain/frozen
+ * engines): [ItemLookup] keeps the pre-existing standalone Items-tab behavior (a result dialog);
+ * [PurchaseVoucher]/[ReceivePayment] instead feed the scan result into the already-open form as a
+ * prefill, never a second scan/decode mechanism. */
+private enum class BarcodeScanTarget { ItemLookup, PurchaseVoucher, ReceivePayment }
+
+/** Audit fix (Company/Profile/Ledger Setup) - reuse the Company's own already-entered
+ * name/GSTIN/PAN/address/phone/email as the Business Profile screen's starting point instead of
+ * every field starting blank, when no real [com.example.accounting.domain.rendering.BusinessProfile]
+ * has been saved yet for this company. Purely a seed for the initial on-screen values - never
+ * persisted as-is; both [com.example.accounting.presentation.features.profile.ProfileScreen] and
+ * [com.example.accounting.presentation.features.profile.ProfileWizardScreen]'s own `onSave` still
+ * independently read/write the real `uiState.businessProfile`. */
+private fun businessProfileSeed(uiState: com.example.accounting.presentation.viewmodel.AccountingUiState): com.example.accounting.domain.rendering.BusinessProfile? =
+    uiState.businessProfile ?: uiState.currentCompany?.let { comp ->
+        com.example.accounting.domain.rendering.BusinessProfile(
+            businessProfileId = "",
+            companyId = comp.companyId,
+            businessName = comp.tradeName.ifBlank { comp.name },
+            legalName = comp.name,
+            address = comp.address,
+            phone = comp.phone,
+            email = comp.email,
+            gstin = comp.gstin,
+            pan = comp.pan
+        )
+    }
+
 /**
  * Phase 7J UI: 5-item bottom nav (Home/Sales/Purchases/Money/Reports) per the UX spec's Section
  * 14. Every other area (Party, Items, Cash/Bank, Outstanding, Profile, Import/OCR, Subscription,
@@ -125,6 +154,9 @@ fun MainAppScreen(
     var createPartyRole by remember { mutableStateOf<PartyRole?>(null) }
     var isCreateBankUpiOpen by remember { mutableStateOf(false) }
     var pendingImportFormat by remember { mutableStateOf(ImportFileFormat.CSV) }
+    // Bug #3 fix - which open form a pending barcode scan should be applied to; defaults to the
+    // pre-existing standalone Items-tab behavior.
+    var barcodeScanTarget by remember { mutableStateOf(BarcodeScanTarget.ItemLookup) }
 
     LaunchedEffect(Unit) {
         viewModel.snackbarEvents.collectLatest { message ->
@@ -341,6 +373,7 @@ fun MainAppScreen(
                             showItemsTab = isInventoryEnabled(uiState),
                             onGenerateBarcode = { itemId -> viewModel.generateBarcodeForItem(itemId) },
                             onScanBarcode = {
+                                barcodeScanTarget = BarcodeScanTarget.ItemLookup
                                 barcodePhotoPickerLauncher.launch(
                                     androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
@@ -445,7 +478,15 @@ fun MainAppScreen(
                             onSubmitMoneyVoucher = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
                                 viewModel.postQuickVoucherWithRoundOff(type, date, debitId, creditId, amount, narration, ref, roundOff)
                             },
-                            onAddParty = { role -> createPartyRole = role }
+                            onAddParty = { role -> createPartyRole = role },
+                            onScanBarcode = {
+                                barcodeScanTarget = BarcodeScanTarget.ReceivePayment
+                                barcodePhotoPickerLauncher.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            scannedBarcodeValue = if (barcodeScanTarget == BarcodeScanTarget.ReceivePayment) uiState.lastBarcodeScan?.rawValue else null,
+                            onScannedValueConsumed = { viewModel.clearBarcodeState() }
                         )
 
                         is AppRoute.Parties -> PartiesScreen(
@@ -457,7 +498,7 @@ fun MainAppScreen(
                         )
 
                         is AppRoute.Profile -> ProfileScreen(
-                            businessProfile = uiState.businessProfile,
+                            businessProfile = businessProfileSeed(uiState),
                             individualProfile = uiState.individualProfile,
                             isPinCodeLookupInProgress = uiState.isPinCodeLookupInProgress,
                             pinCodeLookupResult = uiState.pinCodeLookupResult,
@@ -475,7 +516,7 @@ fun MainAppScreen(
                         )
 
                         is AppRoute.ProfileWizard -> com.example.accounting.presentation.features.profile.ProfileWizardScreen(
-                            businessProfile = uiState.businessProfile,
+                            businessProfile = businessProfileSeed(uiState),
                             logoAssetLabel = uiState.businessProfile?.logoAssetId?.let { "Uploaded" },
                             signatureAssetLabel = uiState.businessProfile?.signatureAssetId?.let { "Uploaded" },
                             isPinCodeLookupInProgress = uiState.isPinCodeLookupInProgress,
@@ -547,6 +588,8 @@ fun MainAppScreen(
             outstandingInvoices = uiState.outstandingInvoices,
             companyStateCode = uiState.currentCompany?.stateCode ?: "",
             isInventoryEnabled = isInventoryEnabled(uiState),
+            gstApplicable = uiState.currentCompany?.gstOperatingMode != com.example.accounting.domain.company.GstOperatingMode.ACCOUNT_ONLY,
+            isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
             defaultVoucherType = createVoucherType,
             lockedType = isCreateVoucherTypeLocked,
             onDismiss = { isCreateVoucherOpen = false; viewModel.clearOutstandingInvoices() },
@@ -555,6 +598,11 @@ fun MainAppScreen(
                 quickAddLedgerGroupId = uiState.groups.firstOrNull {
                     it.groupId.startsWith("${com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID}_")
                 }?.groupId
+                isCreateLedgerOpen = true
+            },
+            onAddNewTradeLedger = { isSale ->
+                val wantGroupId = if (isSale) com.example.accounting.domain.accounting.StandardSystemGroups.SALES_GROUP_ID else com.example.accounting.domain.accounting.StandardSystemGroups.PURCHASE_GROUP_ID
+                quickAddLedgerGroupId = uiState.groups.firstOrNull { it.groupId.startsWith("${wantGroupId}_") }?.groupId
                 isCreateLedgerOpen = true
             },
             onPostQuickVoucher = { type, date, drLedger, crLedger, amount, narration, ref ->
@@ -569,11 +617,11 @@ fun MainAppScreen(
             onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration ->
                 viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration)
             },
-            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration ->
-                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration)
+            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsnSac ->
+                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsnSac)
             },
-            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration ->
-                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration)
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsnSac ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsnSac)
             },
             onPostCreditNote = { originalId, date, ref, narration ->
                 viewModel.postCreditNote(originalId, date, ref, narration)
@@ -585,7 +633,16 @@ fun MainAppScreen(
                 viewModel.postQuickVoucher(type, date, drLedger, crLedger, amount, narration, ref, paymentMode, allocations)
             },
             onLoadOutstandingInvoices = { partyLedgerId -> viewModel.loadOutstandingInvoices(partyLedgerId) },
-            onClearOutstandingInvoices = { viewModel.clearOutstandingInvoices() }
+            onClearOutstandingInvoices = { viewModel.clearOutstandingInvoices() },
+            onScanBarcode = {
+                barcodeScanTarget = BarcodeScanTarget.PurchaseVoucher
+                barcodePhotoPickerLauncher.launch(
+                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            scannedBarcodeValue = if (barcodeScanTarget == BarcodeScanTarget.PurchaseVoucher) uiState.lastBarcodeScan?.rawValue else null,
+            scannedMatchedItemId = if (barcodeScanTarget == BarcodeScanTarget.PurchaseVoucher) uiState.lastBarcodeScan?.matchedStockItemId else null,
+            onScannedValueConsumed = { viewModel.clearBarcodeState() }
         )
     }
 
@@ -594,8 +651,8 @@ fun MainAppScreen(
             groups = uiState.groups,
             initialGroupId = quickAddLedgerGroupId,
             onDismiss = { isCreateLedgerOpen = false; quickAddLedgerGroupId = null },
-            onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate ->
-                viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate)
+            onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch ->
+                viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch)
             }
         )
     }
@@ -651,6 +708,11 @@ fun MainAppScreen(
     // Phase 7J UI fix: was computed by the ViewModel but never displayed anywhere - a scan
     // silently produced a result no one could see. matchedStockItemId is only ever a suggestion
     // (per QrBarcodeAdapter's own contract) - never auto-selected into anything.
+    // Bug #3 fix: only shown for the standalone Items-tab scan (ItemLookup) - a
+    // PurchaseVoucher/ReceivePayment scan instead flows silently into the already-open form as a
+    // prefill (see CreateVoucherDialog/MoneyVoucherEntryScreen's own LaunchedEffect), so this
+    // generic result dialog would otherwise pop up redundantly on top of it.
+    if (barcodeScanTarget == BarcodeScanTarget.ItemLookup) {
     uiState.lastBarcodeScan?.let { scan ->
         val matchedItem = uiState.stockItems.firstOrNull { it.itemId == scan.matchedStockItemId }
         androidx.compose.material3.AlertDialog(
@@ -667,6 +729,7 @@ fun MainAppScreen(
                 }
             }
         )
+    }
     }
 
     selectedVoucherDetail?.let { voucher ->

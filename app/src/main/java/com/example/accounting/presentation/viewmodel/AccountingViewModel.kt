@@ -27,6 +27,7 @@ import com.example.accounting.application.voucher.VoucherDraft
 import com.example.accounting.application.voucher.VoucherDraftStatus
 import com.example.accounting.application.voucher.VoucherManagementServiceImpl
 import com.example.accounting.core.common.AccountingResult
+import com.example.accounting.core.common.Constants
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.core.common.Money
 import com.example.accounting.core.database.AppDatabase
@@ -565,6 +566,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 gstin = gstin,
                 pan = pan,
                 stateCode = stateCode,
+                // Audit fix - was always the hardcoded Company.stateName default ("Maharashtra")
+                // regardless of the state code entered; now honestly derived from the real GST
+                // state-code table, falling back to "" (never a guessed name) for an unrecognized code.
+                stateName = Constants.GST_STATE_CODES[stateCode] ?: "",
                 address = address,
                 email = email,
                 phone = phone,
@@ -622,10 +627,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         email: String = "",
         address: String = "",
         hsnSac: String = "",
-        defaultTaxRate: Double = 0.0
+        defaultTaxRate: Double = 0.0,
+        bankName: String = "",
+        bankAccountNumber: String = "",
+        bankIfsc: String = "",
+        bankBranch: String = ""
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
             val ledger = Ledger(
                 ledgerId = "LED_${UUID.randomUUID().toString().take(8).uppercase()}_${comp.companyId}",
                 companyId = comp.companyId,
@@ -642,7 +651,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 email = email,
                 address = address,
                 hsnSacCode = hsnSac,
-                defaultTaxRate = defaultTaxRate
+                defaultTaxRate = defaultTaxRate,
+                bankName = bankName,
+                bankAccountNumber = bankAccountNumber,
+                bankIfsc = bankIfsc,
+                bankBranch = bankBranch
             )
             val result = repository.createLedger(ledger)
             if (result is AccountingResult.Success) {
@@ -1072,11 +1085,18 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     /**
      * D1a (Company Mode + Account-Only Sale/Purchase) - for a company whose [AccountingMode] is
      * `ACCOUNT_ONLY` (no inventory tracking): Party ledger + Sales ledger + a single amount, no
-     * Item/Quantity/Rate, no GST calculation. Uses the exact same canonical path as
-     * [postTradingDocument] - [TradingWorkflowEngine] -> [AccountingRepository.postVoucher] - just
-     * calling [TradingWorkflowEngine.buildAccountOnlySale] instead of [TradingWorkflowEngine.buildSale].
-     * Place of Supply is never checked here since no GST is computed on this posting; the
-     * inventory-enabled path's Rule 29 check is completely untouched.
+     * Item/Quantity/Rate, no stock movement. Uses the exact same canonical path as
+     * [postTradingDocument] - [TradingWorkflowEngine] -> [AccountingRepository.postVoucher].
+     *
+     * Accounting-flow audit fix: [gstRatePercent] (0.0 = no GST, matching this function's original
+     * behavior byte-for-byte) lets a GST-registered Account-Only company still charge/claim GST on
+     * a Sale/Purchase - Inventory Mode must only gate stock/COGS, never whether GST accounting
+     * exists (this was the actual bug: GST was previously gated on `isInventoryEnabled`, an
+     * unrelated setting). When non-zero, this reuses [TradingWorkflowEngine.buildSale]/[buildPurchase]
+     * with `trackInventory = false` and a single synthetic [TradingLineForm] line - the exact same
+     * [GstCalculationEngine]/tax-ledger-posting code the item-driven path already uses, just
+     * skipping [VoucherStockLine] generation. Place of Supply is checked (Rule 29) only when GST is
+     * actually being computed, mirroring [postTradingDocument]'s own check.
      */
     fun postAccountOnlySale(
         customerLedgerId: String,
@@ -1084,10 +1104,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         amount: Money,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        gstRatePercent: Double = 0.0,
+        hsnSac: String = "",
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
     ) = postAccountOnlyTradingDocument(
         isSale = true, partyLedgerId = customerLedgerId, tradeLedgerId = salesLedgerId,
-        amount = amount, date = date, referenceNumber = referenceNumber, narration = narration
+        amount = amount, date = date, referenceNumber = referenceNumber, narration = narration,
+        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature
     )
 
     /** D1a - Purchase counterpart of [postAccountOnlySale]; see its doc comment. */
@@ -1097,10 +1121,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         amount: Money,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        gstRatePercent: Double = 0.0,
+        hsnSac: String = "",
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
     ) = postAccountOnlyTradingDocument(
         isSale = false, partyLedgerId = supplierLedgerId, tradeLedgerId = purchaseLedgerId,
-        amount = amount, date = date, referenceNumber = referenceNumber, narration = narration
+        amount = amount, date = date, referenceNumber = referenceNumber, narration = narration,
+        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature
     )
 
     private fun postAccountOnlyTradingDocument(
@@ -1110,7 +1138,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         amount: Money,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        gstRatePercent: Double = 0.0,
+        hsnSac: String = "",
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1125,6 +1156,69 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val tradeLedger = ledgers[tradeLedgerId]
             if (partyLedger == null || tradeLedger == null) {
                 emitMessage("Validation error: Invalid ${if (isSale) "customer" else "supplier"} or ${if (isSale) "sales" else "purchase"} ledger selected.")
+                return@launch
+            }
+
+            if (gstRatePercent > 0.0) {
+                // Accounting-flow audit fix - GST-applicable Account-Only Sale/Purchase: same
+                // Place of Supply requirement as the item-driven path (Rule 29), since GST really
+                // is being computed here now.
+                if (partyLedger.stateCode.isBlank()) {
+                    emitMessage(
+                        "Validation error: Set a State for ${if (isSale) "customer" else "supplier"} " +
+                            "'${partyLedger.name}' before posting - Place of Supply cannot be determined."
+                    )
+                    return@launch
+                }
+                repository.ensureGstLedgersExist(comp.companyId)
+                repository.ensureRoundOffLedgerExists(comp.companyId)
+                val gstLedgers = repository.resolveGstLedgerRefs(comp.companyId)
+                val roundOffRef = repository.resolveRoundOffLedgerRef(comp.companyId)
+                val voucherType = if (isSale) VoucherType.SALES else VoucherType.PURCHASE
+                val voucherId = "VCH_${voucherType.code}_${UUID.randomUUID().toString().take(8).uppercase()}"
+                val voucherNumber = repository.generateNextVoucherNumber(comp.companyId, fy.financialYearId, voucherType)
+                val syntheticLine = TradingLineInput(
+                    itemId = "", itemName = if (isSale) "Sale (Account Only)" else "Purchase (Account Only)",
+                    hsnSacCode = hsnSac, quantity = com.example.accounting.core.common.Quantity.fromDouble(1.0, "Nos"),
+                    rate = amount, gstRatePercent = gstRatePercent, supplyNature = supplyNature
+                )
+                val engineResult = if (isSale) {
+                    TradingWorkflowEngine.buildSale(
+                        voucherId = voucherId, companyId = comp.companyId, financialYearId = fy.financialYearId,
+                        customerLedgerId = partyLedgerId, customerName = partyLedger.name, customerGstin = partyLedger.gstin,
+                        salesLedgerId = tradeLedgerId, salesLedgerName = tradeLedger.name,
+                        companyStateCode = comp.stateCode, placeOfSupply = partyLedger.stateCode,
+                        lines = listOf(syntheticLine), gstLedgers = gstLedgers,
+                        roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
+                        trackInventory = false
+                    )
+                } else {
+                    TradingWorkflowEngine.buildPurchase(
+                        voucherId = voucherId, companyId = comp.companyId, financialYearId = fy.financialYearId,
+                        supplierLedgerId = partyLedgerId, supplierName = partyLedger.name, supplierGstin = partyLedger.gstin,
+                        purchaseLedgerId = tradeLedgerId, purchaseLedgerName = tradeLedger.name,
+                        companyStateCode = comp.stateCode, placeOfSupply = partyLedger.stateCode,
+                        lines = listOf(syntheticLine), gstLedgers = gstLedgers,
+                        roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
+                        trackInventory = false
+                    )
+                }
+                val voucher = Voucher(
+                    voucherId = voucherId, companyId = comp.companyId, financialYearId = fy.financialYearId,
+                    voucherNumber = voucherNumber, voucherType = voucherType, date = date,
+                    referenceNumber = referenceNumber, narration = narration.ifBlank { "Being ${voucherType.displayName.lowercase()}" },
+                    totalAmount = engineResult.totalAmount, items = engineResult.journalItems,
+                    createdBy = if (isSale) "SALES_BILLING_DESK" else "PURCHASE_DESK",
+                    partyGstin = partyLedger.gstin, isGstApplicable = true
+                )
+                val result = repository.postVoucher(voucher, stockLines = engineResult.stockLines, gstTransactions = engineResult.gstTransactions)
+                when (result) {
+                    is AccountingResult.Success -> {
+                        emitMessage("${voucherType.displayName} $voucherNumber posted successfully: ${engineResult.totalAmount.formatPlain()}")
+                        scheduler.dispatchEvent(com.example.accounting.automation.jobs.AutomationEvent.VoucherPosted(comp.companyId, voucher))
+                    }
+                    is AccountingResult.Failure -> emitMessage("${voucherType.displayName} posting rejected: ${result.error.message}")
+                }
                 return@launch
             }
 
@@ -2079,7 +2173,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     fun generateBarcodeForItem(itemId: String) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
             when (val result = qrBarcodeService.generateForStockItem(currentRequestingProfile(comp), comp.companyId, itemId)) {
                 is AccountingResult.Success -> _uiState.update { it.copy(lastBarcodeGeneration = result.data) }
                 is AccountingResult.Failure -> emitMessage("Could not generate barcode: ${result.error.message}")
@@ -2089,7 +2183,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     fun scanBarcodeImage(imageFile: File) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
             val bytes = imageFile.readBytes()
             val assetResult = repository.createDocumentAsset(
                 comp.companyId, DocumentAssetType.OCR_SOURCE_IMAGE, imageFile.absolutePath, sha256(bytes), "image/jpeg", imageFile.length()

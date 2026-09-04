@@ -37,7 +37,6 @@ fun BusinessSnapshot(
     netProfit: Money,
     netProfitLabel: String,
     gstPayable: Money,
-    outstanding: Money,
     income: Money?,
     expenditure: Money?,
     onOpenCash: () -> Unit,
@@ -57,10 +56,17 @@ fun BusinessSnapshot(
             ReceiptSummary(receivables, Modifier.weight(1f)) { onViewReports() }
             PaymentSummary(payables, Modifier.weight(1f)) { onViewReports() }
         }
-        Spacer(modifier = Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SalesSummary(salesFigure, Modifier.weight(1f)) { onOpenSales() }
-            PurchaseSummary(purchasesFigure, Modifier.weight(1f)) { onOpenPurchases() }
+        // SERVICE-mode audit fix - a SERVICE company has no Sales/Purchase concept (see
+        // [com.example.accounting.domain.company.BusinessType]); showing this row alongside the
+        // Income/Expenditure row below it would duplicate the same figures under contradictory
+        // labels. [income]/[expenditure] are only ever non-null for a SERVICE company (see
+        // DashboardScreen), so that alone decides which row this card shows - never a second flag.
+        if (income == null && expenditure == null) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SalesSummary(salesFigure, Modifier.weight(1f)) { onOpenSales() }
+                PurchaseSummary(purchasesFigure, Modifier.weight(1f)) { onOpenPurchases() }
+            }
         }
         if (income != null && expenditure != null) {
             Spacer(modifier = Modifier.height(10.dp))
@@ -74,7 +80,5 @@ fun BusinessSnapshot(
             StatCard(netProfitLabel, netProfit, "Current Financial Year", Icons.Default.TrendingUp, MaterialTheme.colorScheme.secondary, Modifier.weight(1f).clickable { onViewReports() })
             StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewReports() })
         }
-        Spacer(modifier = Modifier.height(10.dp))
-        StatCard("Outstanding", outstanding, "Receivables + Payables", Icons.Default.AccountBalance, MaterialTheme.colorScheme.primary, Modifier.fillMaxWidth().clickable { onViewReports() })
     }
 }

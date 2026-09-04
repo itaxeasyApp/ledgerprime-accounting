@@ -553,14 +553,23 @@ class AccountingRepository(
         )
         dao.insertCompany(entity)
 
-        // Create initial Financial Year for new company
-        val fyId = "FY_2026_27_${company.companyId}"
+        // Audit fix - Create initial Financial Year for new company, derived from the real
+        // current date and the company's own financialYearStartMonth (was previously always the
+        // literal, hardcoded "FY 2026-27" / 2026-04-01..2027-03-31 regardless of when the company
+        // was actually created - correct only by coincidence for companies created within that
+        // one calendar window, silently wrong for every company created afterward).
+        val today = java.time.LocalDate.now()
+        val fyStartMonth = company.financialYearStartMonth
+        val fyStartYear = if (today.monthValue >= fyStartMonth) today.year else today.year - 1
+        val fyStartDate = java.time.LocalDate.of(fyStartYear, fyStartMonth, 1)
+        val fyEndDate = fyStartDate.plusYears(1).minusDays(1)
+        val fyId = "FY_${fyStartDate.year}_${fyEndDate.year}_${company.companyId}"
         val fy = FinancialYearEntity(
             financialYearId = fyId,
             companyId = company.companyId,
-            fyCode = "FY 2026-27",
-            startDate = "2026-04-01",
-            endDate = "2027-03-31",
+            fyCode = "FY ${fyStartDate.year}-${fyEndDate.year.toString().takeLast(2)}",
+            startDate = fyStartDate.toString(),
+            endDate = fyEndDate.toString(),
             isCurrent = true,
             isLocked = false,
             lockedAt = null,
@@ -589,11 +598,46 @@ class AccountingRepository(
         // (voucher-UI audit finding, Rule 33 follow-up). Zero opening balance, no GST rate baked in
         // (never `fallbackToDestructiveMigration`-style fake data) - same honest-zero pattern as
         // Cash/Bank above, just extended to the two groups a trading voucher actually needs.
+        // Accounting-flow audit fix - a Service business gets Income/Expenditure-labeled ledgers
+        // instead of Sales/Purchase Account, matching what it actually posts (VoucherType.SALES/
+        // PURCHASE still route through the same SALES/PURCHASE_GROUP_ID structure underneath -
+        // renaming only the user-visible ledger.name, never the groupId/VoucherType plumbing every
+        // isSalesLedger/isPurchaseLedger check and TradingWorkflowEngine call keys off, keeps this
+        // a display-only fix with zero risk to the posting/report engines). Trading Account is
+        // never forced onto a Service business by this - see generateIncomeAndExpenditure, which
+        // already renders a Service company's P&L equivalent without any Trading/COGS section.
+        val isService = company.businessType == BusinessType.SERVICE
+        val salesLedgerName = if (isService) "Income Account" else "Sales Account"
+        val purchaseLedgerName = if (isService) "Expenditure Account" else "Purchase Account"
         val defaultLedgers = listOf(
-            LedgerEntity("LED_CASH_${company.companyId}", company.companyId, "GRP_CASH_${company.companyId}", "Cash in Hand", "1001", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", company.stateCode, "", "", "", "", "", true, true, "", 0.0),
-            LedgerEntity("LED_BANK_${company.companyId}", company.companyId, "GRP_BANK_${company.companyId}", "Primary Bank Account", "1002", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", company.stateCode, "", "", "", "", "", true, true, "", 0.0),
-            LedgerEntity("LED_SALES_${company.companyId}", company.companyId, "GRP_SALES_${company.companyId}", "Sales Account", "3001", 0L, DrCr.CREDIT, 0L, DrCr.CREDIT, "", "", company.stateCode, "", "", "", "", "", false, true, "", 0.0),
-            LedgerEntity("LED_PURCHASE_${company.companyId}", company.companyId, "GRP_PURCHASE_${company.companyId}", "Purchase Account", "4001", 0L, DrCr.DEBIT, 0L, DrCr.DEBIT, "", "", company.stateCode, "", "", "", "", "", false, true, "", 0.0)
+            LedgerEntity(
+                ledgerId = "LED_CASH_${company.companyId}", companyId = company.companyId, groupId = "GRP_CASH_${company.companyId}",
+                name = "Cash in Hand", code = "1001", openingBalancePaise = 0L, openingBalanceType = DrCr.DEBIT,
+                currentBalancePaise = 0L, currentBalanceType = DrCr.DEBIT, gstin = "", pan = "", stateCode = company.stateCode,
+                email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
+                isSystem = true, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
+            ),
+            LedgerEntity(
+                ledgerId = "LED_BANK_${company.companyId}", companyId = company.companyId, groupId = "GRP_BANK_${company.companyId}",
+                name = "Primary Bank Account", code = "1002", openingBalancePaise = 0L, openingBalanceType = DrCr.DEBIT,
+                currentBalancePaise = 0L, currentBalanceType = DrCr.DEBIT, gstin = "", pan = "", stateCode = company.stateCode,
+                email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
+                isSystem = true, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
+            ),
+            LedgerEntity(
+                ledgerId = "LED_SALES_${company.companyId}", companyId = company.companyId, groupId = "GRP_SALES_${company.companyId}",
+                name = salesLedgerName, code = "3001", openingBalancePaise = 0L, openingBalanceType = DrCr.CREDIT,
+                currentBalancePaise = 0L, currentBalanceType = DrCr.CREDIT, gstin = "", pan = "", stateCode = company.stateCode,
+                email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
+                isSystem = false, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
+            ),
+            LedgerEntity(
+                ledgerId = "LED_PURCHASE_${company.companyId}", companyId = company.companyId, groupId = "GRP_PURCHASE_${company.companyId}",
+                name = purchaseLedgerName, code = "4001", openingBalancePaise = 0L, openingBalanceType = DrCr.DEBIT,
+                currentBalancePaise = 0L, currentBalanceType = DrCr.DEBIT, gstin = "", pan = "", stateCode = company.stateCode,
+                email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
+                isSystem = false, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
+            )
         )
         dao.insertLedgers(defaultLedgers)
 
@@ -1216,8 +1260,10 @@ class AccountingRepository(
                 email = it.email,
                 phone = it.phone,
                 address = it.address,
+                bankName = it.bankName,
                 bankAccountNumber = it.bankAccountNumber,
                 bankIfsc = it.bankIfsc,
+                bankBranch = it.bankBranch,
                 isSystem = it.isSystem,
                 isActive = it.isActive,
                 hsnSacCode = it.hsnSacCode,
@@ -1256,8 +1302,10 @@ class AccountingRepository(
             email = ledger.email,
             phone = ledger.phone,
             address = ledger.address,
+            bankName = ledger.bankName,
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
+            bankBranch = ledger.bankBranch,
             isSystem = ledger.isSystem,
             isActive = ledger.isActive,
             hsnSacCode = ledger.hsnSacCode,
@@ -1302,8 +1350,10 @@ class AccountingRepository(
             email = ledger.email,
             phone = ledger.phone,
             address = ledger.address,
+            bankName = ledger.bankName,
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
+            bankBranch = ledger.bankBranch,
             isSystem = ledger.isSystem,
             isActive = ledger.isActive,
             hsnSacCode = ledger.hsnSacCode,
@@ -3926,16 +3976,21 @@ class AccountingRepository(
      * Day Book (Phase 7C) - a chronological listing of posted/cancelled Vouchers only. A
      * non-posting document ([com.example.accounting.domain.document.TradeDocument], Phase 7B)
      * cannot appear here even in principle: this reads exclusively from `dao.getVouchersByDateRange`,
-     * a structurally different table. Party name is resolved via the existing Invoice<->Voucher
-     * link (7A) when present (Sales/Purchase/Credit/Debit); other voucher types carry no party
-     * linkage in the current domain and are left null rather than guessed at.
+     * a structurally different table. Party name prefers the existing Invoice<->Voucher link (7A)
+     * when present (Sales/Purchase/Credit/Debit), falling back to [resolveTradeCounterparty]'s
+     * real counterparty ledger - most Sale/Purchase postings never create an [Invoice] row, so
+     * requiring one would leave this column blank for nearly every real posting; other voucher
+     * types carry no party linkage in the current domain and are left null rather than guessed at.
      */
     suspend fun generateDayBook(companyId: String, dateRange: ClosedRange<LocalDate>): DayBookReport {
         val vouchers = dao.getVouchersByDateRange(companyId, dateRange.start.toString(), dateRange.endInclusive.toString())
             .first().sortedBy { it.date }
+        val tradeVoucherTypes = setOf(VoucherType.SALES, VoucherType.PURCHASE, VoucherType.CREDIT_NOTE, VoucherType.DEBIT_NOTE)
 
         val rows = vouchers.map { voucher ->
-            val partyName = dao.getInvoiceByVoucherId(voucher.voucherId)?.let { invoice -> dao.getPartyById(companyId, invoice.partyId)?.displayName }
+            val invoicePartyName = dao.getInvoiceByVoucherId(voucher.voucherId)?.let { invoice -> dao.getPartyById(companyId, invoice.partyId)?.displayName }
+            val partyName = invoicePartyName
+                ?: if (voucher.voucherType in tradeVoucherTypes) resolveTradeCounterparty(companyId, voucher.voucherId)?.name else null
             DayBookRow(
                 voucherId = voucher.voucherId,
                 voucherNumber = voucher.voucherNumber,
@@ -3963,54 +4018,79 @@ class AccountingRepository(
         else -> AgingBucket.DAYS_90_PLUS
     }
 
+    /** Resolves the real counterparty ledger of a Sale/Purchase/Credit-Note/Debit-Note voucher -
+     * always the `lineOrder == 1` journal item ([TradingWorkflowEngine.build]/[buildAccountOnly]
+     * post it first, Debit for Sale/Credit for Purchase; [TradingWorkflowEngine.buildNote] preserves
+     * line order when reversing) - regardless of whether that ledger is a registered Customer/
+     * Supplier [Party]. Never touches the frozen posting engine; purely a read-side lookup so
+     * Outstanding/Day Book can attribute a real posting to its real ledger instead of requiring a
+     * [Party]/[Invoice] record that most Sale/Purchase postings never create. */
+    private suspend fun resolveTradeCounterparty(companyId: String, voucherId: String): LedgerEntity? {
+        val partyLine = dao.getJournalItemsForVoucherSync(voucherId).minByOrNull { it.lineOrder } ?: return null
+        return dao.getLedgerById(companyId, partyLine.ledgerId)
+    }
+
     /**
-     * Outstanding/Receivables/Payables (Phase 7C) - one shared, Party-aware report. Every figure
-     * is sourced from the existing, unmodified [computeOutstandingPaise] (amount) and
-     * [InvoiceStatusEngine.deriveStatus] (status); this function only joins [Invoice]/[Party] and
-     * buckets by age - it never re-derives an outstanding amount itself. `role = null` returns
+     * Outstanding/Receivables/Payables (Phase 7C) - one shared report over every real, non-
+     * cancelled Sale/Purchase voucher, Party or not (Rule: Receivable/Payable = actual outstanding
+     * balances, never Customer/Supplier-only). Every figure is sourced from the existing,
+     * unmodified [computeOutstandingPaise] (amount) and [InvoiceStatusEngine.deriveStatus]
+     * (status) - this function never re-derives an outstanding amount itself. `role = null` returns
      * both Receivables and Payables combined; [generateReceivablesReport]/[generatePayablesReport]
      * are thin role-scoped wrappers.
+     *
+     * Sourced directly from [VoucherEntity]/[computeOutstandingPaise] - the same authoritative facts
+     * [getOutstandingInvoices] already uses for Settlement allocation - rather than the [Invoice]
+     * table: a real [Invoice] draft is a separate, optional pre-posting document (Phase 7A) that
+     * nothing in the actual Sale/Purchase entry flow ([TradingWorkflowEngine]/[postVoucher]) creates,
+     * so sourcing from it exclusively silently dropped every ordinary posting. When a voucher DOES
+     * have a linked [Invoice] (e.g. a future Invoice-lifecycle UI, or [RecurringInvoiceSchedule]),
+     * its formal invoiceNumber/dueDate/partyId enrich the row instead of being required for it.
      */
     suspend fun generateOutstandingReport(
         companyId: String,
         role: PartyRole? = null,
         today: LocalDate = LocalDate.now()
     ): OutstandingReport {
-        val invoiceTypes = when (role) {
-            PartyRole.CUSTOMER -> setOf(InvoiceType.SALES_INVOICE)
-            PartyRole.SUPPLIER -> setOf(InvoiceType.PURCHASE_BILL)
-            null -> setOf(InvoiceType.SALES_INVOICE, InvoiceType.PURCHASE_BILL)
+        val voucherTypes = when (role) {
+            PartyRole.CUSTOMER -> setOf(VoucherType.SALES)
+            PartyRole.SUPPLIER -> setOf(VoucherType.PURCHASE)
+            null -> setOf(VoucherType.SALES, VoucherType.PURCHASE)
+        }
+        val invoiceTypeFor = { voucherType: VoucherType ->
+            if (voucherType == VoucherType.SALES) InvoiceType.SALES_INVOICE else InvoiceType.PURCHASE_BILL
         }
 
-        val invoices = dao.getInvoicesByCompany(companyId).first().filter { it.invoiceType in invoiceTypes && it.voucherId != null }
+        val vouchers = dao.getVouchersByCompany(companyId).first().filter { !it.isCancelled && it.voucherType in voucherTypes }
 
         val rows = mutableListOf<OutstandingReportRow>()
-        for (invoiceEntity in invoices) {
-            val voucherId = invoiceEntity.voucherId ?: continue
-            val voucher = dao.getVoucherById(companyId, voucherId) ?: continue
-            if (voucher.isCancelled) continue
-
-            val party = dao.getPartyById(companyId, invoiceEntity.partyId) ?: continue
-            if (role != null && party.role != role) continue
-
-            val outstandingPaise = computeOutstandingPaise(companyId, voucherId) ?: 0L
+        for (voucher in vouchers) {
+            val outstandingPaise = computeOutstandingPaise(companyId, voucher.voucherId) ?: continue
             if (outstandingPaise <= 0L) continue
 
-            val dueDate = invoiceEntity.dueDate?.let { safeParseDate(it) }
+            val linkedInvoice = dao.getInvoiceByVoucherId(voucher.voucherId)
+            val counterpartyLedger = resolveTradeCounterparty(companyId, voucher.voucherId)
+            val linkedParty = linkedInvoice?.let { dao.getPartyById(companyId, it.partyId) }
+
+            val partyId = linkedParty?.partyId ?: counterpartyLedger?.ledgerId ?: continue
+            val partyName = linkedParty?.displayName ?: counterpartyLedger?.name ?: partyId
+
+            val dueDate = linkedInvoice?.dueDate?.let { safeParseDate(it) }
             val status = InvoiceStatusEngine.deriveStatus(
-                voucherId = voucherId, isCancelled = voucher.isCancelled, totalAmountPaise = voucher.totalAmountPaise,
+                voucherId = voucher.voucherId, isCancelled = voucher.isCancelled, totalAmountPaise = voucher.totalAmountPaise,
                 outstandingPaise = outstandingPaise, dueDate = dueDate, today = today
             )
-            // Aging is measured from the due date; an invoice with no due date is not aged at all
-            // (daysOutstanding = 0, bucketed CURRENT) rather than guessing a basis for it - see
-            // docs/39_OUTSTANDING_REPORTS.md.
+            // Aging is measured from the due date; a posting with no linked Invoice (hence no due
+            // date) is not aged at all (daysOutstanding = 0, bucketed CURRENT) rather than guessing
+            // a basis for it - see docs/39_OUTSTANDING_REPORTS.md.
             val daysOutstanding = if (dueDate != null) java.time.temporal.ChronoUnit.DAYS.between(dueDate, today).toInt().coerceAtLeast(0) else 0
 
             rows.add(
                 OutstandingReportRow(
-                    invoiceId = invoiceEntity.invoiceId, invoiceNumber = invoiceEntity.invoiceNumber, invoiceType = invoiceEntity.invoiceType,
-                    partyId = party.partyId, partyName = party.displayName, voucherId = voucherId, voucherNumber = voucher.voucherNumber,
-                    date = safeParseDate(invoiceEntity.date), dueDate = dueDate,
+                    invoiceId = linkedInvoice?.invoiceId ?: voucher.voucherId, invoiceNumber = linkedInvoice?.invoiceNumber,
+                    invoiceType = invoiceTypeFor(voucher.voucherType),
+                    partyId = partyId, partyName = partyName, voucherId = voucher.voucherId, voucherNumber = voucher.voucherNumber,
+                    date = safeParseDate(linkedInvoice?.date ?: voucher.date), dueDate = dueDate,
                     totalAmount = Money.fromPaise(voucher.totalAmountPaise), outstandingAmount = Money.fromPaise(outstandingPaise),
                     status = status, daysOutstanding = daysOutstanding, agingBucket = agingBucketFor(daysOutstanding)
                 )
