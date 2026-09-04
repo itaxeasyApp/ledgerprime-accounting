@@ -919,10 +919,24 @@ class AccountingRepository(
      */
     /** Computed outstanding (in paise) for a single Sale/Purchase voucher - `total - Σ allocations
      * - Σ note adjustments` - shared by [getOutstandingInvoices] and [allocateSettlement]'s
-     * over-allocation guard so both always agree on the same figure. Null if the voucher doesn't exist. */
+     * over-allocation guard so both always agree on the same figure. Null if the voucher doesn't exist.
+     *
+     * Cancel/Reverse audit fix - an allocation whose OWN settlement (Receipt/Payment) voucher was
+     * later cancelled must not keep counting against this invoice: [VoucherPostingEngine.cancel]
+     * reverses a cancelled voucher's journal items/GST facts but - by design, same as every other
+     * voucher type - never deletes/mutates its [SettlementAllocationEntity] rows (Rule 12,
+     * append-only; the allocation itself is a true historical fact, only which voucher it's
+     * attributed to changes). So this is a read-time exclusion, exactly mirroring how
+     * [noteAdjustment] already excludes a cancelled Credit/Debit Note two lines below - never a
+     * write to `settlement_allocations` itself. Only an explicitly CONFIRMED cancellation excludes
+     * the allocation - a `settlementVoucherId` that resolves to no voucher at all is left counted
+     * exactly as before this fix, never treated as equivalent to "cancelled". */
     private suspend fun computeOutstandingPaise(companyId: String, invoiceVoucherId: String): Long? {
         val invoice = dao.getVoucherById(companyId, invoiceVoucherId) ?: return null
-        val allocated = dao.getAllocationsForInvoice(invoiceVoucherId).fold(0L) { acc, a -> acc + a.allocatedAmountPaise }
+        val allocated = dao.getAllocationsForInvoice(invoiceVoucherId).fold(0L) { acc, a ->
+            val settlementVoucher = dao.getVoucherById(companyId, a.settlementVoucherId)
+            if (settlementVoucher?.isCancelled == true) acc else acc + a.allocatedAmountPaise
+        }
         val noteAdjustment = dao.getVouchersByCompany(companyId).first()
             .filter { it.referenceVoucherId == invoiceVoucherId && !it.isCancelled }
             .fold(0L) { acc, note -> acc + note.totalAmountPaise }

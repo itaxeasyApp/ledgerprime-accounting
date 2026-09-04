@@ -881,6 +881,48 @@ class Phase5TestSuite {
         assertTrue("Fully allocated invoice must no longer be outstanding", outstanding.none { it.voucherId == "V_SAL" })
     }
 
+    /**
+     * Cancel/Reverse audit fix regression - cancelling the Receipt that fully settled a Sale must
+     * restore the Sale's outstanding balance. Before this fix, [VoucherPostingEngine.cancel]
+     * reversed the Receipt's own journal items/GST but left its `settlement_allocations` rows
+     * untouched, so `computeOutstandingPaise` kept counting money that was never actually received.
+     */
+    @Test
+    fun d1b_CancelReceipt_AfterFullAllocation_RestoresOutstanding() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompany()
+        dao.seedTradingLedgers()
+        dao.insertStockItem(stockItem("ITEM_A", openingQty = 100_000L))
+        val sale = TradingWorkflowEngine.buildSale("V_SAL", companyId, fyId, "LED_DEBTOR", "Cust", "", "LED_SALES", "Sales", "27", "27", listOf(line("ITEM_A", 4, 800_00L, 18.0)), gstLedgerRefs(companyId), "LED_RO", "Round Off")
+        postResult(dao, "V_SAL", VoucherType.SALES, sale)
+
+        val receipt = VoucherEntity("V_RCT", companyId, fyId, "RCT-0001", VoucherType.RECEIPT, "2026-05-12", "", "", sale.totalAmount.paise, true, false, SyncState.PENDING, 0L, 0L, "TESTER", "", false)
+        VoucherPostingEngine.post(dao, receipt, listOf(
+            JournalItemEntity("I1", "V_RCT", companyId, fyId, "LED_BANK", DrCr.DEBIT, sale.totalAmount.paise, "", 1),
+            JournalItemEntity("I2", "V_RCT", companyId, fyId, "LED_DEBTOR", DrCr.CREDIT, sale.totalAmount.paise, "", 2)
+        ), "IK_RCT", "TESTER")
+
+        val repo = AccountingRepository(dao)
+        repo.allocateSettlement(companyId, fyId, "V_RCT", listOf("V_SAL" to sale.totalAmount), Money.ZERO)
+        assertTrue("Sanity check - fully allocated before cancellation", repo.getOutstandingInvoices(companyId, "LED_DEBTOR").none { it.voucherId == "V_SAL" })
+
+        VoucherPostingEngine.cancel(dao, companyId, fyId, "V_RCT", "IK_CANCEL_RCT", "TESTER")
+
+        val outstanding = repo.getOutstandingInvoices(companyId, "LED_DEBTOR").first { it.voucherId == "V_SAL" }
+        assertEquals("Cancelling the Receipt must restore the full Sale amount as outstanding", sale.totalAmount.paise, outstanding.outstandingAmount.paise)
+
+        // A fresh Receipt must be able to re-allocate the same Sale in full - the stale allocation
+        // must never block re-collection.
+        val secondReceipt = VoucherEntity("V_RCT2", companyId, fyId, "RCT-0002", VoucherType.RECEIPT, "2026-05-13", "", "", sale.totalAmount.paise, true, false, SyncState.PENDING, 0L, 0L, "TESTER", "", false)
+        VoucherPostingEngine.post(dao, secondReceipt, listOf(
+            JournalItemEntity("I3", "V_RCT2", companyId, fyId, "LED_BANK", DrCr.DEBIT, sale.totalAmount.paise, "", 1),
+            JournalItemEntity("I4", "V_RCT2", companyId, fyId, "LED_DEBTOR", DrCr.CREDIT, sale.totalAmount.paise, "", 2)
+        ), "IK_RCT2", "TESTER")
+        val secondAlloc = repo.allocateSettlement(companyId, fyId, "V_RCT2", listOf("V_SAL" to sale.totalAmount), Money.ZERO)
+        assertTrue(secondAlloc is com.example.accounting.core.common.AccountingResult.Success)
+        assertTrue(repo.getOutstandingInvoices(companyId, "LED_DEBTOR").none { it.voucherId == "V_SAL" })
+    }
+
     @Test
     fun d2_Receipt_PartialAllocation_LeavesRemainderOutstanding() = runBlocking {
         val dao = freshDao()
