@@ -210,7 +210,11 @@ data class LedgerEntity(
      * `null` for UNKNOWN. Was declared on the domain [Ledger] model with no backing column until
      * this field was added - never persisted before, so every pre-existing row reads back `null`
      * (honestly UNKNOWN), never a guessed REGISTERED/UNREGISTERED. */
-    val gstRegistrationStatus: String? = null
+    val gstRegistrationStatus: String? = null,
+    /** Customer/Supplier Setup fix - optional postal PIN code, appended last (never inserted
+     * mid-constructor) so every existing positional `LedgerEntity(...)` call site - test fixtures
+     * included - keeps compiling unchanged. */
+    @ColumnInfo(defaultValue = "''") val pinCode: String = ""
 )
 
 @Entity(

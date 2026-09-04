@@ -587,6 +587,35 @@ class Phase4TestSuite {
         assertTrue("Switching back must recompute from the (never-deleted) stock history", pnlAfterSwitchBack.isInventoryAware)
     }
 
+    /**
+     * Balance Sheet crash regression (real-device audit finding) - a Purchase posted through the
+     * item-free Account-Only path (no [StockItem]/[VoucherStockLineEntity] involved at all, the
+     * same shape `buildAccountOnlyPurchase` produces) must not vanish from Gross/Net Profit just
+     * because the company is later switched to ACCOUNT_WITH_INVENTORY with zero stock items ever
+     * created - that used to fabricate a real, all-zero [CogsEngine.CogsResult] instead of falling
+     * back to the plain ledger-based Purchases figure, silently discarding the real expense and
+     * making [AccountingRepository.generateBalanceSheet] throw [AppError.BalanceSheetNotBalanced].
+     */
+    @Test
+    fun i3_AccountOnlyPurchase_ThenSwitchToInventoryModeWithNoItems_BalanceSheetStillBalances() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompany(accountingMode = AccountingMode.ACCOUNT_ONLY)
+        dao.seedTradingLedgers()
+        val v = voucherEntity("V1", "PUR-1", VoucherType.PURCHASE)
+        VoucherPostingEngine.post(dao, v, simpleJournal("V1", "LED_PUR", "LED_BANK", 5000_00L), "IK1", "TESTER")
+
+        val repo = AccountingRepository(dao)
+        repo.updateAccountingConfiguration(companyId, accountingMode = AccountingMode.ACCOUNT_WITH_INVENTORY)
+
+        val pnl = repo.generateProfitAndLoss(companyId, fyId)
+        assertFalse("Zero stock items ever created means nothing to compute a real COGS from - never fabricate one", pnl.isInventoryAware)
+        assertEquals("The real Account-Only Purchase must still be reflected, not silently zeroed by the mode switch", 5000_00L, pnl.purchases.paise)
+
+        // Must not throw AccountingTransactionException(BalanceSheetNotBalanced).
+        val balanceSheet = repo.generateBalanceSheet(companyId, fyId)
+        assertTrue(balanceSheet.isBalanced)
+    }
+
     @Test
     fun i2_IncomeAndExpenditure_ServiceBusinessType_Surplus() = runBlocking {
         val dao = freshDao()

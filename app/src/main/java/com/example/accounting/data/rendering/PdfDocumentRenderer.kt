@@ -55,9 +55,19 @@ object PdfDocumentRenderer {
         var y = layout.marginPointsTop.toFloat()
         val left = layout.marginPointsLeft.toFloat()
 
+        // GST-mandatory on a tax invoice (B2B and B2C alike) - Place of Supply/recipient state,
+        // never omitted just because the rest of the party block (GSTIN/address) is also minimal
+        // today (Section 11: this renderer stays deliberately simple).
+        fun stateLabel(party: com.example.accounting.domain.rendering.DocumentPartySnapshot): String? =
+            if (party.stateCode.isBlank()) null else "State: ${party.stateCode} - ${party.stateName.ifBlank { "Unknown" }}"
+
         if (layout.showHeader) {
             canvas.drawText(data.seller.name, left, y, headingPaint)
             y += typography.headingFontSizeSp + 4
+            stateLabel(data.seller)?.let {
+                canvas.drawText(it, left, y, bodyPaint)
+                y += typography.baseFontSizeSp + 4
+            }
             canvas.drawText(data.documentType.name.replace('_', ' '), left, y, bodyPaint)
             y += typography.baseFontSizeSp + 4
             canvas.drawText("No: ${data.documentNumber}  Date: ${data.documentDate}", left, y, bodyPaint)
@@ -65,7 +75,12 @@ object PdfDocumentRenderer {
         }
 
         canvas.drawText("Bill To: ${data.buyer.name}", left, y, bodyPaint)
-        y += typography.baseFontSizeSp + 12
+        y += typography.baseFontSizeSp + 4
+        stateLabel(data.buyer)?.let {
+            canvas.drawText(it, left, y, bodyPaint)
+            y += typography.baseFontSizeSp + 4
+        }
+        y += 8
 
         for (line in data.items) {
             val parts = mutableListOf<String>()

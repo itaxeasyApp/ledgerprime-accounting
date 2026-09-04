@@ -1274,6 +1274,7 @@ class AccountingRepository(
                 email = it.email,
                 phone = it.phone,
                 address = it.address,
+                pinCode = it.pinCode,
                 bankName = it.bankName,
                 bankAccountNumber = it.bankAccountNumber,
                 bankIfsc = it.bankIfsc,
@@ -1316,6 +1317,7 @@ class AccountingRepository(
             email = ledger.email,
             phone = ledger.phone,
             address = ledger.address,
+            pinCode = ledger.pinCode,
             bankName = ledger.bankName,
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
@@ -1364,6 +1366,7 @@ class AccountingRepository(
             email = ledger.email,
             phone = ledger.phone,
             address = ledger.address,
+            pinCode = ledger.pinCode,
             bankName = ledger.bankName,
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
@@ -2595,6 +2598,20 @@ class AccountingRepository(
      * Aggregates COGS across every stock item for [companyId]/[fyId] (optionally restricted to
      * [dateRange]), or returns null if the company is not in ACCOUNT_WITH_INVENTORY mode - the
      * single gate that keeps ACCOUNT_ONLY companies byte-for-byte unaffected by Phase 4.
+     *
+     * Balance Sheet crash fix - a company with zero [StockItem]s ever created used to still get a
+     * fabricated all-zero [CogsEngine.CogsResult] here (rather than `null`) whenever it was in
+     * ACCOUNT_WITH_INVENTORY mode. That silently DISCARDED any real Purchase/Sale ledger activity
+     * posted through the item-free Account-Only path (`buildAccountOnlySale`/`buildAccountOnlyPurchase`,
+     * reachable in this mode too, or left over from before a mode switch - Rule: mode switches never
+     * touch historical postings) - `generateProfitAndLoss` would use `cogsPaise = 0` instead of the
+     * real `purchasePaise`, inflating `netProfit`, which `generateBalanceSheet` then folds into
+     * Liabilities - producing a real Assets != Liabilities+Equity mismatch
+     * ([AppError.BalanceSheetNotBalanced]) and a hard crash on any screen that generates it. With
+     * zero stock items there is nothing to compute a real per-item COGS from either way, so this
+     * now falls back to `null` exactly like an ACCOUNT_ONLY company - `generateProfitAndLoss` then
+     * correctly uses the live, always-balanced `purchasePaise`/`salesPaise` ledger totals instead of
+     * a guessed COGS figure.
      */
     private suspend fun computeCogsIfInventoryAware(
         companyId: String,
@@ -2605,7 +2622,7 @@ class AccountingRepository(
         if (company.accountingMode != AccountingMode.ACCOUNT_WITH_INVENTORY) return null
 
         val items = dao.getStockItemsByCompany(companyId).first()
-        if (items.isEmpty()) return CogsEngine.CogsResult(0L, 0L, 0L, 0L, 0L)
+        if (items.isEmpty()) return null
 
         val movementsByItem = dao.getStockMovementsForCompanyFY(companyId, fyId).groupBy { it.itemId }
 
@@ -4450,9 +4467,11 @@ class AccountingRepository(
     private suspend fun partySnapshot(companyId: String, partyId: String): DocumentPartySnapshot? {
         val party = dao.getPartyById(companyId, partyId) ?: return null
         val ledger = dao.getLedgerById(companyId, party.ledgerId)
+        val stateCode = ledger?.stateCode.orEmpty()
         return DocumentPartySnapshot(
             name = party.displayName, address = ledger?.address.orEmpty(), gstin = ledger?.gstin.orEmpty(),
-            pan = ledger?.pan.orEmpty(), phone = ledger?.phone.orEmpty(), email = ledger?.email.orEmpty()
+            pan = ledger?.pan.orEmpty(), phone = ledger?.phone.orEmpty(), email = ledger?.email.orEmpty(),
+            stateCode = stateCode, stateName = Constants.GST_STATE_CODES[stateCode].orEmpty()
         )
     }
 
@@ -4464,7 +4483,8 @@ class AccountingRepository(
             gstin = profile?.gstin?.ifBlank { company.gstin } ?: company.gstin,
             pan = profile?.pan?.ifBlank { company.pan } ?: company.pan,
             phone = profile?.phone?.ifBlank { company.phone } ?: company.phone,
-            email = profile?.email?.ifBlank { company.email } ?: company.email
+            email = profile?.email?.ifBlank { company.email } ?: company.email,
+            stateCode = company.stateCode, stateName = company.stateName
         )
     }
 

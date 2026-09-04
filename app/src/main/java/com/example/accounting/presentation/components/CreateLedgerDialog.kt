@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.accounting.core.common.Constants
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.AccountGroup
@@ -51,7 +52,7 @@ fun CreateLedgerDialog(
     groups: List<AccountGroup>,
     initialGroupId: String? = null,
     onDismiss: () -> Unit,
-    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String) -> Unit
+    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String, String, String) -> Unit
 ) {
     var ledgerName by remember { mutableStateOf("") }
     var selectedGroupId by remember { mutableStateOf(initialGroupId ?: groups.firstOrNull()?.groupId ?: "") }
@@ -63,6 +64,11 @@ fun CreateLedgerDialog(
     var email by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var hsnSac by remember { mutableStateOf("") }
+    // Ledger Setup fix - optional, never required; State Code is the Place-of-Supply fact this
+    // ledger needs before it can be used as a Sale/Purchase counterparty (Rule 29). Never defaulted
+    // here to the company's own state (see AccountingViewModel.createLedger's own doc comment).
+    var stateCode by remember { mutableStateOf("") }
+    var pinCode by remember { mutableStateOf("") }
     // Audit fix (Company/Profile/Ledger Setup) - the Ledger domain model already carried
     // bankAccountNumber/bankIfsc with no UI ever collecting them; bankName/bankBranch are new
     // sibling fields (MIGRATION_19_20). Only shown/collected for a ledger actually under the
@@ -241,6 +247,29 @@ fun CreateLedgerDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = stateCode,
+                        onValueChange = { stateCode = it },
+                        label = { Text("State Code (GST, Optional)") },
+                        // Derived, display-only - never a second stored state-name field, same
+                        // lookup Company profile/Customer-Supplier Setup already use.
+                        supportingText = Constants.GST_STATE_CODES[stateCode]?.let { { Text(it) } },
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = pinCode,
+                        onValueChange = { pinCode = it },
+                        label = { Text("PIN Code (Optional)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
                 if (isBankGroup) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
@@ -312,7 +341,9 @@ fun CreateLedgerDialog(
                                 if (isBankGroup) bankName else "",
                                 if (isBankGroup) bankAccountNumber else "",
                                 if (isBankGroup) bankIfsc else "",
-                                if (isBankGroup) bankBranch else ""
+                                if (isBankGroup) bankBranch else "",
+                                stateCode,
+                                pinCode
                             )
                             onDismiss()
                         },

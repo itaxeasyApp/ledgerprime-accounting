@@ -91,7 +91,7 @@ import com.example.accounting.data.local.entity.VoucherStockLineEntity
         GstReturnSectionEntity::class,
         GstReturnSubmissionEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 @TypeConverters(RoomConverters::class)
@@ -1098,6 +1098,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+        /** Customer/Supplier Setup fix - one new column on `ledgers`, `pinCode`, completing the
+         * postal-address fields a Customer/Supplier ledger can optionally carry (Address/State
+         * Code already existed). Plain additive `ADD COLUMN` with an explicit default matching the
+         * entity's own `@ColumnInfo(defaultValue = "''")` exactly, same pattern as `MIGRATION_19_20`. */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE ledgers ADD COLUMN pinCode TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
     }
 }

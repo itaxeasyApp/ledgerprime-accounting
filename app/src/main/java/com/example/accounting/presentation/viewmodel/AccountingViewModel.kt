@@ -631,7 +631,16 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         bankName: String = "",
         bankAccountNumber: String = "",
         bankIfsc: String = "",
-        bankBranch: String = ""
+        bankBranch: String = "",
+        // Ledger Setup fix - a ledger's own State/PIN, optional at creation (matches createParty's
+        // Rule 29/30 treatment exactly). Previously this silently defaulted to the COMPANY's own
+        // stateCode, which is wrong the moment this ledger is used as a Sale/Purchase counterparty
+        // in a different state - Place of Supply is resolved from THIS ledger's stateCode (Rule 29),
+        // so a silent same-state guess would misclassify a real inter-state supply as intra-state
+        // (CGST+SGST) instead of IGST with no visible error. Left blank when unset, exactly like a
+        // fresh Party's ledger - the posting-time guard is what actually requires it, not creation.
+        stateCode: String = "",
+        pinCode: String = ""
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
@@ -646,10 +655,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 currentBalanceType = openingType,
                 gstin = gstin,
                 pan = pan,
-                stateCode = comp.stateCode,
+                stateCode = stateCode,
                 phone = phone,
                 email = email,
                 address = address,
+                pinCode = pinCode,
                 hsnSacCode = hsnSac,
                 defaultTaxRate = defaultTaxRate,
                 bankName = bankName,
@@ -1428,13 +1438,26 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /**
+     * Sync-refresh error message fix - [OutboxProcessor.processPendingOutbox] returns a
+     * `Result<Int>`, never a bare count; this used to interpolate that `Result` object directly
+     * into the Snackbar message unread, so EVERY tap of the sync button - online or offline -
+     * showed a garbled message like "Outbox sync completed. Failure(java.lang.IllegalStateException:
+     * Device is offline) pending accounting mutations processed." instead of either a real count or
+     * a real error. Now unwrapped: a genuine success shows the real synced count, and a genuine
+     * failure (offline, or online with no reachable server - this app has no live backend today)
+     * shows [OutboxProcessor]'s own real, specific error message, never a fabricated "completed".
+     */
     fun triggerSync() {
         viewModelScope.launch {
             val compId = _uiState.value.currentCompany?.companyId ?: return@launch
             _uiState.update { it.copy(isSyncing = true) }
-            val syncedCount = outboxProcessor.processPendingOutbox(compId)
+            val result = outboxProcessor.processPendingOutbox(compId)
             _uiState.update { it.copy(isSyncing = false) }
-            emitMessage("Outbox sync completed. $syncedCount pending accounting mutations processed.")
+            result.fold(
+                onSuccess = { syncedCount -> emitMessage("Outbox sync completed. $syncedCount pending accounting mutation(s) processed.") },
+                onFailure = { error -> emitMessage("Sync failed: ${error.message ?: "unknown error"}") }
+            )
         }
     }
 
@@ -1463,7 +1486,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         email: String = "",
         address: String = "",
         stateCode: String = "",
-        gstRegistrationStatus: com.example.accounting.domain.accounting.GstRegistrationStatus? = null
+        gstRegistrationStatus: com.example.accounting.domain.accounting.GstRegistrationStatus? = null,
+        pinCode: String = ""
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1474,7 +1498,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val ledgerTemplate = Ledger(
                 ledgerId = "", companyId = comp.companyId, groupId = "", name = displayName,
                 gstin = gstin, phone = phone, email = email, address = address, stateCode = stateCode,
-                gstRegistrationStatus = gstRegistrationStatus
+                gstRegistrationStatus = gstRegistrationStatus, pinCode = pinCode
             )
             val result = partyService.createParty(
                 Party(partyId = "", companyId = comp.companyId, ledgerId = "", role = role, entityType = entityType, displayName = displayName),

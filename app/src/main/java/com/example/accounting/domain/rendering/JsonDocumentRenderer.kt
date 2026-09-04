@@ -86,6 +86,8 @@ object JsonDocumentRenderer : DocumentRenderer<String> {
         "gstin" to party.gstin,
         "pan" to party.pan,
         "phone" to party.phone,
-        "email" to party.email
+        "email" to party.email,
+        "stateCode" to party.stateCode,
+        "stateName" to party.stateName
     )
 }

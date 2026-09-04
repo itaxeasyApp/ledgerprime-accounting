@@ -651,8 +651,8 @@ fun MainAppScreen(
             groups = uiState.groups,
             initialGroupId = quickAddLedgerGroupId,
             onDismiss = { isCreateLedgerOpen = false; quickAddLedgerGroupId = null },
-            onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch ->
-                viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch)
+            onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode ->
+                viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode)
             }
         )
     }
@@ -679,8 +679,8 @@ fun MainAppScreen(
         CreatePartyDialog(
             role = role,
             onDismiss = { createPartyRole = null },
-            onCreateParty = { displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus ->
-                viewModel.createParty(displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus)
+            onCreateParty = { displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode ->
+                viewModel.createParty(displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode)
             }
         )
     }

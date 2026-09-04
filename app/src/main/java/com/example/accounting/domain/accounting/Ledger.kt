@@ -40,6 +40,11 @@ data class Ledger(
     val email: String = "",
     val phone: String = "",
     val address: String = "",
+    /** Optional postal PIN code - Customer/Supplier Setup fix. Never required (matches every other
+     * address field on this ledger); [com.example.accounting.core.common.Constants.GST_STATE_CODES]
+     * already derives a display-only state name from [stateCode] elsewhere (Company profile), so
+     * this stays the only new stored fact rather than also duplicating a state name here. */
+    val pinCode: String = "",
     /** Audit fix (Company/Profile/Ledger Setup) - a Bank-group ledger previously had no field for
      * the bank's own name, even though [bankAccountNumber]/[bankIfsc] already existed; the UI
      * never actually collected any of the three. [bankBranch] is the fourth, matching what

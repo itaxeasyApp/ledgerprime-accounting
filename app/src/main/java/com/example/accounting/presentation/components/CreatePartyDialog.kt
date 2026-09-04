@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.accounting.core.common.Constants
 import com.example.accounting.domain.accounting.GstRegistrationStatus
 import com.example.accounting.domain.party.PartyEntityType
 import com.example.accounting.domain.party.PartyRole
@@ -60,7 +61,8 @@ fun CreatePartyDialog(
         email: String,
         address: String,
         stateCode: String,
-        gstRegistrationStatus: GstRegistrationStatus?
+        gstRegistrationStatus: GstRegistrationStatus?,
+        pinCode: String
     ) -> Unit
 ) {
     var displayName by remember { mutableStateOf("") }
@@ -72,6 +74,8 @@ fun CreatePartyDialog(
     var email by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var stateCode by remember { mutableStateOf("") }
+    // Customer/Supplier Setup fix - optional, never required (matches every other address field).
+    var pinCode by remember { mutableStateOf("") }
 
     val roleLabel = if (role == PartyRole.CUSTOMER) "Customer" else "Supplier"
     val isBusiness = entityType == PartyEntityType.BUSINESS
@@ -204,13 +208,24 @@ fun CreatePartyDialog(
                 FormField(value = address, onValueChange = { address = it }, label = "Address", modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(Spacing.sm))
 
-                FormField(
-                    value = stateCode,
-                    onValueChange = { stateCode = it },
-                    label = "State Code (GST)",
-                    supportingText = "Needed for Place of Supply - required before this $roleLabel can be used in a GST transaction",
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm + Spacing.xs)) {
+                    FormField(
+                        value = stateCode,
+                        onValueChange = { stateCode = it },
+                        label = "State Code (GST)",
+                        // Derived, display-only - never a second stored state-name field, same
+                        // lookup Company profile already uses (Constants.GST_STATE_CODES).
+                        supportingText = Constants.GST_STATE_CODES[stateCode]
+                            ?: "Needed for Place of Supply - required before this $roleLabel can be used in a GST transaction",
+                        modifier = Modifier.weight(1f)
+                    )
+                    FormField(
+                        value = pinCode,
+                        onValueChange = { pinCode = it },
+                        label = "PIN Code (optional)",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 Spacer(modifier = Modifier.height(Spacing.lg - Spacing.xs))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -220,7 +235,7 @@ fun CreatePartyDialog(
                         text = "Add $roleLabel",
                         enabled = canSubmit,
                         onClick = {
-                            onCreateParty(displayName, role, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus)
+                            onCreateParty(displayName, role, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode)
                             onDismiss()
                         }
                     )

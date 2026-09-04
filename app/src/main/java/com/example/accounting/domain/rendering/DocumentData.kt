@@ -65,7 +65,14 @@ data class DocumentPartySnapshot(
     val gstin: String = "",
     val pan: String = "",
     val phone: String = "",
-    val email: String = ""
+    val email: String = "",
+    /** GST-mandatory on a tax invoice (Place of Supply/recipient state) for both B2B and B2C -
+     * [stateCode] is the raw two-digit code already used for CGST/SGST-vs-IGST classification
+     * ([com.example.accounting.data.repository.AccountingRepository.computeLineTax]); [stateName]
+     * is the same [com.example.accounting.core.common.Constants.GST_STATE_CODES] lookup Company/
+     * Party/Ledger setup already use for display - never a second, independently-typed state name. */
+    val stateCode: String = "",
+    val stateName: String = ""
 )
 
 data class DocumentLineData(
