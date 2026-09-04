@@ -344,7 +344,10 @@ fun MainAppScreen(
                             onOpenCreateVoucher = { type -> createVoucherType = type; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onVoucherClick = { selectedVoucherDetail = it },
                             onViewAllDayBook = { viewModel.navigateTo(AppRoute.DayBook) },
-                            onViewReports = { viewModel.selectTab(NavigationTab.REPORTS) },
+                            onViewReceivables = { viewModel.viewReport("Outstanding Receivables") },
+                            onViewPayables = { viewModel.viewReport("Outstanding Payables") },
+                            onViewProfitLoss = { viewModel.viewReport("Profit & Loss") },
+                            onViewGstSummary = { viewModel.viewReport("GST Summary") },
                             onOpenCash = { viewModel.selectTab(NavigationTab.MONEY) },
                             onOpenBank = { viewModel.selectTab(NavigationTab.MONEY) },
                             onOpenSales = { viewModel.selectTab(NavigationTab.SALES) },
@@ -388,6 +391,8 @@ fun MainAppScreen(
                             uiState = uiState,
                             onOpenDayBook = { viewModel.navigateTo(AppRoute.DayBook) },
                             onOpenAllLedgers = { viewModel.navigateTo(AppRoute.ChartOfAccounts) },
+                            deepLinkReportKey = uiState.reportsDeepLink,
+                            onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() },
                             onExportReport = { reportKey ->
                                 coroutineScope.launch {
                                     val intent = viewModel.exportReportAndShare(reportKey)

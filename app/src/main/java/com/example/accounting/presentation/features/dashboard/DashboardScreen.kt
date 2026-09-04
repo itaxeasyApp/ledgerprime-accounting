@@ -55,7 +55,15 @@ fun DashboardScreen(
     onOpenCreateVoucher: (VoucherType) -> Unit,
     onVoucherClick: (Voucher) -> Unit,
     onViewAllDayBook: () -> Unit,
-    onViewReports: () -> Unit,
+    /** Dashboard-card-to-Report-Center deep link fix - replaces the single, generic
+     * `onViewReports` every card used to share (which always landed on the Report Center's
+     * top-level category menu, never the specific report) with one callback per authoritative
+     * report, each invoking [com.example.accounting.presentation.viewmodel.AccountingViewModel.viewReport]
+     * with that report's own Report Center menu key. */
+    onViewReceivables: () -> Unit,
+    onViewPayables: () -> Unit,
+    onViewProfitLoss: () -> Unit,
+    onViewGstSummary: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
@@ -134,7 +142,10 @@ fun DashboardScreen(
                     onOpenBank = onOpenBank,
                     onOpenSales = onOpenSales,
                     onOpenPurchases = onOpenPurchases,
-                    onViewReports = onViewReports
+                    onViewReceivables = onViewReceivables,
+                    onViewPayables = onViewPayables,
+                    onViewProfitLoss = onViewProfitLoss,
+                    onViewGstSummary = onViewGstSummary
                 )
             }
         }

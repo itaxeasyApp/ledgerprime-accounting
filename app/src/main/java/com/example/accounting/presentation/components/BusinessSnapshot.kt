@@ -43,7 +43,14 @@ fun BusinessSnapshot(
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
     onOpenPurchases: () -> Unit,
-    onViewReports: () -> Unit,
+    /** Dashboard-card-to-Report-Center deep link fix - each card now opens its OWN authoritative
+     * Report Center report directly (see [AccountingViewModel.viewReport]'s report-menu keys),
+     * never just the generic category menu a single shared "view reports" callback used to always
+     * land every one of these cards on. */
+    onViewReceivables: () -> Unit,
+    onViewPayables: () -> Unit,
+    onViewProfitLoss: () -> Unit,
+    onViewGstSummary: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -53,8 +60,8 @@ fun BusinessSnapshot(
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ReceiptSummary(receivables, Modifier.weight(1f)) { onViewReports() }
-            PaymentSummary(payables, Modifier.weight(1f)) { onViewReports() }
+            ReceiptSummary(receivables, Modifier.weight(1f)) { onViewReceivables() }
+            PaymentSummary(payables, Modifier.weight(1f)) { onViewPayables() }
         }
         // SERVICE-mode audit fix - a SERVICE company has no Sales/Purchase concept (see
         // [com.example.accounting.domain.company.BusinessType]); showing this row alongside the
@@ -71,14 +78,14 @@ fun BusinessSnapshot(
         if (income != null && expenditure != null) {
             Spacer(modifier = Modifier.height(10.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                IncomeSummary(income, Modifier.weight(1f)) { onViewReports() }
-                ExpenditureSummary(expenditure, Modifier.weight(1f)) { onViewReports() }
+                IncomeSummary(income, Modifier.weight(1f)) { onViewProfitLoss() }
+                ExpenditureSummary(expenditure, Modifier.weight(1f)) { onViewProfitLoss() }
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatCard(netProfitLabel, netProfit, "Current Financial Year", Icons.Default.TrendingUp, MaterialTheme.colorScheme.secondary, Modifier.weight(1f).clickable { onViewReports() })
-            StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewReports() })
+            StatCard(netProfitLabel, netProfit, "Current Financial Year", Icons.Default.TrendingUp, MaterialTheme.colorScheme.secondary, Modifier.weight(1f).clickable { onViewProfitLoss() })
+            StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewGstSummary() })
         }
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,18 @@ import com.example.accounting.presentation.viewmodel.AccountingUiState
 
 private enum class ReportCategory(val label: String) { FINANCIAL("Financial"), SALES_PURCHASE("Sales/Purchase"), ACCOUNTS("Accounts"), GST("GST"), ANALYSIS("Analysis") }
 
+/** Dashboard-card-to-Report-Center deep link fix - the one place that knows which category a
+ * given report-menu key lives under, so a caller (Dashboard) only ever has to name the report
+ * itself, never duplicate this screen's own category layout. */
+private fun reportCategoryForKey(reportKey: String): ReportCategory? = when (reportKey) {
+    "Trial Balance", "Profit & Loss", "Balance Sheet", "Cash Flow" -> ReportCategory.FINANCIAL
+    "Sales Register", "Purchase Register", "Outstanding Receivables", "Outstanding Payables" -> ReportCategory.SALES_PURCHASE
+    "Cash Book", "Bank Book", "Receipt Register", "Payment Register" -> ReportCategory.ACCOUNTS
+    "GST Summary", "HSN/SAC Summary", "GST Return Dashboard" -> ReportCategory.GST
+    "Ratio Analysis" -> ReportCategory.ANALYSIS
+    else -> null
+}
+
 /**
  * Phase 7J UI: the Reports Center (bottom-nav item #5) - a category-selector landing screen per
  * the UX spec's Section 13, not a flat tab bar. Every figure shown comes from an existing
@@ -70,9 +83,25 @@ fun ReportsCenterScreen(
     onShareReport: (reportKey: String) -> Unit = {},
     onPrintReport: (reportKey: String) -> Unit = {},
     gstReturnActions: GstReturnDashboardActions,
+    /** Dashboard-card-to-Report-Center deep link fix - [AccountingUiState.reportsDeepLink], a
+     * report-menu key to jump straight into (e.g. "Outstanding Receivables") instead of leaving
+     * the user on the generic category menu a Dashboard card used to always land on. */
+    deepLinkReportKey: String? = null,
+    onDeepLinkConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var category by remember { mutableStateOf<ReportCategory?>(null) }
+    var pendingReportKey by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(deepLinkReportKey) {
+        val key = deepLinkReportKey ?: return@LaunchedEffect
+        val targetCategory = reportCategoryForKey(key)
+        if (targetCategory != null) {
+            category = targetCategory
+            pendingReportKey = key
+        }
+        onDeepLinkConsumed()
+    }
 
     if (category == null) {
         LazyColumn(
@@ -95,11 +124,17 @@ fun ReportsCenterScreen(
             Text(category!!.label, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
         }
 
+        // Consumed exactly once per category entry (each category composable seeds its own
+        // internal reportKey state from this) - `remember(category)` re-evaluates only when the
+        // category itself changes, so navigating back to this same category's menu by hand
+        // afterward starts fresh instead of re-jumping to the same report forever.
+        val initialReportKey = remember(category) { pendingReportKey.also { pendingReportKey = null } }
+
         when (category) {
-            ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport)
-            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState)
+            ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport, initialReportKey)
+            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, initialReportKey)
             ReportCategory.ACCOUNTS -> AccountsCategory(uiState, onOpenDayBook, onOpenAllLedgers)
-            ReportCategory.GST -> GstCategory(uiState, gstReturnActions)
+            ReportCategory.GST -> GstCategory(uiState, gstReturnActions, initialReportKey)
             ReportCategory.ANALYSIS -> AnalysisCategory(uiState)
             null -> {}
         }
@@ -107,8 +142,8 @@ fun ReportsCenterScreen(
 }
 
 @Composable
-private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (String) -> Unit, onShareReport: (String) -> Unit, onPrintReport: (String) -> Unit) {
-    var reportKey by remember { mutableStateOf<String?>(null) }
+private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (String) -> Unit, onShareReport: (String) -> Unit, onPrintReport: (String) -> Unit, initialReportKey: String? = null) {
+    var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(
             listOf("Trial Balance" to true, "Profit & Loss" to true, "Balance Sheet" to true, "Cash Flow" to true, "Fund Flow" to false)
@@ -174,8 +209,8 @@ private fun CashFlowView(report: CashFlowReport?) {
 }
 
 @Composable
-private fun SalesPurchaseCategory(uiState: AccountingUiState) {
-    var reportKey by remember { mutableStateOf<String?>(null) }
+private fun SalesPurchaseCategory(uiState: AccountingUiState, initialReportKey: String? = null) {
+    var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(listOf("Sales Register" to true, "Purchase Register" to true, "Outstanding Receivables" to true, "Outstanding Payables" to true)) { reportKey = it }
         return
@@ -219,10 +254,19 @@ private fun AccountsCategory(uiState: AccountingUiState, onOpenDayBook: () -> Un
 }
 
 @Composable
-private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnDashboardActions) {
-    var reportKey by remember { mutableStateOf<String?>(null) }
+private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnDashboardActions, initialReportKey: String? = null) {
+    var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
-        ReportMenu(listOf("GST Summary" to true, "HSN/SAC Summary" to true, "GST Return Dashboard" to true)) { reportKey = it }
+        // GST Return filing is a statutory GSTN concept - a company with no registered GSTIN
+        // (Unregistered/Composition-without-a-number, same status this screen's own header
+        // already shows) has nothing to file, so the Dashboard never has anything real for this
+        // to open. GST Summary/HSN-SAC stay available regardless - they reflect this company's
+        // own GST-rated Sale/Purchase activity, which can exist even without a formal GSTIN.
+        val hasGstin = !uiState.currentCompany?.gstin.isNullOrBlank()
+        ReportMenu(
+            listOf("GST Summary" to true, "HSN/SAC Summary" to true, "GST Return Dashboard" to hasGstin),
+            unavailableSubtitle = { "Requires a registered GSTIN" }
+        ) { reportKey = it }
         return
     }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -358,7 +402,7 @@ private fun VoucherRegisterList(vouchers: List<Voucher>) {
 }
 
 @Composable
-private fun ReportMenu(reports: List<Pair<String, Boolean>>, onSelect: (String) -> Unit) {
+private fun ReportMenu(reports: List<Pair<String, Boolean>>, unavailableSubtitle: (String) -> String = { "Coming soon" }, onSelect: (String) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -368,7 +412,7 @@ private fun ReportMenu(reports: List<Pair<String, Boolean>>, onSelect: (String) 
             SectionCard(
                 onClick = if (available) ({ onSelect(name) }) else null,
                 title = name,
-                subtitle = if (!available) "Coming soon" else null
+                subtitle = if (!available) unavailableSubtitle(name) else null
             ) {}
         }
     }

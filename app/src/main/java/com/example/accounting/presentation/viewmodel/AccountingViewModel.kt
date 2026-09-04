@@ -192,7 +192,15 @@ data class AccountingUiState(
     val isAttachingDocument: Boolean = false,
     /** The `referenceId` currently being unlinked, or null - lets the UI show a per-item spinner
      * on exactly the row being removed rather than one section-wide flag. */
-    val removingAttachmentReferenceId: String? = null
+    val removingAttachmentReferenceId: String? = null,
+
+    /** Dashboard-card-to-Report-Center deep link fix - a Dashboard card (Receivables/Payables/
+     * Profit&Loss/GST Payable) must open its OWN authoritative report directly, never just the
+     * generic Report Center category menu the user would then have to navigate through by hand.
+     * Holds the exact [ReportsCenterScreen] report-menu key (e.g. "Outstanding Receivables") to
+     * auto-select on next Report Center composition; cleared once consumed so it never re-fires
+     * on an unrelated later visit to the Reports tab. */
+    val reportsDeepLink: String? = null
 )
 
 /**
@@ -456,6 +464,21 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             NavigationTab.REPORTS -> AppRoute.Reports
         }
         router.navigate(destination)
+    }
+
+    /** Dashboard-card-to-Report-Center deep link fix - jumps straight to [reportKey] (a
+     * `ReportsCenterScreen` report-menu entry, e.g. "Outstanding Receivables", "Profit & Loss",
+     * "GST Summary") instead of leaving the user on the generic category menu. */
+    fun viewReport(reportKey: String) {
+        _uiState.update { it.copy(reportsDeepLink = reportKey) }
+        selectTab(NavigationTab.REPORTS)
+    }
+
+    /** Called once [ReportsCenterScreen] has consumed [AccountingUiState.reportsDeepLink] and
+     * auto-selected it, so leaving/re-entering Reports afterward starts at the category menu
+     * again instead of re-firing the same deep link forever. */
+    fun consumeReportsDeepLink() {
+        _uiState.update { it.copy(reportsDeepLink = null) }
     }
 
     fun navigateTo(route: AppRoute) {
