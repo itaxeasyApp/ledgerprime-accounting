@@ -42,11 +42,32 @@ import com.example.accounting.core.common.DrCr
 import com.example.accounting.data.local.dao.VoucherAttachmentRow
 import com.example.accounting.domain.accounting.Voucher
 
+/** Voucher types [onCorrectVoucher] supports - deliberately Contra/Journal only. Both are always a
+ * flat, unconditional 2-line debit/credit voucher (no invoice allocation, no GST, no stock),
+ * exactly what [CreateVoucherDialog]'s prefill can always reconstruct byte-for-byte from
+ * [Voucher.items]. Receipt/Payment build through the Settlement form instead (invoice allocation
+ * against outstanding invoices) - correctly prefilling a REPOST of that allocation state is a
+ * meaningfully harder, higher-risk problem than this pass takes on, so those keep today's plain
+ * "Delete & Reverse then re-enter" flow unchanged; Sale/Purchase/Notes similarly keep their
+ * existing correction mechanism (Credit/Debit Note, or cancel+repost from scratch). */
+val VOUCHER_CORRECTION_ELIGIBLE_TYPES = setOf(
+    com.example.accounting.domain.accounting.VoucherType.CONTRA,
+    com.example.accounting.domain.accounting.VoucherType.JOURNAL
+)
+
 @Composable
 fun VoucherDetailDialog(
     voucher: Voucher,
     onDismiss: () -> Unit,
     onDeleteVoucher: ((Voucher) -> Unit)? = null,
+    /** Architecture correction (Voucher Correct workflow) - only ever shown for
+     * [VOUCHER_CORRECTION_ELIGIBLE_TYPES]; `null` (the default) hides the affordance entirely for
+     * callers that don't wire it. */
+    onCorrectVoucher: ((Voucher) -> Unit)? = null,
+    /** Every voucher in the company, used only to resolve the two-way "Corrects .../Corrected by
+     * ..." link display below - never mutated, never posted from here. Defaulted empty so every
+     * existing call site keeps compiling with the link display simply not shown. */
+    allVouchers: List<Voucher> = emptyList(),
     /** Phase 7J-B.2 (Slice 2) attachment plumbing - all optional/no-op-defaulted so every other
      * existing call site of this dialog keeps compiling untouched. */
     attachments: List<VoucherAttachmentRow> = emptyList(),
@@ -56,6 +77,13 @@ fun VoucherDetailDialog(
     onAttachClick: () -> Unit = {},
     onRemoveAttachment: (VoucherAttachmentRow) -> Unit = {}
 ) {
+    // Architecture correction - "Corrects X" (this voucher has a referenceVoucherId pointing at an
+    // earlier one of the SAME type) / "Corrected by Y" (some other same-type voucher points back at
+    // this one) - same-type-only so this never collides with the unrelated Credit/Debit Note
+    // referenceVoucherId usage (a Note is always a different voucherType than its original).
+    val correctsOriginal = voucher.referenceVoucherId
+        ?.let { refId -> allVouchers.firstOrNull { it.voucherId == refId && it.voucherType == voucher.voucherType } }
+    val correctedByVoucher = allVouchers.firstOrNull { it.referenceVoucherId == voucher.voucherId && it.voucherType == voucher.voucherType }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -108,6 +136,25 @@ fun VoucherDetailDialog(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
+
+                if (correctsOriginal != null || correctedByVoucher != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = when {
+                                correctsOriginal != null -> "Corrects ${correctsOriginal.voucherNumber}"
+                                else -> "Corrected by ${correctedByVoucher!!.voucherNumber}"
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 // Narration
                 if (voucher.narration.isNotBlank()) {
@@ -199,25 +246,42 @@ fun VoucherDetailDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                // Correct Voucher is only offered for a still-live (not already cancelled), not
+                // already-corrected, correction-eligible voucher - correcting an already-corrected
+                // one would leave two "corrected by" links pointing at the same original.
+                val canCorrect = onCorrectVoucher != null && !voucher.isCancelled && correctedByVoucher == null &&
+                    voucher.voucherType in VOUCHER_CORRECTION_ELIGIBLE_TYPES
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (onDeleteVoucher != null) {
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = {
-                                onDeleteVoucher(voucher)
-                                onDismiss()
-                            },
-                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
-                        ) {
-                            Text("Delete & Reverse")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (onDeleteVoucher != null) {
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = {
+                                    onDeleteVoucher(voucher)
+                                    onDismiss()
+                                },
+                                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text("Delete & Reverse")
+                            }
                         }
-                    } else {
-                        Spacer(modifier = Modifier.width(1.dp))
+                        if (canCorrect) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = {
+                                    onCorrectVoucher!!(voucher)
+                                    onDismiss()
+                                }
+                            ) {
+                                Text("Correct Voucher")
+                            }
+                        }
                     }
 
                     Button(onClick = onDismiss) {

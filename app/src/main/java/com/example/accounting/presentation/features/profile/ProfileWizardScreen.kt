@@ -184,13 +184,13 @@ fun ProfileWizardScreen(
                 ProfileWizardStep.GST_TAX -> item {
                     SectionCard(title = "GST & Tax Details") {
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            FormField(value = gstin, onValueChange = { gstin = it.uppercase() }, label = "GSTIN", modifier = Modifier.weight(1f))
-                            FormField(value = pan, onValueChange = { pan = it.uppercase() }, label = "PAN", modifier = Modifier.weight(1f))
+                            FormField(value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN", modifier = Modifier.weight(1f))
+                            FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.weight(1f))
                         }
                         Spacer(modifier = Modifier.height(Spacing.sm))
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            FormField(value = tan, onValueChange = { tan = it.uppercase() }, label = "TAN (optional)", modifier = Modifier.weight(1f))
-                            FormField(value = udyam, onValueChange = { udyam = it.uppercase() }, label = "UDYAM (optional)", modifier = Modifier.weight(1f))
+                            FormField(value = tan, onValueChange = { tan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "TAN (optional)", modifier = Modifier.weight(1f))
+                            FormField(value = udyam, onValueChange = { udyam = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "UDYAM (optional)", modifier = Modifier.weight(1f))
                         }
                     }
                 }

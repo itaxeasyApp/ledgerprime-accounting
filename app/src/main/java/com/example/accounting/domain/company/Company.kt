@@ -72,7 +72,12 @@ data class Company(
     val status: CompanyStatus = CompanyStatus.ACTIVE,
     val isDefault: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Optional postal PIN code - 13-point correctness pass, item 1. Company previously had no
+     * field for this at all (only Ledger did); never required, mirrors [address]'s own optionality.
+     * Appended last (never inserted mid-constructor) so every existing `Company(...)` call site
+     * keeps compiling. */
+    val pinCode: String = ""
 ) {
     init {
         require(companyId.isNotBlank()) { "Company ID must not be blank" }

@@ -129,6 +129,8 @@ fun MoneyVoucherEntryScreen(
     var applyRoundOff by remember { mutableStateOf(false) }
     var cashBankExpanded by remember { mutableStateOf(false) }
     var counterpartyExpanded by remember { mutableStateOf(false) }
+    // Post-safety fix - same local double-tap latch as CreateVoucherDialog's Post button.
+    var isSubmitting by remember { mutableStateOf(false) }
 
     val amountMoney = remember(amountInput) { Money.parse(amountInput) }
     val roundOffPreview = remember(amountMoney, applyRoundOff) {
@@ -147,7 +149,8 @@ fun MoneyVoucherEntryScreen(
     LaunchedEffect(scannedBarcodeValue) {
         val scanned = scannedBarcodeValue ?: return@LaunchedEffect
         if (voucherType == VoucherType.RECEIPT) {
-            val matchedCustomer = counterpartyLedgers.firstOrNull { it.gstin.isNotBlank() && scanned.contains(it.gstin) }
+            val normalizedScan = scanned.trim().uppercase()
+            val matchedCustomer = counterpartyLedgers.firstOrNull { it.gstin.isNotBlank() && normalizedScan.contains(it.gstin.trim().uppercase()) }
             if (matchedCustomer != null) counterpartyLedgerId = matchedCustomer.ledgerId
             if (refNumber.isBlank()) refNumber = scanned
             lastScanSummary = buildString {
@@ -280,9 +283,11 @@ fun MoneyVoucherEntryScreen(
         ActionButton(
             text = title,
             style = ActionButtonStyle.PRIMARY,
-            enabled = amountMoney.isPositive && debitLedgerId.isNotBlank() && creditLedgerId.isNotBlank(),
+            enabled = amountMoney.isPositive && debitLedgerId.isNotBlank() && creditLedgerId.isNotBlank() && !isSubmitting,
             modifier = Modifier.fillMaxWidth(),
-            onClick = {
+            onClick = onClick@{
+                if (isSubmitting) return@onClick
+                isSubmitting = true
                 onSubmit(voucherType, LocalDate.now(), debitLedgerId, creditLedgerId, amountMoney, narration, refNumber, applyRoundOff)
             }
         )

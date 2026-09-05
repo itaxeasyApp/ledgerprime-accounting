@@ -163,6 +163,13 @@ data class AccountingUiState(
     val individualProfile: IndividualProfile? = null,
     val isPinCodeLookupInProgress: Boolean = false,
     val pinCodeLookupResult: com.example.accounting.domain.profile.PinCodeLookupResult? = null,
+    /** Architecture correction (Voucher Correct workflow) - non-null for exactly the window between
+     * "Correct Voucher" cancelling the original and the New Voucher dialog it opens (prefilled from
+     * this) being dismissed (posted or abandoned) - the single signal [postQuickVoucher] reads to
+     * attach `referenceVoucherId` to the corrected repost, and [MainAppScreen] reads to know to open
+     * the dialog prefilled. Always cleared on that dialog's dismiss, success or not - never leaks
+     * into an unrelated later voucher. */
+    val pendingVoucherCorrection: com.example.accounting.domain.accounting.Voucher? = null,
     val currentSubscription: CompanySubscription? = null,
     val voucherDraftsPendingReview: List<VoucherDraft> = emptyList(),
     val outstandingReport: OutstandingReport? = null,
@@ -255,6 +262,12 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     // comment) - a real, public, unauthenticated third-party API, never mocked/faked.
     private val pinCodeLookupAdapter: com.example.accounting.domain.profile.PinCodeLookupAdapter =
         com.example.accounting.data.network.PostalPinCodeLookupAdapter()
+    // 13-point correctness pass, item 1 - a PIN code's City/State/Country never changes, so a
+    // successful lookup this session is reused for every later dialog (Profile/Party/Ledger/
+    // Company all share this one adapter+cache) instead of re-hitting the network. Only successful
+    // results are cached - a failed/offline lookup is never remembered as "no address found",
+    // since a later retry with connectivity back should get a real answer.
+    private val pinCodeLookupCache = mutableMapOf<String, com.example.accounting.domain.profile.PinCodeLookupResult>()
 
     private val _uiState = MutableStateFlow(AccountingUiState(isCloudSyncLoggedIn = authRepository.isLoggedIn()))
     val uiState: StateFlow<AccountingUiState> = _uiState.asStateFlow()
@@ -578,7 +591,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         stateCode: String,
         address: String,
         email: String,
-        phone: String
+        phone: String,
+        pinCode: String = ""
     ) {
         viewModelScope.launch {
             val newCompId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}"
@@ -586,8 +600,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 companyId = newCompId,
                 name = name,
                 tradeName = tradeName,
-                gstin = gstin,
-                pan = pan,
+                gstin = Constants.normalizeTaxId(gstin),
+                pan = Constants.normalizeTaxId(pan),
                 stateCode = stateCode,
                 // Audit fix - was always the hardcoded Company.stateName default ("Maharashtra")
                 // regardless of the state code entered; now honestly derived from the real GST
@@ -597,7 +611,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 email = email,
                 phone = phone,
                 currency = "INR",
-                isDefault = false
+                isDefault = false,
+                pinCode = pinCode
             )
             val result = repository.createCompany(newCompany)
             if (result is AccountingResult.Success) {
@@ -702,6 +717,89 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** 13-point correctness pass, item 8 (Editable Ledgers) - [CreateLedgerDialog] in edit mode
+     * calls this instead of [createLedger]. Opening Balance is only actually applied by
+     * [com.example.accounting.data.repository.AccountingRepository.updateLedger] when the ledger
+     * still has zero posted entries (silently preserved otherwise); Current Balance is never
+     * settable from here at all - the repository always preserves it regardless of what's passed. */
+    fun updateLedger(
+        ledgerId: String,
+        name: String,
+        groupId: String,
+        openingBalance: Money,
+        openingType: DrCr,
+        gstin: String = "",
+        pan: String = "",
+        phone: String = "",
+        email: String = "",
+        address: String = "",
+        hsnSac: String = "",
+        defaultTaxRate: Double = 0.0,
+        bankName: String = "",
+        bankAccountNumber: String = "",
+        bankIfsc: String = "",
+        bankBranch: String = "",
+        stateCode: String = "",
+        pinCode: String = ""
+    ) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val ledger = Ledger(
+                ledgerId = ledgerId,
+                companyId = comp.companyId,
+                groupId = groupId,
+                name = name,
+                openingBalance = openingBalance,
+                openingBalanceType = openingType,
+                gstin = gstin,
+                pan = pan,
+                stateCode = stateCode,
+                phone = phone,
+                email = email,
+                address = address,
+                pinCode = pinCode,
+                hsnSacCode = hsnSac,
+                defaultTaxRate = defaultTaxRate,
+                bankName = bankName,
+                bankAccountNumber = bankAccountNumber,
+                bankIfsc = bankIfsc,
+                bankBranch = bankBranch
+            )
+            val result = repository.updateLedger(ledger)
+            if (result is AccountingResult.Success) {
+                emitMessage("Ledger '${ledger.name}' updated")
+            } else {
+                emitMessage("Failed to update ledger: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
+    /** Architecture correction (real Group hierarchy) - the UI entry point for
+     * [com.example.accounting.data.repository.AccountingRepository.createGroup], which previously
+     * existed correctly but had no caller anywhere. [parentGroupId] must be an existing Group's ID
+     * (System or User) - the new Group always inherits that parent's [com.example.accounting.domain.accounting.PrimaryGroup],
+     * never a separately-chosen one, so the hierarchy can never end up internally inconsistent. */
+    fun createGroup(name: String, parentGroupId: String) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val parent = _uiState.value.groups.firstOrNull { it.groupId == parentGroupId }
+            if (parent == null) {
+                emitMessage("Select a parent group.")
+                return@launch
+            }
+            val group = com.example.accounting.domain.accounting.AccountGroup(
+                groupId = "", companyId = comp.companyId, name = name,
+                primaryGroup = parent.primaryGroup, parentGroupId = parent.groupId, isSystem = false
+            )
+            val result = repository.createGroup(group)
+            if (result is AccountingResult.Success) {
+                emitMessage("Group '$name' created under '${parent.name}'")
+            } else {
+                emitMessage("Failed to create group: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
     /** Creates a stock item with its HSN/SAC and GST rate on file - the prerequisite for
      * item-driven GST (Phase 5, Priority 3): the Sale/Purchase item picker reads these facts back
      * instead of the user typing/picking a rate freely. */
@@ -761,6 +859,40 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /**
+     * Architecture correction (Voucher Correct workflow) - "Correct Voucher" cancels the original
+     * via the exact same guarded, append-only [com.example.accounting.data.repository.AccountingRepository.deleteVoucherSafely]
+     * as "Delete & Reverse" (same period-lock/atomicity checks, no new bypass), then - only on
+     * success - signals the UI (via [AccountingUiState.pendingVoucherCorrection]) to reopen New
+     * Voucher prefilled from the original so the user can fix and repost. This is cancel-then-
+     * recreate, never an in-place mutation of posted history (Rule 12). Scoped to the flat 2-line
+     * voucher shapes [postQuickVoucher] builds directly (Receipt/Payment/Contra/Journal); Sale/
+     * Purchase/Notes keep their existing correction mechanism (Credit/Debit Note, or cancel+repost
+     * from scratch) unchanged.
+     */
+    fun correctVoucher(voucher: com.example.accounting.domain.accounting.Voucher) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val fy = _uiState.value.currentFinancialYear ?: return@launch
+            val idempotencyKey = UUID.randomUUID().toString()
+            val result = repository.deleteVoucherSafely(comp.companyId, fy.financialYearId, voucher.voucherId, idempotencyKey, "SENIOR_ACCOUNTANT")
+            if (result is AccountingResult.Success) {
+                scheduler.dispatchEvent(
+                    com.example.accounting.automation.jobs.AutomationEvent.VoucherDeleted(comp.companyId, voucher.voucherId, voucher.voucherId)
+                )
+                refreshFinancialReports()
+                _uiState.update { it.copy(pendingVoucherCorrection = voucher) }
+                emitMessage("Original voucher cancelled - review and repost the corrected version")
+            } else {
+                emitMessage("Could not start correction: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
+    fun consumeVoucherCorrection() {
+        _uiState.update { it.copy(pendingVoucherCorrection = null) }
+    }
+
     fun postQuickVoucher(
         voucherType: VoucherType,
         date: LocalDate,
@@ -817,6 +949,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 )
             )
 
+            // Architecture correction (Voucher Correct workflow) - if this post follows a
+            // "Correct Voucher" cancellation of a same-type original, link the two via the
+            // existing, generic `referenceVoucherId` field (previously only ever set by the
+            // Credit/Debit Note flow - nothing about it is Note-specific, confirmed no other
+            // posting logic branches on it). A mismatched type (user switched to a different
+            // voucher type before reposting) never attaches a misleading link.
+            val correction = _uiState.value.pendingVoucherCorrection?.takeIf { it.voucherType == voucherType }
+
             val voucher = Voucher(
                 voucherId = voucherId,
                 companyId = comp.companyId,
@@ -829,7 +969,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 totalAmount = amount,
                 items = items,
                 createdBy = "SENIOR_ACCOUNTANT",
-                paymentMode = paymentMode
+                paymentMode = paymentMode,
+                referenceVoucherId = correction?.voucherId
             )
 
             val result = repository.postVoucher(voucher)
@@ -1510,7 +1651,12 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         address: String = "",
         stateCode: String = "",
         gstRegistrationStatus: com.example.accounting.domain.accounting.GstRegistrationStatus? = null,
-        pinCode: String = ""
+        pinCode: String = "",
+        // Architecture correction - a Customer/Supplier previously had no way to record a
+        // pre-existing balance at all; defaults reproduce every existing caller's unchanged
+        // zero-opening-balance behavior.
+        openingBalance: Money = Money.ZERO,
+        openingBalanceType: DrCr = DrCr.DEBIT
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1521,7 +1667,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val ledgerTemplate = Ledger(
                 ledgerId = "", companyId = comp.companyId, groupId = "", name = displayName,
                 gstin = gstin, phone = phone, email = email, address = address, stateCode = stateCode,
-                gstRegistrationStatus = gstRegistrationStatus, pinCode = pinCode
+                gstRegistrationStatus = gstRegistrationStatus, pinCode = pinCode,
+                openingBalance = openingBalance, openingBalanceType = openingBalanceType,
+                currentBalance = openingBalance, currentBalanceType = openingBalanceType
             )
             val result = partyService.createParty(
                 Party(partyId = "", companyId = comp.companyId, ledgerId = "", role = role, entityType = entityType, displayName = displayName),
@@ -1938,9 +2086,15 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * failure/offline, [PinCodeLookupResult.success] is false and the fields stay exactly as the
      * user already had them - never a guessed value. */
     fun lookupPinCode(pinCode: String) {
+        val cached = pinCodeLookupCache[pinCode]
+        if (cached != null) {
+            _uiState.update { it.copy(pinCodeLookupResult = cached) }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isPinCodeLookupInProgress = true) }
             val result = pinCodeLookupAdapter.lookup(pinCode)
+            if (result.success) pinCodeLookupCache[pinCode] = result
             _uiState.update { it.copy(isPinCodeLookupInProgress = false, pinCodeLookupResult = result) }
         }
     }

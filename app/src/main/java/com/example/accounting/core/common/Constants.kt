@@ -29,6 +29,20 @@ object Constants {
         "37" to "Andhra Pradesh", "38" to "Ladakh"
     )
 
+    /** Reverse of [GST_STATE_CODES] (state name -> code), case-insensitive on lookup - used to
+     * auto-fill a GST state code from a PIN-code lookup's returned state name, never the other way
+     * around (the code table stays the single source of truth, this is just an index over it). */
+    private val GST_STATE_NAMES_TO_CODES: Map<String, String> =
+        GST_STATE_CODES.entries.associate { (code, name) -> name.lowercase() to code }
+
+    fun stateCodeForName(stateName: String): String? = GST_STATE_NAMES_TO_CODES[stateName.trim().lowercase()]
+
+    /** Canonical normalization for every PAN/GSTIN captured anywhere in the app (UI, repository
+     * persistence boundary, barcode/QR matching) - trims incidental whitespace and uppercases,
+     * since both identifiers are statutorily always-uppercase and comparisons/storage must be
+     * consistent regardless of how the value was typed, pasted, or scanned. */
+    fun normalizeTaxId(raw: String): String = raw.trim().uppercase()
+
     // Primary Accounting Categories (Nature of Accounts)
     const val GROUP_ASSETS = "ASSETS"
     const val GROUP_LIABILITIES = "LIABILITIES"

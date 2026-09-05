@@ -165,7 +165,22 @@ data class GSTSummaryReport(
     // CESS (Phase 5, Priority 4/5) - one ledger, not Output/Input split; net is simply the sum,
     // never coerced against outward/inward the way CGST/SGST/IGST payable is.
     val totalCess: Money = Money.ZERO,
-    val netCessPayable: Money = Money.ZERO
+    val netCessPayable: Money = Money.ZERO,
+    /** 13-point correctness pass, item 6 (GSTR-1 B2B/B2C/CDN bucketing) - a breakdown of the same
+     * [totalTaxableOutward]/[totalTaxOutward] figures above by GSTR-1 category, computed from the
+     * same underlying `gst_transactions` rows this whole report already reads
+     * ([com.example.accounting.data.repository.AccountingRepository.generateGSTSummary]); B2B is
+     * `SALES` with a non-blank `partyGstin`, B2C is `SALES` with a blank one, Credit/Debit Note are
+     * their own voucher types. All default `Money.ZERO` so no pre-existing call site or test that
+     * constructs a [GSTSummaryReport] without them is affected. */
+    val b2bTaxableOutward: Money = Money.ZERO,
+    val b2bTaxOutward: Money = Money.ZERO,
+    val b2cTaxableOutward: Money = Money.ZERO,
+    val b2cTaxOutward: Money = Money.ZERO,
+    val creditNoteTaxableOutward: Money = Money.ZERO,
+    val creditNoteTaxOutward: Money = Money.ZERO,
+    val debitNoteTaxableOutward: Money = Money.ZERO,
+    val debitNoteTaxOutward: Money = Money.ZERO
 )
 
 // ==================== PHASE 7C: REPORT MANAGEMENT ====================

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -28,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,37 +54,65 @@ import com.example.accounting.domain.accounting.StandardSystemGroups
 fun CreateLedgerDialog(
     groups: List<AccountGroup>,
     initialGroupId: String? = null,
+    /** 13-point correctness pass, item 8 (Editable Ledgers) - non-null switches this dialog into
+     * edit mode: every field pre-fills from the existing ledger and the submit action calls
+     * [onUpdateLedger] instead of [onCreateLedger]. `ledgerId`/current balance/system-ledger status
+     * are never editable here regardless - [onUpdateLedger]'s repository-side handler is the one
+     * enforcing that (opening balance is also frozen there once entries exist), this dialog just
+     * doesn't collect a `ledgerId` input at all. */
+    existingLedger: com.example.accounting.domain.accounting.Ledger? = null,
+    /** 13-point correctness pass, item 1 (PIN Code API Integration) - same shared lookup state as
+     * [CreatePartyDialog]; only ever pre-fills State Code/Address when still blank. */
+    isLookingUp: Boolean = false,
+    lookupResult: com.example.accounting.domain.profile.PinCodeLookupResult? = null,
+    onLookupPinCode: (String) -> Unit = {},
     onDismiss: () -> Unit,
-    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String, String, String) -> Unit
+    onCreateLedger: (String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String, String, String) -> Unit,
+    onUpdateLedger: (ledgerId: String, String, String, Money, DrCr, String, String, String, String, String, String, Double, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> }
 ) {
-    var ledgerName by remember { mutableStateOf("") }
-    var selectedGroupId by remember { mutableStateOf(initialGroupId ?: groups.firstOrNull()?.groupId ?: "") }
-    var openingBalanceInput by remember { mutableStateOf("0") }
-    var balanceType by remember { mutableStateOf(DrCr.DEBIT) }
-    var gstin by remember { mutableStateOf("") }
-    var pan by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var address by remember { mutableStateOf("") }
-    var hsnSac by remember { mutableStateOf("") }
+    var ledgerName by remember(existingLedger) { mutableStateOf(existingLedger?.name ?: "") }
+    var selectedGroupId by remember(existingLedger) { mutableStateOf(existingLedger?.groupId ?: initialGroupId ?: groups.firstOrNull()?.groupId ?: "") }
+    var openingBalanceInput by remember(existingLedger) { mutableStateOf(existingLedger?.openingBalance?.formatPlain() ?: "0") }
+    var balanceType by remember(existingLedger) { mutableStateOf(existingLedger?.openingBalanceType ?: DrCr.DEBIT) }
+    var gstin by remember(existingLedger) { mutableStateOf(existingLedger?.gstin ?: "") }
+    var pan by remember(existingLedger) { mutableStateOf(existingLedger?.pan ?: "") }
+    var phone by remember(existingLedger) { mutableStateOf(existingLedger?.phone ?: "") }
+    var email by remember(existingLedger) { mutableStateOf(existingLedger?.email ?: "") }
+    var address by remember(existingLedger) { mutableStateOf(existingLedger?.address ?: "") }
+    var hsnSac by remember(existingLedger) { mutableStateOf(existingLedger?.hsnSacCode ?: "") }
     // Ledger Setup fix - optional, never required; State Code is the Place-of-Supply fact this
     // ledger needs before it can be used as a Sale/Purchase counterparty (Rule 29). Never defaulted
     // here to the company's own state (see AccountingViewModel.createLedger's own doc comment).
-    var stateCode by remember { mutableStateOf("") }
-    var pinCode by remember { mutableStateOf("") }
+    var stateCode by remember(existingLedger) { mutableStateOf(existingLedger?.stateCode ?: "") }
+    var pinCode by remember(existingLedger) { mutableStateOf(existingLedger?.pinCode ?: "") }
     // Audit fix (Company/Profile/Ledger Setup) - the Ledger domain model already carried
     // bankAccountNumber/bankIfsc with no UI ever collecting them; bankName/bankBranch are new
     // sibling fields (MIGRATION_19_20). Only shown/collected for a ledger actually under the
     // Bank group, mirroring the same groupId-prefix check every other Cash/Bank filter uses.
-    var bankName by remember { mutableStateOf("") }
-    var bankAccountNumber by remember { mutableStateOf("") }
-    var bankIfsc by remember { mutableStateOf("") }
-    var bankBranch by remember { mutableStateOf("") }
+    var bankName by remember(existingLedger) { mutableStateOf(existingLedger?.bankName ?: "") }
+    var bankAccountNumber by remember(existingLedger) { mutableStateOf(existingLedger?.bankAccountNumber ?: "") }
+    var bankIfsc by remember(existingLedger) { mutableStateOf(existingLedger?.bankIfsc ?: "") }
+    var bankBranch by remember(existingLedger) { mutableStateOf(existingLedger?.bankBranch ?: "") }
+
+    LaunchedEffect(pinCode) {
+        if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
+    }
+    LaunchedEffect(lookupResult) {
+        val result = lookupResult
+        if (result != null && result.success && result.pinCode == pinCode) {
+            if (stateCode.isBlank()) Constants.stateCodeForName(result.state)?.let { stateCode = it }
+            if (address.isBlank() && result.city.isNotBlank()) address = result.city
+        }
+    }
 
     var groupDropdownExpanded by remember { mutableStateOf(false) }
     val groupsMap = remember(groups) { groups.associateBy { it.groupId } }
-    val isBankGroup = remember(selectedGroupId) {
-        selectedGroupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_")
+    // Architecture correction (real Group hierarchy) - a direct prefix check (fast path, every
+    // ledger filed straight under the System Bank Accounts group) OR an ancestor walk (a ledger
+    // filed under a company-created User Group nested under it), never only one.
+    val isBankGroup = remember(selectedGroupId, groupsMap) {
+        selectedGroupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") ||
+            StandardSystemGroups.isUnder(selectedGroupId, StandardSystemGroups.BANK_GROUP_ID, groupsMap)
     }
 
     Dialog(
@@ -108,11 +139,11 @@ fun CreateLedgerDialog(
                 ) {
                     Column {
                         Text(
-                            text = "New Ledger",
+                            text = if (existingLedger != null) "Edit Ledger" else "New Ledger",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Add a customer, supplier, or expense account",
+                            text = if (existingLedger != null) "Update this ledger's details" else "Add a customer, supplier, or expense account",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -204,14 +235,14 @@ fun CreateLedgerDialog(
                 ) {
                     OutlinedTextField(
                         value = gstin,
-                        onValueChange = { gstin = it.uppercase() },
+                        onValueChange = { gstin = Constants.normalizeTaxId(it) },
                         label = { Text("GSTIN (Optional)") },
                         placeholder = { Text("27AAAAA0000A1Z5") },
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = pan,
-                        onValueChange = { pan = it.uppercase() },
+                        onValueChange = { pan = Constants.normalizeTaxId(it) },
                         label = { Text("PAN (Optional)") },
                         placeholder = { Text("AAAAA0000A") },
                         modifier = Modifier.weight(1f)
@@ -262,12 +293,26 @@ fun CreateLedgerDialog(
                         supportingText = Constants.GST_STATE_CODES[stateCode]?.let { { Text(it) } },
                         modifier = Modifier.weight(1f)
                     )
-                    OutlinedTextField(
-                        value = pinCode,
-                        onValueChange = { pinCode = it },
-                        label = { Text("PIN Code (Optional)") },
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = pinCode,
+                            onValueChange = { pinCode = it.filter { c -> c.isDigit() }.take(6) },
+                            label = { Text("PIN Code (Optional)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = lookupResult?.takeIf { it.pinCode == pinCode }?.success == false,
+                            supportingText = {
+                                Text(
+                                    lookupResult?.takeIf { it.pinCode == pinCode && !it.success }?.errorMessage
+                                        ?: "Auto-fills State/Address"
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isLookingUp) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        }
+                    }
                 }
 
                 if (isBankGroup) {
@@ -326,31 +371,30 @@ fun CreateLedgerDialog(
                     Button(
                         onClick = {
                             val opBalance = Money.parse(openingBalanceInput)
-                            onCreateLedger(
-                                ledgerName,
-                                selectedGroupId,
-                                opBalance,
-                                balanceType,
-                                gstin,
-                                pan,
-                                phone,
-                                email,
-                                address,
-                                hsnSac,
-                                0.0,
-                                if (isBankGroup) bankName else "",
-                                if (isBankGroup) bankAccountNumber else "",
-                                if (isBankGroup) bankIfsc else "",
-                                if (isBankGroup) bankBranch else "",
-                                stateCode,
-                                pinCode
-                            )
+                            val bName = if (isBankGroup) bankName else ""
+                            val bAcctNo = if (isBankGroup) bankAccountNumber else ""
+                            val bIfsc = if (isBankGroup) bankIfsc else ""
+                            val bBranch = if (isBankGroup) bankBranch else ""
+                            val editing = existingLedger
+                            if (editing != null) {
+                                onUpdateLedger(
+                                    editing.ledgerId, ledgerName, selectedGroupId, opBalance, balanceType,
+                                    gstin, pan, phone, email, address, hsnSac, 0.0,
+                                    bName, bAcctNo, bIfsc, bBranch, stateCode, pinCode
+                                )
+                            } else {
+                                onCreateLedger(
+                                    ledgerName, selectedGroupId, opBalance, balanceType,
+                                    gstin, pan, phone, email, address, hsnSac, 0.0,
+                                    bName, bAcctNo, bIfsc, bBranch, stateCode, pinCode
+                                )
+                            }
                             onDismiss()
                         },
                         enabled = ledgerName.isNotBlank() && selectedGroupId.isNotBlank(),
                         modifier = Modifier.testTag("submit_ledger_button")
                     ) {
-                        Text("Save Ledger")
+                        Text(if (existingLedger != null) "Save Changes" else "Save Ledger")
                     }
                 }
             }

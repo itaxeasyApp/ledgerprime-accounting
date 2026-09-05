@@ -523,7 +523,8 @@ class AccountingRepository(
                 gstScheme = it.gstScheme,
                 gstFilingFrequency = it.gstFilingFrequency,
                 isDefault = it.isDefault,
-                createdAt = it.createdAt
+                createdAt = it.createdAt,
+                pinCode = it.pinCode
             )
         }
     }
@@ -533,8 +534,8 @@ class AccountingRepository(
             companyId = company.companyId,
             name = company.name,
             tradeName = company.tradeName,
-            gstin = company.gstin,
-            pan = company.pan,
+            gstin = Constants.normalizeTaxId(company.gstin),
+            pan = Constants.normalizeTaxId(company.pan),
             stateCode = company.stateCode,
             stateName = company.stateName,
             email = company.email,
@@ -549,7 +550,8 @@ class AccountingRepository(
             gstScheme = company.gstScheme,
             gstFilingFrequency = company.gstFilingFrequency,
             isDefault = company.isDefault,
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            pinCode = company.pinCode
         )
         dao.insertCompany(entity)
 
@@ -1300,18 +1302,29 @@ class AccountingRepository(
             }
         }
 
+        // 13-point correctness pass, item 8 (Editable Ledgers) - Opening Balance may only be
+        // changed while the ledger has zero posted journal entries; once any entry exists,
+        // changing it would silently corrupt every balance derived from it since. Rather than
+        // failing the whole edit (name/GSTIN/phone/bank details should stay editable regardless),
+        // the caller's opening-balance intent is simply not applied - `existing`'s value wins.
+        val hasEntries = dao.countJournalEntriesForLedger(ledger.companyId, ledger.ledgerId) > 0
+        val openingBalancePaise = if (hasEntries) existing.openingBalancePaise else ledger.openingBalance.paise
+        val openingBalanceType = if (hasEntries) existing.openingBalanceType else ledger.openingBalanceType
+
         val entity = LedgerEntity(
             ledgerId = ledger.ledgerId,
             companyId = ledger.companyId,
             groupId = ledger.groupId,
             name = ledger.name,
             code = ledger.code,
-            openingBalancePaise = ledger.openingBalance.paise,
-            openingBalanceType = ledger.openingBalanceType,
-            currentBalancePaise = ledger.currentBalance.paise,
-            currentBalanceType = ledger.currentBalanceType,
-            gstin = ledger.gstin,
-            pan = ledger.pan,
+            openingBalancePaise = openingBalancePaise,
+            openingBalanceType = openingBalanceType,
+            // Current balance is a derived, system-maintained running total (opening balance +
+            // every posted delta since) - never settable from an edit form, entry count or not.
+            currentBalancePaise = existing.currentBalancePaise,
+            currentBalanceType = existing.currentBalanceType,
+            gstin = Constants.normalizeTaxId(ledger.gstin),
+            pan = Constants.normalizeTaxId(ledger.pan),
             stateCode = ledger.stateCode,
             gstRegistrationStatus = ledger.gstRegistrationStatus?.name,
             email = ledger.email,
@@ -1328,7 +1341,18 @@ class AccountingRepository(
             defaultTaxRate = ledger.defaultTaxRate
         )
         dao.updateLedger(entity)
-        return AccountingResult.Success(ledger)
+        // Return what was actually persisted, not the caller's raw request - opening balance,
+        // current balance, and GSTIN/PAN may all have been overridden above.
+        return AccountingResult.Success(
+            ledger.copy(
+                openingBalance = Money.fromPaise(entity.openingBalancePaise),
+                openingBalanceType = entity.openingBalanceType,
+                currentBalance = Money.fromPaise(entity.currentBalancePaise),
+                currentBalanceType = entity.currentBalanceType,
+                gstin = entity.gstin,
+                pan = entity.pan
+            )
+        )
     }
 
     /** Shared builder for the CREATE_LEDGER/DELETE_LEDGER [SyncEvent]s (Phase 6, Priority 6.4). */
@@ -1359,8 +1383,8 @@ class AccountingRepository(
             openingBalanceType = ledger.openingBalanceType,
             currentBalancePaise = ledger.openingBalance.paise,
             currentBalanceType = ledger.openingBalanceType,
-            gstin = ledger.gstin,
-            pan = ledger.pan,
+            gstin = Constants.normalizeTaxId(ledger.gstin),
+            pan = Constants.normalizeTaxId(ledger.pan),
             stateCode = ledger.stateCode,
             gstRegistrationStatus = ledger.gstRegistrationStatus?.name,
             email = ledger.email,
@@ -2397,6 +2421,25 @@ class AccountingRepository(
 
         val itemsByLedger = allJournalItems.groupBy { it.ledgerId }
 
+        // Architecture correction (Opening Balance/FY fix) - `led.openingBalancePaise` alone is
+        // only correct for a ledger's very first FY; for any later FY it must be carried forward
+        // by adding every journal delta posted in a PRIOR FY (by real voucher date, not FY id, so
+        // this stays correct even for a company that skipped/backfilled a FY). Only Balance-Sheet-
+        // nature ledgers (Assets/Liabilities/Equity) carry forward - Income/Expense ledgers are
+        // correctly period-only and must never accumulate across FYs (P&L is never a running
+        // balance). Computed on demand, not stored - self-healing if a backdated entry is added
+        // later, no manual "carry forward" step to run or forget.
+        val priorFyNetDeltaByLedger: Map<String, Long> = dao.getAllJournalItemsForCompany(companyId).first()
+            .asSequence()
+            .filter { item ->
+                val voucherDate = vouchersById[item.voucherId]?.date?.let { safeParseDate(it) } ?: return@filter false
+                voucherDate.isBefore(fyStart)
+            }
+            .groupBy { it.ledgerId }
+            .mapValues { (_, items) ->
+                items.sumOf { if (it.type == DrCr.DEBIT) it.amountPaise else -it.amountPaise }
+            }
+
         var totalOpDr = 0L
         var totalOpCr = 0L
         var totalTxDr = 0L
@@ -2408,8 +2451,15 @@ class AccountingRepository(
             val group = groupsById[led.groupId]
             val primaryGroup = group?.primaryGroup ?: PrimaryGroup.ASSETS
 
-            val opDr = if (led.openingBalanceType == DrCr.DEBIT) led.openingBalancePaise else 0L
-            val opCr = if (led.openingBalanceType == DrCr.CREDIT) led.openingBalancePaise else 0L
+            val storedOpeningSigned = if (led.openingBalanceType == DrCr.DEBIT) led.openingBalancePaise else -led.openingBalancePaise
+            val isBalanceSheetNature = primaryGroup == PrimaryGroup.ASSETS || primaryGroup == PrimaryGroup.LIABILITIES || primaryGroup == PrimaryGroup.EQUITY
+            val carriedForwardSigned = if (isBalanceSheetNature) {
+                storedOpeningSigned + (priorFyNetDeltaByLedger[led.ledgerId] ?: 0L)
+            } else {
+                storedOpeningSigned
+            }
+            val opDr = if (carriedForwardSigned >= 0) carriedForwardSigned else 0L
+            val opCr = if (carriedForwardSigned < 0) -carriedForwardSigned else 0L
 
             val ledgerItems = itemsByLedger[led.ledgerId] ?: emptyList()
             val txDr = ledgerItems.filter { it.type == DrCr.DEBIT }.sumOf { it.amountPaise }
@@ -2828,6 +2878,16 @@ class AccountingRepository(
         val totalCess = cessOutward + cessInward
         val netCessPayable = (cessOutward - cessInward).coerceAtLeast(0L)
 
+        // 13-point correctness pass, item 6 (GSTR-1 B2B/B2C/CDN bucketing) - a category breakdown
+        // of the same `outward` rows already summed above (Credit/Debit Note adjustments post at
+        // OUTPUT direction, same as the original supply, so they're already part of `outward` and
+        // only need their own voucherType filtered out here, not a second query).
+        val b2bOutward = outward.filter { it.voucherType == VoucherType.SALES && it.partyGstin.isNotBlank() }
+        val b2cOutward = outward.filter { it.voucherType == VoucherType.SALES && it.partyGstin.isBlank() }
+        val creditNoteOutward = outward.filter { it.voucherType == VoucherType.CREDIT_NOTE }
+        val debitNoteOutward = outward.filter { it.voucherType == VoucherType.DEBIT_NOTE }
+        fun taxOf(rows: List<GstTransactionEntity>) = sum(rows) { it.cgstPaise + it.sgstPaise + it.igstPaise }
+
         return GSTSummaryReport(
             companyName = company?.name ?: "",
             gstin = company?.gstin ?: "",
@@ -2844,7 +2904,15 @@ class AccountingRepository(
             totalTaxInwardITC = Money.fromPaise(totalTaxInward),
             netTaxPayable = Money.fromPaise(netPayable),
             totalCess = Money.fromPaise(totalCess),
-            netCessPayable = Money.fromPaise(netCessPayable)
+            netCessPayable = Money.fromPaise(netCessPayable),
+            b2bTaxableOutward = Money.fromPaise(sum(b2bOutward) { it.taxableAmountPaise }),
+            b2bTaxOutward = Money.fromPaise(taxOf(b2bOutward)),
+            b2cTaxableOutward = Money.fromPaise(sum(b2cOutward) { it.taxableAmountPaise }),
+            b2cTaxOutward = Money.fromPaise(taxOf(b2cOutward)),
+            creditNoteTaxableOutward = Money.fromPaise(sum(creditNoteOutward) { it.taxableAmountPaise }),
+            creditNoteTaxOutward = Money.fromPaise(taxOf(creditNoteOutward)),
+            debitNoteTaxableOutward = Money.fromPaise(sum(debitNoteOutward) { it.taxableAmountPaise }),
+            debitNoteTaxOutward = Money.fromPaise(taxOf(debitNoteOutward))
         )
     }
 
@@ -3412,6 +3480,26 @@ class AccountingRepository(
             )
             if (validationError != null) {
                 return AccountingResult.Failure(AppError.ValidationError(validationError))
+            }
+        }
+
+        // 13-point correctness pass, item 5 (Rapid B2C Customer Flow) - a quick-created walk-in
+        // customer with the same name and phone as one already on file is treated as a re-select,
+        // not a new record, so the same "Cash Customer"-style entry isn't duplicated every time a
+        // Sale quick-creates one. Only applies to a genuinely new ledger (never when the caller
+        // already picked an existing `party.ledgerId`) and only matches when BOTH name and a
+        // non-blank phone agree - a blank phone never matches anything (two different walk-ins
+        // sharing a common name with no phone on file must never be silently merged).
+        if (ledgerTemplate != null && party.ledgerId.isBlank()) {
+            val incomingPhone = ledgerTemplate.phone.trim()
+            if (incomingPhone.isNotBlank()) {
+                val existingMatch = dao.getPartiesByRole(party.companyId, party.role).first().firstOrNull { existing ->
+                    existing.displayName.trim().equals(party.displayName.trim(), ignoreCase = true) &&
+                        dao.getLedgerById(party.companyId, existing.ledgerId)?.phone?.trim() == incomingPhone
+                }
+                if (existingMatch != null) {
+                    return AccountingResult.Success(existingMatch.toDomainParty())
+                }
             }
         }
 

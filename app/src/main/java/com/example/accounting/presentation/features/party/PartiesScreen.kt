@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,9 +13,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,9 +33,12 @@ import com.example.accounting.presentation.components.SectionCard
 
 /**
  * Phase 7J UI: Customer or Supplier list, reached from the Sales/Purchases tabs (never its own
- * bottom-nav item, per the UX spec's 5-item nav). Read-only view + create - editing a Party is
- * confirmed out of scope for this phase (no `updateParty` exists anywhere in the frozen 7J-B
- * service layer either).
+ * bottom-nav item, per the UX spec's 5-item nav). Read-only view + create for Party-specific
+ * fields (credit limit/payment terms/contact name - no `updateParty` exists anywhere in the frozen
+ * 7J-B service layer, and that stays true here). Architecture correction: GSTIN/phone/address/
+ * opening-balance all live on the underlying Ledger, not the Party record, so [onEditLedger]
+ * (when provided) opens the existing generic ledger-edit flow for that party's ledger - a
+ * different, already-correct path that was simply never reachable from this screen before.
  */
 @Composable
 fun PartiesScreen(
@@ -41,6 +47,7 @@ fun PartiesScreen(
     ledgers: List<Ledger>,
     onAddParty: () -> Unit,
     onPartyClick: (Party) -> Unit,
+    onEditLedger: ((Ledger) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val roleLabel = if (role == PartyRole.CUSTOMER) "Customers" else "Suppliers"
@@ -74,10 +81,17 @@ fun PartiesScreen(
                     SectionCard(
                         onClick = { onPartyClick(party) },
                         trailing = {
-                            Text(
-                                text = ledger?.currentBalance?.formatPlain() ?: "--",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = ledger?.currentBalance?.formatPlain() ?: "--",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                )
+                                if (onEditLedger != null && ledger != null) {
+                                    IconButton(onClick = { onEditLedger(ledger) }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit $roleLabel", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
                         }
                     ) {
                         Text(party.displayName, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold))

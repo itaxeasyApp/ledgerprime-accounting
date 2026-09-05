@@ -247,6 +247,15 @@ interface AccountingDao {
     @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND financialYearId = :fyId ORDER BY lineOrder ASC")
     fun getAllJournalItems(companyId: String, fyId: String): Flow<List<JournalItemEntity>>
 
+    /** Architecture correction (Opening Balance/FY fix) - every journal item ever posted for this
+     * company, across ALL financial years, unlike [getAllJournalItems] which is scoped to one FY.
+     * Used exclusively by [com.example.accounting.data.repository.AccountingRepository.generateTrialBalance]
+     * to correctly carry a Balance-Sheet-nature ledger's balance forward into any FY after its
+     * first one - the single stored [com.example.accounting.data.local.entity.LedgerEntity.openingBalancePaise]
+     * alone is only ever correct for that ledger's very first FY. */
+    @Query("SELECT * FROM journal_items WHERE companyId = :companyId ORDER BY lineOrder ASC")
+    fun getAllJournalItemsForCompany(companyId: String): Flow<List<JournalItemEntity>>
+
     @Query("SELECT * FROM journal_items WHERE voucherId = :voucherId ORDER BY lineOrder ASC")
     suspend fun getJournalItemsForVoucherSync(voucherId: String): List<JournalItemEntity>
 

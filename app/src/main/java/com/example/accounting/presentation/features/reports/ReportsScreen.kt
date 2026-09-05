@@ -454,6 +454,30 @@ fun GSTCenterView(report: GSTSummaryReport?) {
                     ReportLineItem(label = "CESS", amount = report.totalCess)
                 }
 
+                // 13-point correctness pass, item 6 - GSTR-1 category breakdown of the same
+                // taxable turnover/tax liability totals above; only shown when at least one bucket
+                // is non-zero, so a company with no GST-relevant Sales/Notes this period sees no
+                // empty "0.00" rows.
+                val hasBreakdown = report.b2bTaxableOutward.isPositive || report.b2cTaxableOutward.isPositive ||
+                    report.creditNoteTaxableOutward.isPositive || report.debitNoteTaxableOutward.isPositive
+                if (hasBreakdown) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("By Category", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (report.b2bTaxableOutward.isPositive) {
+                        ReportLineItem(label = "B2B Taxable Value (Tax ${report.b2bTaxOutward.formatPlain()})", amount = report.b2bTaxableOutward)
+                    }
+                    if (report.b2cTaxableOutward.isPositive) {
+                        ReportLineItem(label = "B2C Taxable Value (Tax ${report.b2cTaxOutward.formatPlain()})", amount = report.b2cTaxableOutward)
+                    }
+                    if (report.creditNoteTaxableOutward.isPositive) {
+                        ReportLineItem(label = "Credit Notes (Tax ${report.creditNoteTaxOutward.formatPlain()})", amount = report.creditNoteTaxableOutward)
+                    }
+                    if (report.debitNoteTaxableOutward.isPositive) {
+                        ReportLineItem(label = "Debit Notes (Tax ${report.debitNoteTaxOutward.formatPlain()})", amount = report.debitNoteTaxableOutward)
+                    }
+                }
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

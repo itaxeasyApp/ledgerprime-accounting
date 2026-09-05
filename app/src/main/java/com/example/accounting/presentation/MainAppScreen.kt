@@ -57,6 +57,7 @@ import com.example.accounting.presentation.components.AppDivider
 import com.example.accounting.presentation.components.AppTopBar
 import com.example.accounting.presentation.components.CreateBankUpiProfileDialog
 import com.example.accounting.presentation.components.CreateCompanyDialog
+import com.example.accounting.presentation.components.CreateGroupDialog
 import com.example.accounting.presentation.components.CreateLedgerDialog
 import com.example.accounting.presentation.components.CreatePartyDialog
 import com.example.accounting.presentation.components.CreateStockItemDialog
@@ -146,8 +147,24 @@ fun MainAppScreen(
     var createVoucherType by remember { mutableStateOf(VoucherType.PAYMENT) }
     var isCreateVoucherTypeLocked by remember { mutableStateOf(false) }
 
+    // Architecture correction (Voucher Correct workflow) - once "Correct Voucher" successfully
+    // cancels the original, AccountingUiState.pendingVoucherCorrection carries it; this reopens
+    // New Voucher locked to the same type and prefilled from it.
+    LaunchedEffect(uiState.pendingVoucherCorrection) {
+        uiState.pendingVoucherCorrection?.let { original ->
+            createVoucherType = original.voucherType
+            isCreateVoucherTypeLocked = true
+            isCreateVoucherOpen = true
+        }
+    }
+
     var isCreateLedgerOpen by remember { mutableStateOf(false) }
     var quickAddLedgerGroupId by remember { mutableStateOf<String?>(null) }
+    // 13-point correctness pass, item 8 (Editable Ledgers) - non-null switches CreateLedgerDialog
+    // into edit mode for this ledger; cleared on dismiss so the next "+ New Ledger" open is fresh.
+    var editingLedger by remember { mutableStateOf<com.example.accounting.domain.accounting.Ledger?>(null) }
+    // Architecture correction (real Group hierarchy) - opens CreateGroupDialog.
+    var isCreateGroupOpen by remember { mutableStateOf(false) }
     var isCreateStockItemOpen by remember { mutableStateOf(false) }
     var isCreateCompanyOpen by remember { mutableStateOf(false) }
     var selectedVoucherDetail by remember { mutableStateOf<Voucher?>(null) }
@@ -373,6 +390,8 @@ fun MainAppScreen(
                             onOpenCreateLedger = { isCreateLedgerOpen = true },
                             onOpenCreateStockItem = { isCreateStockItemOpen = true },
                             onDeleteLedger = { ledger -> viewModel.deleteLedgerSafely(ledger.ledgerId) },
+                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true },
+                            onOpenCreateGroup = { isCreateGroupOpen = true },
                             showItemsTab = isInventoryEnabled(uiState),
                             onGenerateBarcode = { itemId -> viewModel.generateBarcodeForItem(itemId) },
                             onScanBarcode = {
@@ -491,7 +510,8 @@ fun MainAppScreen(
                                 )
                             },
                             scannedBarcodeValue = if (barcodeScanTarget == BarcodeScanTarget.ReceivePayment) uiState.lastBarcodeScan?.rawValue else null,
-                            onScannedValueConsumed = { viewModel.clearBarcodeState() }
+                            onScannedValueConsumed = { viewModel.clearBarcodeState() },
+                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true }
                         )
 
                         is AppRoute.Parties -> PartiesScreen(
@@ -499,7 +519,8 @@ fun MainAppScreen(
                             parties = uiState.parties,
                             ledgers = uiState.ledgers,
                             onAddParty = { createPartyRole = if (route.role == "SUPPLIER") PartyRole.SUPPLIER else PartyRole.CUSTOMER },
-                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) }
+                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) },
+                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true }
                         )
 
                         is AppRoute.Profile -> ProfileScreen(
@@ -588,6 +609,7 @@ fun MainAppScreen(
     if (isCreateVoucherOpen) {
         CreateVoucherDialog(
             ledgers = uiState.ledgers,
+            groups = uiState.groups,
             stockItems = uiState.stockItems,
             vouchers = uiState.vouchers,
             outstandingInvoices = uiState.outstandingInvoices,
@@ -597,7 +619,12 @@ fun MainAppScreen(
             isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
             defaultVoucherType = createVoucherType,
             lockedType = isCreateVoucherTypeLocked,
-            onDismiss = { isCreateVoucherOpen = false; viewModel.clearOutstandingInvoices() },
+            prefillFrom = uiState.pendingVoucherCorrection,
+            onDismiss = {
+                isCreateVoucherOpen = false
+                viewModel.clearOutstandingInvoices()
+                viewModel.consumeVoucherCorrection()
+            },
             onAddNewParty = { role -> createPartyRole = role },
             onAddNewBankLedger = {
                 quickAddLedgerGroupId = uiState.groups.firstOrNull {
@@ -655,10 +682,25 @@ fun MainAppScreen(
         CreateLedgerDialog(
             groups = uiState.groups,
             initialGroupId = quickAddLedgerGroupId,
-            onDismiss = { isCreateLedgerOpen = false; quickAddLedgerGroupId = null },
+            existingLedger = editingLedger,
+            isLookingUp = uiState.isPinCodeLookupInProgress,
+            lookupResult = uiState.pinCodeLookupResult,
+            onLookupPinCode = { viewModel.lookupPinCode(it) },
+            onDismiss = { isCreateLedgerOpen = false; quickAddLedgerGroupId = null; editingLedger = null },
             onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode ->
                 viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode)
+            },
+            onUpdateLedger = { ledgerId, name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode ->
+                viewModel.updateLedger(ledgerId, name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode)
             }
+        )
+    }
+
+    if (isCreateGroupOpen) {
+        CreateGroupDialog(
+            parentCandidates = uiState.groups,
+            onDismiss = { isCreateGroupOpen = false },
+            onCreateGroup = { name, parentGroupId -> viewModel.createGroup(name, parentGroupId) }
         )
     }
 
@@ -674,8 +716,11 @@ fun MainAppScreen(
     if (isCreateCompanyOpen) {
         CreateCompanyDialog(
             onDismiss = { isCreateCompanyOpen = false },
-            onCreateCompany = { name, trade, gstin, pan, state, addr, email, phone ->
-                viewModel.createCompany(name, trade, gstin, pan, state, addr, email, phone)
+            isLookingUp = uiState.isPinCodeLookupInProgress,
+            lookupResult = uiState.pinCodeLookupResult,
+            onLookupPinCode = { viewModel.lookupPinCode(it) },
+            onCreateCompany = { name, trade, gstin, pan, state, addr, email, phone, pinCode ->
+                viewModel.createCompany(name, trade, gstin, pan, state, addr, email, phone, pinCode)
             }
         )
     }
@@ -684,8 +729,11 @@ fun MainAppScreen(
         CreatePartyDialog(
             role = role,
             onDismiss = { createPartyRole = null },
-            onCreateParty = { displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode ->
-                viewModel.createParty(displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode)
+            isLookingUp = uiState.isPinCodeLookupInProgress,
+            lookupResult = uiState.pinCodeLookupResult,
+            onLookupPinCode = { viewModel.lookupPinCode(it) },
+            onCreateParty = { displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode, openingBalance, openingBalanceType ->
+                viewModel.createParty(displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode, openingBalance, openingBalanceType)
             }
         )
     }
@@ -744,6 +792,8 @@ fun MainAppScreen(
             voucher = voucher,
             onDismiss = { selectedVoucherDetail = null; viewModel.clearVoucherAttachments() },
             onDeleteVoucher = { v -> viewModel.deleteVoucherSafely(v.voucherId) },
+            onCorrectVoucher = { v -> viewModel.correctVoucher(v) },
+            allVouchers = uiState.vouchers,
             attachments = attachmentsForThisVoucher,
             isAttachmentsLoading = uiState.isVoucherAttachmentsLoading,
             isAttaching = uiState.isAttachingDocument,

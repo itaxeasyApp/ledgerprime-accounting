@@ -7,13 +7,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -37,7 +42,13 @@ import androidx.compose.ui.window.DialogProperties
 @Composable
 fun CreateCompanyDialog(
     onDismiss: () -> Unit,
-    onCreateCompany: (String, String, String, String, String, String, String, String) -> Unit
+    /** 13-point correctness pass, item 1 (PIN Code API Integration) - same shared lookup state as
+     * [CreatePartyDialog]/[CreateLedgerDialog]; only ever pre-fills State Code/Address when still
+     * blank. */
+    isLookingUp: Boolean = false,
+    lookupResult: com.example.accounting.domain.profile.PinCodeLookupResult? = null,
+    onLookupPinCode: (String) -> Unit = {},
+    onCreateCompany: (String, String, String, String, String, String, String, String, String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var tradeName by remember { mutableStateOf("") }
@@ -47,6 +58,18 @@ fun CreateCompanyDialog(
     var address by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
+    var pinCode by remember { mutableStateOf("") }
+
+    LaunchedEffect(pinCode) {
+        if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
+    }
+    LaunchedEffect(lookupResult) {
+        val result = lookupResult
+        if (result != null && result.success && result.pinCode == pinCode) {
+            com.example.accounting.core.common.Constants.stateCodeForName(result.state)?.let { stateCode = it }
+            if (address.isBlank() && result.city.isNotBlank()) address = result.city
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -117,9 +140,9 @@ fun CreateCompanyDialog(
                     OutlinedTextField(
                         value = gstin,
                         onValueChange = {
-                            gstin = it.uppercase()
-                            if (it.length >= 2) {
-                                stateCode = it.take(2)
+                            gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it)
+                            if (gstin.length >= 2) {
+                                stateCode = gstin.take(2)
                             }
                         },
                         label = { Text("GSTIN") },
@@ -128,7 +151,7 @@ fun CreateCompanyDialog(
                     )
                     OutlinedTextField(
                         value = pan,
-                        onValueChange = { pan = it.uppercase() },
+                        onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) },
                         label = { Text("PAN") },
                         placeholder = { Text("ABCDE1234F") },
                         modifier = Modifier.weight(1f)
@@ -174,6 +197,29 @@ fun CreateCompanyDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = pinCode,
+                        onValueChange = { pinCode = it.filter { c -> c.isDigit() }.take(6) },
+                        label = { Text("PIN Code (Optional)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = lookupResult?.takeIf { it.pinCode == pinCode }?.success == false,
+                        supportingText = {
+                            Text(
+                                lookupResult?.takeIf { it.pinCode == pinCode && !it.success }?.errorMessage
+                                    ?: "Auto-fills State Code/Address"
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isLookingUp) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(18.dp))
 
                 Row(
@@ -186,7 +232,7 @@ fun CreateCompanyDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone)
+                            onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
                             onDismiss()
                         },
                         enabled = name.isNotBlank(),

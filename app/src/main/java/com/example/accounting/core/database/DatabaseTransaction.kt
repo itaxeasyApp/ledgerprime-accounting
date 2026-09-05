@@ -11,6 +11,7 @@ import com.example.accounting.data.local.entity.LedgerEntity
 import com.example.accounting.data.local.entity.OutboxSyncEntity
 import com.example.accounting.data.local.entity.VoucherEntity
 import com.example.accounting.data.local.entity.VoucherStockLineEntity
+import com.example.accounting.domain.accounting.StandardSystemGroups
 import com.example.accounting.domain.accounting.SyncState
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.audit.AuditAction
@@ -24,6 +25,7 @@ import com.example.accounting.domain.sync.SyncOperation
 import com.example.accounting.domain.sync.SyncStockLineDto
 import com.example.accounting.domain.sync.SyncVoucherDto
 import com.example.accounting.domain.sync.toPostOperation
+import kotlinx.coroutines.flow.first
 import java.util.UUID
 
 /**
@@ -96,14 +98,25 @@ internal object VoucherPostingEngine {
         // picker to Cash/Bank, but that alone doesn't stop a Contra voucher from reaching a
         // non-Cash/Bank ledger through any other caller (tests, a future API, direct repository
         // use). VoucherPostingEngine.post() is the single authoritative posting path, so the
-        // rejection belongs here, not only in the dialog. Exact groupId-prefix check, matching the
-        // UI's own filter (CreateVoucherDialog.kt) and this project's "classify by ID, never by
-        // name" rule - never a full ancestor walk, since Bank/Cash ledgers are always created with
-        // that groupId directly, not several levels of nesting down.
+        // rejection belongs here, not only in the dialog. Architecture correction (real Group
+        // hierarchy) - a proper ancestor walk via StandardSystemGroups.isUnder, not a flat
+        // groupId-prefix check, so a company-created User Group nested under System Bank
+        // Accounts/Cash-in-Hand (now reachable via the Group creation UI) is correctly recognized
+        // too, matching the UI's own filter (CreateVoucherDialog.kt).
         if (voucher.voucherType == VoucherType.CONTRA) {
+            val groupsById = dao.getGroupsByCompany(voucher.companyId).first().associate {
+                it.groupId to com.example.accounting.domain.accounting.AccountGroup(it.groupId, it.companyId, it.name, it.primaryGroup, it.parentGroupId, it.isSystem, it.affectsGrossProfit, it.displayOrder)
+            }
             for (item in items) {
                 val ledger = dao.getLedgerById(voucher.companyId, item.ledgerId)
-                val isCashOrBank = ledger != null && (ledger.groupId.startsWith("GRP_BANK_") || ledger.groupId.startsWith("GRP_CASH_"))
+                // Direct-prefix check kept as a guaranteed fast path (matches every ledger filed
+                // straight under the System group, the common case) alongside the ancestor walk
+                // (covers a ledger filed under a User Group nested further down) - never only one.
+                val isCashOrBank = ledger != null && (
+                    ledger.groupId.startsWith("GRP_BANK_") || ledger.groupId.startsWith("GRP_CASH_") ||
+                        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+                        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+                    )
                 if (!isCashOrBank) {
                     throw AccountingTransactionException(
                         AppError.InvalidContraLedger(ledger?.name ?: item.ledgerId)

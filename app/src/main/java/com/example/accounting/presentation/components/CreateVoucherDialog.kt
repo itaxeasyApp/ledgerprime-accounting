@@ -72,6 +72,12 @@ private fun voucherNatureLabel(type: VoucherType, isServiceCompany: Boolean): St
 @Composable
 fun CreateVoucherDialog(
     ledgers: List<Ledger>,
+    /** Architecture correction (real Group hierarchy) - lets ledger classification below correctly
+     * recognize a ledger filed under a company-created User Group nested under a System group
+     * (e.g. Bank Accounts), not just one filed directly under the System group itself. Defaulted
+     * to empty so every existing caller/preview keeps compiling - the classification functions
+     * below all fall back to their original direct-groupId-prefix check regardless. */
+    groups: List<com.example.accounting.domain.accounting.AccountGroup> = emptyList(),
     stockItems: List<StockItem> = emptyList(),
     vouchers: List<Voucher> = emptyList(),
     outstandingInvoices: List<OutstandingInvoice> = emptyList(),
@@ -99,6 +105,12 @@ fun CreateVoucherDialog(
      * into a different voucher type by accident. Left false for genuinely generic entry points
      * (e.g. Day Book's FAB) where picking a type is the point. */
     lockedType: Boolean = false,
+    /** Architecture correction (Voucher Correct workflow) - non-null only for a Contra/Journal
+     * "Correct Voucher" repost (see [com.example.accounting.presentation.components.VOUCHER_CORRECTION_ELIGIBLE_TYPES]);
+     * seeds the debit/credit ledgers, amount, reference number, and narration from the
+     * already-cancelled original so the user only has to fix what was wrong, not retype everything.
+     * `null` (every other caller) leaves the form's normal empty-state defaults untouched. */
+    prefillFrom: Voucher? = null,
     onDismiss: () -> Unit,
     onAddNewParty: (PartyRole) -> Unit = {},
     onAddNewBankLedger: () -> Unit = {},
@@ -146,6 +158,10 @@ fun CreateVoucherDialog(
     onScannedValueConsumed: () -> Unit = {}
 ) {
     var selectedType by remember { mutableStateOf(defaultVoucherType) }
+    // Post-safety fix - guards against a double-tap firing two separate post calls before
+    // recomposition disables the button; onPostXXX callbacks are fire-and-forget (no in-flight
+    // signal comes back to this Composable), so this is a purely local, one-shot latch.
+    var isSubmitting by remember { mutableStateOf(false) }
     val isSaleFlow = selectedType == VoucherType.SALES
     val isPurchaseFlow = selectedType == VoucherType.PURCHASE
     val isTradingFlow = isSaleFlow || isPurchaseFlow
@@ -157,31 +173,47 @@ fun CreateVoucherDialog(
     val isSettlementFlow = isReceiptFlow || isPaymentFlow
     val isContra = selectedType == VoucherType.CONTRA
 
-    // Contra is restricted to Cash/Bank ledgers only (Phase 4.5/5) - exact groupId-prefix check
-    // against the stable system group IDs, never a name/contains() guess. The domain layer
+    // Contra is restricted to Cash/Bank ledgers only (Phase 4.5/5) - the domain layer
     // (VoucherPostingEngine) enforces this independently of this UI filter (Phase 5, Priority 6).
+    // Architecture correction - a direct groupId-prefix check (the original, still-correct fast
+    // path for every ledger filed straight under the System group) OR a StandardSystemGroups.isUnder
+    // ancestor walk (covers a ledger filed under a nested User Group), never only one.
+    val groupsById = remember(groups) { groups.associateBy { it.groupId } }
     fun isCashOrBankLedger(ledger: Ledger) =
-        ledger.groupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") || ledger.groupId.startsWith("${StandardSystemGroups.CASH_GROUP_ID}_")
-    val cashBankLedgers = remember(ledgers) { ledgers.filter(::isCashOrBankLedger) }
-    fun isDebtorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.DEBTORS_GROUP_ID}_")
-    fun isCreditorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.CREDITORS_GROUP_ID}_")
-    fun isSalesLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.SALES_GROUP_ID}_")
-    fun isPurchaseLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.PURCHASE_GROUP_ID}_")
+        ledger.groupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") || ledger.groupId.startsWith("${StandardSystemGroups.CASH_GROUP_ID}_") ||
+            StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+            StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+    val cashBankLedgers = remember(ledgers, groupsById) { ledgers.filter(::isCashOrBankLedger) }
+    fun isDebtorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.DEBTORS_GROUP_ID}_") ||
+        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.DEBTORS_GROUP_ID, groupsById)
+    fun isCreditorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.CREDITORS_GROUP_ID}_") ||
+        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.CREDITORS_GROUP_ID, groupsById)
+    fun isSalesLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.SALES_GROUP_ID}_") ||
+        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.SALES_GROUP_ID, groupsById)
+    fun isPurchaseLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.PURCHASE_GROUP_ID}_") ||
+        StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.PURCHASE_GROUP_ID, groupsById)
 
     // ==== Generic (Contra/Journal) form state ====
-    var debitLedgerId by remember {
+    // Architecture correction (Voucher Correct workflow) - a non-null prefillFrom (always Contra/
+    // Journal, always exactly 2 journal items per postQuickVoucher's own construction) seeds every
+    // field below directly from the cancelled original, keyed so a fresh prefillFrom re-seeds.
+    val prefillDebitItem = remember(prefillFrom) { prefillFrom?.items?.firstOrNull { it.type == com.example.accounting.core.common.DrCr.DEBIT } }
+    val prefillCreditItem = remember(prefillFrom) { prefillFrom?.items?.firstOrNull { it.type == com.example.accounting.core.common.DrCr.CREDIT } }
+    var debitLedgerId by remember(prefillFrom) {
         mutableStateOf(
-            if (selectedType == VoucherType.CONTRA) cashBankLedgers.firstOrNull()?.ledgerId ?: "" else ledgers.firstOrNull()?.ledgerId ?: ""
+            prefillDebitItem?.ledgerId
+                ?: if (selectedType == VoucherType.CONTRA) cashBankLedgers.firstOrNull()?.ledgerId ?: "" else ledgers.firstOrNull()?.ledgerId ?: ""
         )
     }
-    var creditLedgerId by remember {
+    var creditLedgerId by remember(prefillFrom) {
         mutableStateOf(
-            if (selectedType == VoucherType.CONTRA) cashBankLedgers.lastOrNull()?.ledgerId ?: "" else ledgers.lastOrNull()?.ledgerId ?: ""
+            prefillCreditItem?.ledgerId
+                ?: if (selectedType == VoucherType.CONTRA) cashBankLedgers.lastOrNull()?.ledgerId ?: "" else ledgers.lastOrNull()?.ledgerId ?: ""
         )
     }
-    var amountInput by remember { mutableStateOf("") }
-    var narration by remember { mutableStateOf("") }
-    var referenceNumber by remember { mutableStateOf("") }
+    var amountInput by remember(prefillFrom) { mutableStateOf(prefillFrom?.totalDebits?.takeIf { it.isPositive }?.formatPlain() ?: "") }
+    var narration by remember(prefillFrom) { mutableStateOf(prefillFrom?.narration ?: "") }
+    var referenceNumber by remember(prefillFrom) { mutableStateOf(prefillFrom?.referenceNumber ?: "") }
     var debitDropdownExpanded by remember { mutableStateOf(false) }
     var creditDropdownExpanded by remember { mutableStateOf(false) }
     val ledgersMap = remember(ledgers) { ledgers.associateBy { it.ledgerId } }
@@ -214,10 +246,18 @@ fun CreateVoucherDialog(
     // creates one); otherwise the raw scanned value only ever prefills Reference Number when it
     // is still blank (never overwrites what the user already typed). Purely a form-state prefill
     // - posting still requires the user to review the form and explicitly tap "Post to Ledger".
+    //
+    // 13-point correctness pass, item 4 - a real e-invoice/IRP QR carries a structured JSON
+    // payload (Seller GSTIN, Doc No, Total Value); [GstEInvoiceQrParser] is tried first and, when
+    // it recognizes the payload, drives the same three prefills below from its parsed fields
+    // instead of raw substring matching. A plain (non-JSON) barcode falls through to the exact
+    // pre-existing behavior unchanged.
     LaunchedEffect(scannedBarcodeValue) {
         val scanned = scannedBarcodeValue ?: return@LaunchedEffect
         if (isPurchaseFlow) {
-            val matchedSupplier = ledgers.firstOrNull { isCreditorLedger(it) && it.gstin.isNotBlank() && scanned.contains(it.gstin) }
+            val eInvoice = com.example.accounting.domain.scanning.GstEInvoiceQrParser.parse(scanned)
+            val normalizedScan = (eInvoice?.sellerGstin ?: scanned).trim().uppercase()
+            val matchedSupplier = ledgers.firstOrNull { isCreditorLedger(it) && it.gstin.isNotBlank() && normalizedScan.contains(it.gstin.trim().uppercase()) }
             if (matchedSupplier != null) partyLedgerId = matchedSupplier.ledgerId
 
             val matchedItem = scannedMatchedItemId?.let { itemsMap[it] }
@@ -229,12 +269,23 @@ fun CreateVoucherDialog(
                 }
                 true
             } else false
-            if (!itemApplied && referenceNumber.isBlank()) referenceNumber = scanned
+
+            val refFromScan = eInvoice?.docNo?.takeIf { it.isNotBlank() } ?: scanned
+            if (!itemApplied && referenceNumber.isBlank()) referenceNumber = refFromScan
+            if (!isInventoryEnabled && eInvoice != null && eInvoice.totalInvoiceValue.isNotBlank()) {
+                val parsedTotal = Money.parse(eInvoice.totalInvoiceValue)
+                if (amountInput.isBlank() && parsedTotal.isPositive) amountInput = eInvoice.totalInvoiceValue
+            }
 
             lastScanSummary = buildString {
                 append(if (matchedSupplier != null) "Supplier: ${matchedSupplier.name}" else "No Supplier matched this code")
                 if (itemApplied && matchedItem != null) append(" • Item: ${matchedItem.name}")
-                append(" • Ref: $scanned")
+                if (eInvoice != null) {
+                    if (eInvoice.docNo.isNotBlank()) append(" • Invoice: ${eInvoice.docNo}")
+                    if (eInvoice.totalInvoiceValue.isNotBlank()) append(" • Value: ${eInvoice.totalInvoiceValue}")
+                } else {
+                    append(" • Ref: $scanned")
+                }
             }
         }
         onScannedValueConsumed()
@@ -531,6 +582,7 @@ fun CreateVoucherDialog(
                                 when {
                                     isNoteFlow -> "Note Reference (defaults to original invoice no.)"
                                     isSaleFlow -> "Invoice Number (Optional)"
+                                    isPurchaseFlow -> "Invoice Number (Optional)"
                                     else -> "Ref / Cheque / Invoice No. (Optional)"
                                 }
                             )
@@ -638,7 +690,9 @@ fun CreateVoucherDialog(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
-                        onClick = {
+                        onClick = onClick@{
+                            if (isSubmitting) return@onClick
+                            isSubmitting = true
                             when {
                                 isSaleFlow && isInventoryEnabled -> onPostSaleInvoice(
                                     partyLedgerId, tradeLedgerId,
@@ -678,7 +732,7 @@ fun CreateVoucherDialog(
                             }
                             onDismiss()
                         },
-                        enabled = isReady,
+                        enabled = isReady && !isSubmitting,
                         modifier = Modifier.testTag("submit_voucher_button")
                     ) {
                         Text("Post to Ledger")

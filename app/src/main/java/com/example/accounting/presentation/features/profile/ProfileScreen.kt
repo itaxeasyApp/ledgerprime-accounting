@@ -167,8 +167,8 @@ private fun BusinessProfileSection(
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(value = gstin, onValueChange = { gstin = it }, label = "GSTIN", modifier = Modifier.weight(1f))
-            FormField(value = pan, onValueChange = { pan = it }, label = "PAN", modifier = Modifier.weight(1f))
+            FormField(value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN", modifier = Modifier.weight(1f))
+            FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(Spacing.md))
         ActionButton(
@@ -227,7 +227,7 @@ private fun IndividualProfileSection(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
-        FormField(value = pan, onValueChange = { pan = it }, label = "PAN", modifier = Modifier.fillMaxWidth())
+        FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(Spacing.md))
         ActionButton(
             text = "Save Individual Profile",

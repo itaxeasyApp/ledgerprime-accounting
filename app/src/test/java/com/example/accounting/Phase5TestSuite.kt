@@ -198,6 +198,43 @@ class Phase5TestSuite {
     )
 
     // ==========================================
+    // ARCHITECTURE CORRECTION: Real Group hierarchy (StandardSystemGroups.isUnder)
+    // ==========================================
+    @Test
+    fun hierarchy_isUnder_RecognizesLedgerFiledDirectlyUnderSystemGroup() {
+        val bankGroupId = "${StandardSystemGroups.BANK_GROUP_ID}_$companyId"
+        val groupsById = mapOf(
+            bankGroupId to com.example.accounting.domain.accounting.AccountGroup(bankGroupId, companyId, "Bank Accounts", com.example.accounting.domain.accounting.PrimaryGroup.ASSETS, "GRP_CURRENT_ASSETS_$companyId", true)
+        )
+        assertTrue(StandardSystemGroups.isUnder(bankGroupId, StandardSystemGroups.BANK_GROUP_ID, groupsById))
+    }
+
+    @Test
+    fun hierarchy_isUnder_RecognizesLedgerFiledUnderUserGroupNestedUnderSystemGroup() {
+        val bankGroupId = "${StandardSystemGroups.BANK_GROUP_ID}_$companyId"
+        val userGroupId = "GRP_USER_HDFC_$companyId"
+        val groupsById = mapOf(
+            bankGroupId to com.example.accounting.domain.accounting.AccountGroup(bankGroupId, companyId, "Bank Accounts", com.example.accounting.domain.accounting.PrimaryGroup.ASSETS, "GRP_CURRENT_ASSETS_$companyId", true),
+            userGroupId to com.example.accounting.domain.accounting.AccountGroup(userGroupId, companyId, "HDFC Current A/c", com.example.accounting.domain.accounting.PrimaryGroup.ASSETS, bankGroupId, false)
+        )
+        // A ledger filed under the User Group "HDFC Current A/c" (itself nested under the System
+        // "Bank Accounts" group) must still be recognized as a Bank ledger via ancestor walk - this
+        // is exactly the case flat groupId.startsWith("GRP_BANK_") string matching would silently
+        // misclassify (the user group's own ID doesn't start with "GRP_BANK").
+        assertTrue(StandardSystemGroups.isUnder(userGroupId, StandardSystemGroups.BANK_GROUP_ID, groupsById))
+        assertFalse(StandardSystemGroups.isUnder(userGroupId, StandardSystemGroups.CASH_GROUP_ID, groupsById))
+    }
+
+    @Test
+    fun hierarchy_isUnder_UnrelatedGroup_ReturnsFalse() {
+        val loansGroupId = "${StandardSystemGroups.LOANS_GROUP_ID}_$companyId"
+        val groupsById = mapOf(
+            loansGroupId to com.example.accounting.domain.accounting.AccountGroup(loansGroupId, companyId, "Loans (Liability)", com.example.accounting.domain.accounting.PrimaryGroup.LIABILITIES, null, true)
+        )
+        assertFalse(StandardSystemGroups.isUnder(loansGroupId, StandardSystemGroups.BANK_GROUP_ID, groupsById))
+    }
+
+    // ==========================================
     // A. GST ENGINE (CESS, per-component rates, supply nature, isolation)
     // ==========================================
     @Test
@@ -493,6 +530,87 @@ class Phase5TestSuite {
         val repo = AccountingRepository(dao)
         val summary = repo.generateGSTSummary(companyId, fyId)
         assertEquals(1000_00L, summary.totalTaxableOutward.paise)
+    }
+
+    // 13-point correctness pass, item 6 - GSTR-1 B2B/B2C bucketing splits the same
+    // totalTaxableOutward/totalTaxOutward figures by whether the Sale's party carried a GSTIN.
+    @Test
+    fun a12_GstSummary_B2bB2cBucketing() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompany()
+        dao.seedTradingLedgers()
+        dao.insertStockItem(stockItem("ITEM_A", openingQty = 100_000L))
+
+        val b2bSale = TradingWorkflowEngine.buildSale(
+            "V_B2B", companyId, fyId, "LED_DEBTOR", "Registered Buyer", "29AAAAA0000A1Z5", "LED_SALES", "Sales", "27", "27",
+            listOf(line("ITEM_A", 1, 1000_00L, 18.0)), gstLedgerRefs(companyId), "LED_RO", "Round Off"
+        )
+        postResult(dao, "V_B2B", VoucherType.SALES, b2bSale)
+
+        val b2cSale = TradingWorkflowEngine.buildSale(
+            "V_B2C", companyId, fyId, "LED_DEBTOR", "Walk-in Buyer", "", "LED_SALES", "Sales", "27", "27",
+            listOf(line("ITEM_A", 1, 400_00L, 18.0)), gstLedgerRefs(companyId), "LED_RO", "Round Off"
+        )
+        postResult(dao, "V_B2C", VoucherType.SALES, b2cSale)
+
+        val repo = AccountingRepository(dao)
+        val summary = repo.generateGSTSummary(companyId, fyId)
+
+        assertEquals(1000_00L, summary.b2bTaxableOutward.paise)
+        assertEquals(400_00L, summary.b2cTaxableOutward.paise)
+        assertEquals(
+            "B2B + B2C taxable value must reconcile to the same total the un-bucketed figure already reported",
+            summary.totalTaxableOutward.paise, summary.b2bTaxableOutward.paise + summary.b2cTaxableOutward.paise
+        )
+        assertEquals(
+            summary.totalTaxOutward.paise, summary.b2bTaxOutward.paise + summary.b2cTaxOutward.paise
+        )
+        assertEquals(0L, summary.creditNoteTaxableOutward.paise)
+        assertEquals(0L, summary.debitNoteTaxableOutward.paise)
+    }
+
+    // Architecture correction - Trial Balance's opening balance for a Balance-Sheet-nature ledger
+    // must carry forward prior-FY activity, not just the ledger's raw lifetime openingBalancePaise.
+    @Test
+    fun a13_TrialBalance_CarriesForwardOpeningBalance_AcrossFinancialYears() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompany()
+        val fy2Id = "FY_P5_2027_28"
+        dao.insertFinancialYear(FinancialYearEntity(fy2Id, companyId, "FY 2027-28", "2027-04-01", "2028-03-31", false, false, null, null))
+        dao.insertPeriods(listOf(AccountingPeriodEntity("PER_${companyId}_FY2", companyId, fy2Id, "Full Year", "2027-04-01", "2028-03-31", PeriodStatus.OPEN, null, null)))
+
+        dao.insertLedger(ledger("LED_ASSET", companyId, StandardSystemGroups.FIXED_ASSETS_GROUP_ID, openingPaise = 1000_00L))
+        dao.insertLedger(ledger("LED_EQUITY", companyId, StandardSystemGroups.CAPITAL_GROUP_ID, openingPaise = 1000_00L, openingType = DrCr.CREDIT))
+
+        // A Journal voucher dated within FY1 (2026-27): Dr LED_ASSET 500, Cr LED_EQUITY 500.
+        val voucherEntity = VoucherEntity(
+            voucherId = "V_JRN_FY1", companyId = companyId, financialYearId = fyId, voucherNumber = "V_JRN_FY1", voucherType = VoucherType.JOURNAL,
+            date = "2026-05-10", referenceNumber = "", narration = "", totalAmountPaise = 500_00L,
+            isPosted = true, isCancelled = false, syncState = SyncState.PENDING, createdAt = 0L, updatedAt = 0L,
+            createdBy = "TESTER", partyGstin = "", isGstApplicable = false, referenceVoucherId = null, paymentMode = ""
+        )
+        val items = listOf(
+            JournalItemEntity("JI_1", "V_JRN_FY1", companyId, fyId, "LED_ASSET", DrCr.DEBIT, 500_00L, "", 1),
+            JournalItemEntity("JI_2", "V_JRN_FY1", companyId, fyId, "LED_EQUITY", DrCr.CREDIT, 500_00L, "", 2)
+        )
+        VoucherPostingEngine.post(dao, voucherEntity, items, "IK_V_JRN_FY1", "TESTER")
+
+        val repo = AccountingRepository(dao)
+
+        // FY1 (the ledger's own first FY) - opening is still the raw stored value, unaffected.
+        val tbFy1 = repo.generateTrialBalance(companyId, fyId)
+        val assetRowFy1 = tbFy1.rows.first { it.ledgerId == "LED_ASSET" }
+        assertEquals(1000_00L, assetRowFy1.openingDebit.paise)
+        assertEquals(1500_00L, assetRowFy1.closingDebit.paise)
+
+        // FY2 - opening must now be FY1's closing (1000 + 500 = 1500), not the raw stored 1000.
+        val tbFy2 = repo.generateTrialBalance(companyId, fy2Id)
+        val assetRowFy2 = tbFy2.rows.first { it.ledgerId == "LED_ASSET" }
+        assertEquals(
+            "FY2 opening balance must carry forward FY1's activity, not just the ledger's raw stored opening balance",
+            1500_00L, assetRowFy2.openingDebit.paise
+        )
+        assertEquals(1500_00L, assetRowFy2.closingDebit.paise) // no FY2 activity yet
     }
 
     // ==========================================

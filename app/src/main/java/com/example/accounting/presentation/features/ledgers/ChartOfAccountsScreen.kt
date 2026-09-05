@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
@@ -85,6 +86,16 @@ fun ChartOfAccountsScreen(
     onOpenCreateLedger: () -> Unit,
     onOpenCreateStockItem: () -> Unit = {},
     onDeleteLedger: ((Ledger) -> Unit)? = null,
+    /** Architecture correction - ledger editing was previously reachable only from the Money tab's
+     * Cash/Bank list; every ledger (Customer/Supplier/expense/etc.) shown here now gets the same
+     * Edit affordance, opening [com.example.accounting.presentation.components.CreateLedgerDialog]
+     * in edit mode. */
+    onEditLedger: ((Ledger) -> Unit)? = null,
+    /** Architecture correction (real Group hierarchy) - opens [com.example.accounting.presentation.components.CreateGroupDialog]
+     * so a company can create its own Group (nested under any existing System or User Group),
+     * completing Primary Group -> System Group -> User Group -> Ledger - the data model and
+     * repository already supported this, it just had no UI reachable from anywhere before. */
+    onOpenCreateGroup: (() -> Unit)? = null,
     /** Phase 7J UI: Items only shows when the company is [com.example.accounting.domain.company.AccountingMode.ACCOUNT_WITH_INVENTORY]
      * - the single gating point for this screen (mirrors every other Items-related gate, all
      * reading `AccountingUiState.currentCompany?.accountingMode` via the same
@@ -260,6 +271,7 @@ fun ChartOfAccountsScreen(
                                     LedgerRowCard(
                                         ledger = ledger,
                                         onClick = { onLedgerClick(ledger) },
+                                        onEdit = onEditLedger?.let { edit -> { edit(ledger) } },
                                         onDelete = if (!ledger.isSystem && onDeleteLedger != null) {
                                             { onDeleteLedger(ledger) }
                                         } else null
@@ -281,11 +293,24 @@ fun ChartOfAccountsScreen(
                 }
 
                 CoaTab.GROUPS -> {
-                    GroupsHierarchyView(
-                        groups = uiState.groups,
-                        ledgers = uiState.ledgers,
-                        onLedgerClick = onLedgerClick
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        GroupsHierarchyView(
+                            groups = uiState.groups,
+                            ledgers = uiState.ledgers,
+                            onLedgerClick = onLedgerClick
+                        )
+                        if (onOpenCreateGroup != null) {
+                            FloatingActionButton(
+                                onClick = onOpenCreateGroup,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(bottom = 20.dp, end = 20.dp)
+                                    .testTag("add_group_fab")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Add Group")
+                            }
+                        }
+                    }
                 }
 
                 CoaTab.ITEMS -> {
@@ -555,6 +580,7 @@ fun GroupRowItem(
 fun LedgerRowCard(
     ledger: Ledger,
     onClick: () -> Unit,
+    onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null
 ) {
     OutlinedCard(
@@ -607,8 +633,22 @@ fun LedgerRowCard(
                     }
                 }
 
+                if (onEdit != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit Ledger",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 if (onDelete != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     IconButton(
                         onClick = onDelete,
                         modifier = Modifier.size(32.dp)

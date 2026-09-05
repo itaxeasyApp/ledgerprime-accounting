@@ -130,4 +130,25 @@ object StandardSystemGroups {
             AccountGroup("${ROUND_OFF_GROUP_ID}_$companyId", companyId, Constants.SYS_ROUND_OFF_ACCOUNT, PrimaryGroup.SPECIAL_CONTROL, null, true, false, 998)
         )
     }
+
+    /**
+     * Architecture correction (real Group hierarchy) - the correct way to answer "is this ledger's
+     * group a Bank/Cash/Debtor/etc. account?": walk [AccountGroup.parentGroupId] all the way to the
+     * root, checking each ancestor's `groupId` against [rootGroupIdPrefix], instead of the flat
+     * `ledgerGroupId.startsWith(...)` check every call site used to do independently. A User Group
+     * nested arbitrarily deep under a System Group (e.g. a company's own "HDFC Current A/c" group
+     * filed under the System "Bank Accounts" group) is now correctly recognized, not just a ledger
+     * filed directly under the System group itself. [groupsById] is always the caller's own
+     * already-loaded `groups` list keyed by `groupId` - never a second fetch. Cycle-safe (a
+     * `parentGroupId` chain can never legitimately cycle, but a corrupt one must not infinite-loop).
+     */
+    fun isUnder(ledgerGroupId: String, rootGroupIdPrefix: String, groupsById: Map<String, AccountGroup>): Boolean {
+        var current: AccountGroup? = groupsById[ledgerGroupId]
+        val visited = mutableSetOf<String>()
+        while (current != null && visited.add(current.groupId)) {
+            if (current.groupId.startsWith("${rootGroupIdPrefix}_")) return true
+            current = current.parentGroupId?.let { groupsById[it] }
+        }
+        return false
+    }
 }

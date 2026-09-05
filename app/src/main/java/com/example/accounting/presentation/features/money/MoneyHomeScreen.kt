@@ -18,8 +18,10 @@ import androidx.compose.material.icons.filled.CallMade
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -169,11 +171,23 @@ fun MoneyTabContent(
     onScanBarcode: (() -> Unit)? = null,
     scannedBarcodeValue: String? = null,
     onScannedValueConsumed: () -> Unit = {},
+    /** 13-point correctness pass, item 8 (Editable Ledgers) - opens [CreateLedgerDialog] in edit
+     * mode for this ledger. */
+    onEditLedger: (Ledger) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var sub by remember { mutableStateOf<MoneySubScreen>(MoneySubScreen.Home) }
-    val cashLedgers = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }
-    val bankLedgers = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) }
+    // Architecture correction (real Group hierarchy) - a direct prefix check (every ledger filed
+    // straight under the System group) OR an ancestor walk (a ledger filed under a company-created
+    // User Group nested under it, e.g. a specific bank's own sub-group) - a company may have as
+    // many Bank ledgers as it actually has, unlimited, no "primary" concept.
+    val groupsById = uiState.groups.associateBy { it.groupId }
+    val cashLedgers = uiState.ledgers.filter {
+        it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+    }
+    val bankLedgers = uiState.ledgers.filter {
+        it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
+    }
     val totalCash = cashLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
     val totalBank = bankLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
 
@@ -192,8 +206,8 @@ fun MoneyTabContent(
             onOpenJournal = { onOpenCreateVoucher(VoucherType.JOURNAL) },
             modifier = modifier
         )
-        MoneySubScreen.Cash -> CashOrBankLedgerListScreen("Cash", cashLedgers, onLedgerClick, modifier)
-        MoneySubScreen.Bank -> CashOrBankLedgerListScreen("Bank", bankLedgers, onLedgerClick, modifier)
+        MoneySubScreen.Cash -> CashOrBankLedgerListScreen("Cash", cashLedgers, onLedgerClick, onEditLedger = onEditLedger, modifier = modifier)
+        MoneySubScreen.Bank -> CashOrBankLedgerListScreen("Bank", bankLedgers, onLedgerClick, onEditLedger = onEditLedger, modifier = modifier)
         MoneySubScreen.Upi -> UpiProfilesScreen(uiState.bankUpiProfiles, onAddBankUpiProfile, onDeleteBankUpiProfile, modifier)
         MoneySubScreen.PendingReviews -> {
             val pending = uiState.voucherDraftsPendingReview
@@ -230,18 +244,22 @@ fun MoneyTabContent(
     }
 }
 
-/** Read-only Cash or Bank ledger list, reached from [MoneyHomeScreen] - tapping a ledger reuses
- * the existing ledger-statement navigation, never a second statement view. */
+/** Cash or Bank ledger list, reached from [MoneyHomeScreen] - unlimited ledgers, no "primary"
+ * concept (a company may have as many Bank accounts as it actually has). Tapping a ledger reuses
+ * the existing ledger-statement navigation, never a second statement view; each row also gets an
+ * Edit affordance ([onEditLedger], 13-point correctness pass item 8). */
 @Composable
 fun CashOrBankLedgerListScreen(
     title: String,
     ledgers: List<Ledger>,
     onLedgerClick: (Ledger) -> Unit,
+    onEditLedger: (Ledger) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize().padding(Spacing.md)) {
         Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
         Spacer(modifier = Modifier.padding(Spacing.xs))
+
         if (ledgers.isEmpty()) {
             Text("No $title accounts yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
@@ -250,7 +268,14 @@ fun CashOrBankLedgerListScreen(
                     SectionCard(
                         onClick = { onLedgerClick(ledger) },
                         title = ledger.name,
-                        trailing = { Amount(ledger.currentBalance, style = MaterialTheme.typography.titleSmall, emphasize = true) }
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Amount(ledger.currentBalance, style = MaterialTheme.typography.titleSmall, emphasize = true)
+                                IconButton(onClick = { onEditLedger(ledger) }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit $title account", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
                     )
                 }
             }

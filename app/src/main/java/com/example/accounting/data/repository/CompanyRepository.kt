@@ -82,7 +82,8 @@ class CompanyRepository(
             status = CompanyStatus.ACTIVE,
             isDefault = isDefault,
             createdAt = createdAt,
-            updatedAt = createdAt
+            updatedAt = createdAt,
+            pinCode = pinCode
         )
     }
 
@@ -101,7 +102,8 @@ class CompanyRepository(
             currency = currency,
             financialYearStartMonth = financialYearStartMonth,
             isDefault = isDefault,
-            createdAt = createdAt
+            createdAt = createdAt,
+            pinCode = pinCode
         )
     }
 }
