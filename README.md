@@ -86,6 +86,32 @@ today on both the Android UI and Python API) are all recorded as forward-looking
 implemented. Not yet independently audited or frozen. Actual Phase 7J UI screens remain gated
 behind that audit, same as every prior phase.
 
+Phase 8A, Part 1 & 2 - GSTR-1 Foundation: the real, statutorily-named GSTR-1 tables
+(`domain/taxation/gstreturn/Gstr1Models.kt`, `Gstr1ReturnBuilder.kt`, `Gstr1Validation.kt`,
+`Gstr1JsonMapping.kt`), built strictly as a regroup/aggregate of already-persisted
+`GstTransaction`/`Voucher` facts - never a second GST calculation. Adds GSTIN checksum validation
+(beyond the pre-existing format-only regex check), both a readable JSON tree and the real GST
+Network portal JSON field names, an explicit (never inferred) Nil-return flag on `GstReturnEntity`,
+and read/prepare/validate-only automation for GSTR-1 draft preparation and filing-due-date
+reminders - filing itself stays a human action, same discipline as every other automation checker
+in this codebase. Alongside it, a Group Hierarchy audit fix: `createCompany()` was seeding only a
+flat 10-group subset instead of the canonical 28-group hierarchy, so every company created before
+this fix was missing 17 System Groups outright (most importantly Loans/Bank OD/Secured/Unsecured
+Loans); backfilled per-company via an idempotent, purely additive migration.
+
+## Getting Started
+
+This repo has two independently runnable halves - see the Claude Code skills below for verified,
+step-by-step build/run/drive instructions for each (prerequisites, exact commands, and known
+gotchas on a Windows dev machine):
+
+- **Android app** (`app/`): `app/.claude/skills/run-app/SKILL.md` - build the debug APK
+  (`./gradlew.bat assembleDebug`) and drive it over `adb` against a real USB-connected device (the
+  emulator needs hardware virtualization this dev machine doesn't have).
+- **Cloud-sync server** (`server/`): `server/.claude/skills/run-server/SKILL.md` - create a
+  venv, run Alembic migrations against the default local SQLite DB (no Docker/Postgres needed),
+  and boot it with `uvicorn`.
+
 ## Architectural Highlights
 - **Authoritative Integer Precision**: Zero floating-point arithmetic. All monetary values are maintained in 64-bit integer minor units (`Long paise`).
 - **Strict Multi-Tenant Isolation**: Every entity, query, transaction, and repository explicitly requires and validates `companyId`.
@@ -103,7 +129,4 @@ behind that audit, same as every prior phase.
 6. Hardware-Backed Encrypted Security Layer
 7. Repository Boundaries with Explicit Tenant Context
 8. Comprehensive Phase 0 Test Suite (12 test vectors verified)
-#   B i l l s h i l l l - u p d a t e d  
- #   B i l l s h i l l l - u p d a t e d  
- #   B i l l s h i l l l - u p d a t e d  
- 
+
