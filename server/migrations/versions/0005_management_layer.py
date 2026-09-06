@@ -31,8 +31,6 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.Integer, nullable=False),
         sa.UniqueConstraint("company_id", "financial_year_id", name="uq_company_subscription_fy"),
     )
-    op.create_index("ix_company_subscriptions_company_id", "company_subscriptions", ["company_id"])
-    op.create_index("ix_company_subscriptions_financial_year_id", "company_subscriptions", ["financial_year_id"])
 
     op.create_table(
         "bank_upi_profiles",
@@ -50,8 +48,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Integer, nullable=False),
         sa.Column("updated_at", sa.Integer, nullable=False),
     )
-    op.create_index("ix_bank_upi_profiles_company_id", "bank_upi_profiles", ["company_id"])
-    op.create_index("ix_bank_upi_profiles_party_id", "bank_upi_profiles", ["party_id"])
 
 
 def downgrade() -> None:
