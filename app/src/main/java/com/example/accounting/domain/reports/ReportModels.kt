@@ -113,6 +113,17 @@ data class BalanceSheetReport(
     val miscExpensesAsset: Money = Money.ZERO,
     /** Phase 4 (Account + Inventory only): closing stock valuation, folded into Current Assets. */
     val stockInHand: Money = Money.ZERO,
+    /**
+     * Net Input Tax Credit still recoverable (Input GST > Output GST for the period) - a real
+     * Current Asset, never a negative "Duties & Taxes" liability. Both Input and Output GST
+     * ledgers live under the same Tally-style "Duties & Taxes" group, so a naive net-credit read
+     * of that whole group goes negative whenever ITC exceeds output liability; that negative
+     * value belongs on the Assets side (money recoverable from the government), not displayed as
+     * a liability with a debit-natured balance. [dutiesAndTaxesLiability] is floored at zero and
+     * this field carries the flipped, positive remainder so nothing is lost - see
+     * `AccountingRepository.generateBalanceSheet`.
+     */
+    val gstRecoverable: Money = Money.ZERO,
     val suspenseDebit: Money = Money.ZERO,
     val totalAssets: Money
 ) {

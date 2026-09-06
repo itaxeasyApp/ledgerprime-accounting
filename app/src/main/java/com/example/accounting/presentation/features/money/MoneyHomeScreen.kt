@@ -183,10 +183,10 @@ fun MoneyTabContent(
     // many Bank ledgers as it actually has, unlimited, no "primary" concept.
     val groupsById = uiState.groups.associateBy { it.groupId }
     val cashLedgers = uiState.ledgers.filter {
-        it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+        StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
     }
     val bankLedgers = uiState.ledgers.filter {
-        it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
+        StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
     }
     val totalCash = cashLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
     val totalBank = bankLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
@@ -230,6 +230,7 @@ fun MoneyTabContent(
         is MoneySubScreen.Entry -> MoneyVoucherEntryScreen(
             voucherType = s.voucherType,
             ledgers = uiState.ledgers,
+            groups = uiState.groups,
             onBack = { sub = MoneySubScreen.Home },
             onSubmit = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
                 onSubmitMoneyVoucher(type, date, debitId, creditId, amount, narration, ref, roundOff)

@@ -45,4 +45,10 @@ class ExportManagementService(private val repository: AccountingRepository) {
 
     suspend fun exportGstTransactions(companyId: String, financialYearId: String, format: ExportFormat): AccountingResult<ExportResult> =
         repository.exportGstTransactionsAs(companyId, financialYearId, format)
+
+    suspend fun exportGstReturn(companyId: String, gstReturnId: String, fy: com.example.accounting.domain.financialyear.FinancialYear, format: ExportFormat): AccountingResult<ExportResult> =
+        repository.exportGstReturnAs(companyId, gstReturnId, fy, format)
+
+    suspend fun importGstReturnDraft(companyId: String, gstReturnId: String, jsonContent: String): AccountingResult<com.example.accounting.domain.taxation.gstreturn.GstReturn> =
+        repository.importGstReturnDraftJson(companyId, gstReturnId, jsonContent)
 }

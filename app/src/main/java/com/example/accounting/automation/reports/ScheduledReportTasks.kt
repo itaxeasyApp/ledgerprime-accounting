@@ -5,6 +5,7 @@ import com.example.accounting.automation.tasks.TaskExecutionStatus
 import com.example.accounting.automation.tasks.TaskFrequency
 import com.example.accounting.core.common.Money
 import com.example.accounting.data.local.dao.AccountingDao
+import com.example.accounting.domain.accounting.AccountGroup
 import com.example.accounting.domain.accounting.StandardSystemGroups
 import kotlinx.coroutines.flow.first
 
@@ -12,10 +13,27 @@ class ScheduledReportTasks(private val dao: AccountingDao) {
 
     suspend fun generateDailyFinancialSnapshot(companyId: String): AutomationTaskResult {
         val ledgers = dao.getLedgersByCompany(companyId).first()
+        val groupsById = dao.getGroupsByCompany(companyId).first().associate {
+            it.groupId to AccountGroup(
+                groupId = it.groupId,
+                companyId = it.companyId,
+                name = it.name,
+                primaryGroup = it.primaryGroup,
+                parentGroupId = it.parentGroupId,
+                isSystem = it.isSystem,
+                affectsGrossProfit = it.affectsGrossProfit,
+                displayOrder = it.displayOrder
+            )
+        }
         // Exact groupId-prefix check (Phase 5, Priority 11) - was `groupId.contains("BANK"/"CASH")`,
         // the same name-matching anti-pattern Phase 3 eliminated everywhere else in the app.
+        // Falls back to isUnder() ancestor-walk so ledgers nested under a custom subgroup
+        // (e.g. a bank ledger under a user-created sub-group of Bank Accounts) are still counted.
         val bankAndCash = ledgers.filter {
-            it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID)
+            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
         }
         
         var totalLiquidPaise = 0L

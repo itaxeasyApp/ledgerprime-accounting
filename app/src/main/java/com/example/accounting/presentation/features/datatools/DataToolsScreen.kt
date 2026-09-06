@@ -12,13 +12,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.accounting.domain.accounting.AccountGroup
 import com.example.accounting.domain.dataimport.ImportFileFormat
 import com.example.accounting.domain.dataimport.ImportResult
 import com.example.accounting.domain.dataimport.ImportRowSuggestion
@@ -37,9 +48,16 @@ import com.example.accounting.presentation.components.SectionCard
 fun DataToolsScreen(
     lastImportResult: ImportResult?,
     lastImportRowOutcomes: Map<Int, String>,
+    /** Import-review group-picker fix - the company's real, already-existing Groups (same list
+     * [com.example.accounting.presentation.components.CreateLedgerDialog] uses), so a LEDGER
+     * suggestion can be filed under one of them by a human choice, never by trusting whatever
+     * string the imported file's own "group"/"groupid" column happened to contain. */
+    groups: List<AccountGroup>,
     onPickCsvFile: () -> Unit,
     onPickJsonFile: () -> Unit,
-    onReviewAndCreateRow: (ImportRowSuggestion, ImportSuggestionType) -> Unit,
+    /** Third parameter is the reviewer's chosen Group id for a LEDGER row (from the picker below),
+     * always null for PARTY/STOCK_ITEM rows, which need no group. */
+    onReviewAndCreateRow: (ImportRowSuggestion, ImportSuggestionType, String?) -> Unit,
     onPickReceiptPhoto: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -76,19 +94,35 @@ fun DataToolsScreen(
             )
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
                 items(lastImportResult.suggestions, key = { it.rowNumber }) { suggestion ->
-                    ImportRowCard(suggestion, lastImportRowOutcomes[suggestion.rowNumber], onReviewAndCreateRow)
+                    ImportRowCard(suggestion, lastImportRowOutcomes[suggestion.rowNumber], groups, onReviewAndCreateRow)
                 }
             }
         }
     }
 }
 
+/**
+ * Import-review group-picker fix - a LEDGER suggestion used to be created straight from whatever
+ * raw "group"/"groupid" value the imported file happened to contain, which had to already be this
+ * app's own internal groupId string (e.g. "GRP_BANK_OD_COMP123") - never something a real external
+ * Balance Sheet export would contain, so correctly classifying an imported Bank OD/Loan/etc. ledger
+ * was effectively impossible. Clicking "Create as LEDGER" now reveals a dropdown of the company's
+ * real, already-existing Groups (same list [com.example.accounting.presentation.components.CreateLedgerDialog]
+ * uses) instead of creating immediately - the file's own group column is never trusted blindly.
+ * PARTY/STOCK_ITEM rows need no group and are still created immediately on tap, unchanged.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ImportRowCard(
     suggestion: ImportRowSuggestion,
     outcome: String?,
-    onReviewAndCreateRow: (ImportRowSuggestion, ImportSuggestionType) -> Unit
+    groups: List<AccountGroup>,
+    onReviewAndCreateRow: (ImportRowSuggestion, ImportSuggestionType, String?) -> Unit
 ) {
+    var pickingGroupForLedger by remember(suggestion.rowNumber) { mutableStateOf(false) }
+    var selectedGroupId by remember(suggestion.rowNumber) { mutableStateOf<String?>(null) }
+    var groupDropdownExpanded by remember(suggestion.rowNumber) { mutableStateOf(false) }
+
     SectionCard(title = "Row ${suggestion.rowNumber}", subtitle = "Suggested: ${suggestion.suggestionType.name}") {
         suggestion.fieldValues.entries.take(4).forEach { (key, value) ->
             Text("$key: $value", style = MaterialTheme.typography.bodySmall)
@@ -97,12 +131,61 @@ private fun ImportRowCard(
             Text(suggestion.validationWarnings.joinToString(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         Spacer(modifier = Modifier.height(8.dp))
-        if (outcome != null) {
-            Text(outcome, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ImportSuggestionType.entries.forEach { type ->
-                    OutlinedButton(onClick = { onReviewAndCreateRow(suggestion, type) }) { Text("Create as ${type.name}") }
+        when {
+            outcome != null -> Text(outcome, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+            pickingGroupForLedger -> {
+                Text(
+                    "Pick the existing Account Group this ledger belongs under:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                val selectedGroup = groups.firstOrNull { it.groupId == selectedGroupId }
+                ExposedDropdownMenuBox(
+                    expanded = groupDropdownExpanded,
+                    onExpandedChange = { groupDropdownExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedGroup?.let { "${it.name} (${it.primaryGroup.displayName})" } ?: "Select Group",
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = groupDropdownExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = groupDropdownExpanded,
+                        onDismissRequest = { groupDropdownExpanded = false }
+                    ) {
+                        groups.forEach { grp ->
+                            DropdownMenuItem(
+                                text = { Text("${grp.name} (${grp.primaryGroup.displayName})") },
+                                onClick = { selectedGroupId = grp.groupId; groupDropdownExpanded = false }
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = { pickingGroupForLedger = false; selectedGroupId = null }) { Text("Cancel") }
+                    Button(
+                        onClick = { onReviewAndCreateRow(suggestion, ImportSuggestionType.LEDGER, selectedGroupId) },
+                        enabled = selectedGroupId != null
+                    ) { Text("Confirm & Create Ledger") }
+                }
+            }
+            else -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ImportSuggestionType.entries.forEach { type ->
+                        OutlinedButton(
+                            onClick = {
+                                if (type == ImportSuggestionType.LEDGER) {
+                                    pickingGroupForLedger = true
+                                } else {
+                                    onReviewAndCreateRow(suggestion, type, null)
+                                }
+                            }
+                        ) { Text("Create as ${type.name}") }
+                    }
                 }
             }
         }

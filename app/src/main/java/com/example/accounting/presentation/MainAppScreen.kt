@@ -167,6 +167,9 @@ fun MainAppScreen(
     var isCreateGroupOpen by remember { mutableStateOf(false) }
     var isCreateStockItemOpen by remember { mutableStateOf(false) }
     var isCreateCompanyOpen by remember { mutableStateOf(false) }
+    // Edit-Company fix - non-null switches CreateCompanyDialog into edit mode for this company,
+    // same isCreateCompanyOpen dialog instance as "+ Add Company" (see editingLedger above).
+    var editingCompany by remember { mutableStateOf<com.example.accounting.domain.company.Company?>(null) }
     var selectedVoucherDetail by remember { mutableStateOf<Voucher?>(null) }
     var createPartyRole by remember { mutableStateOf<PartyRole?>(null) }
     var isCreateBankUpiOpen by remember { mutableStateOf(false) }
@@ -451,7 +454,20 @@ fun MainAppScreen(
                                 onSubmitOnline = { viewModel.submitSelectedGstReturnOnline() },
                                 onUpdateGstEnabled = { viewModel.updateGstEnabled(it) },
                                 onUpdateGstScheme = { viewModel.updateGstScheme(it) },
-                                onUpdateGstFilingFrequency = { viewModel.updateGstFilingFrequency(it) }
+                                onUpdateGstFilingFrequency = { viewModel.updateGstFilingFrequency(it) },
+                                onExportCsv = {
+                                    coroutineScope.launch {
+                                        val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.CSV)
+                                        if (intent != null) context.startActivity(intent)
+                                    }
+                                },
+                                onExportGstrJson = {
+                                    coroutineScope.launch {
+                                        val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.GSTR_JSON)
+                                        if (intent != null) context.startActivity(intent)
+                                    }
+                                },
+                                onSetNilReturn = { isNil -> viewModel.setSelectedGstReturnNil(isNil) }
                             )
                         )
 
@@ -459,6 +475,7 @@ fun MainAppScreen(
                             uiState = uiState,
                             onCompanySwitch = { viewModel.switchCompany(it) },
                             onOpenCreateCompany = { isCreateCompanyOpen = true },
+                            onEditCompany = { company -> editingCompany = company; isCreateCompanyOpen = true },
                             onTogglePeriodLock = { viewModel.togglePeriodLock(it) },
                             onTriggerSync = { viewModel.triggerSync() },
                             onUpdateAccountingConfiguration = { mode, businessType -> viewModel.updateAccountingConfiguration(mode, businessType) },
@@ -485,6 +502,7 @@ fun MainAppScreen(
                             parties = uiState.parties,
                             ledgers = uiState.ledgers,
                             onNewPurchase = { createVoucherType = VoucherType.PURCHASE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
+                            onNewDebitNote = { createVoucherType = VoucherType.DEBIT_NOTE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onVoucherClick = { selectedVoucherDetail = it },
                             onAddSupplier = { createPartyRole = PartyRole.SUPPLIER },
                             onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) }
@@ -572,9 +590,10 @@ fun MainAppScreen(
                         is AppRoute.DataTools -> DataToolsScreen(
                             lastImportResult = uiState.lastImportResult,
                             lastImportRowOutcomes = uiState.lastImportRowOutcomes,
+                            groups = uiState.groups,
                             onPickCsvFile = { pendingImportFormat = ImportFileFormat.CSV; openDocumentLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "*/*")) },
                             onPickJsonFile = { pendingImportFormat = ImportFileFormat.JSON; openDocumentLauncher.launch(arrayOf("application/json", "*/*")) },
-                            onReviewAndCreateRow = { suggestion, type -> viewModel.reviewAndCreateImportRow(suggestion, type) },
+                            onReviewAndCreateRow = { suggestion, type, groupIdOverride -> viewModel.reviewAndCreateImportRow(suggestion, type, groupIdOverride) },
                             onPickReceiptPhoto = {
                                 receiptPhotoPickerLauncher.launch(
                                     androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -620,6 +639,7 @@ fun MainAppScreen(
             defaultVoucherType = createVoucherType,
             lockedType = isCreateVoucherTypeLocked,
             prefillFrom = uiState.pendingVoucherCorrection,
+            prefillGstDetail = uiState.pendingVoucherCorrectionGstDetail,
             onDismiss = {
                 isCreateVoucherOpen = false
                 viewModel.clearOutstandingInvoices()
@@ -628,7 +648,7 @@ fun MainAppScreen(
             onAddNewParty = { role -> createPartyRole = role },
             onAddNewBankLedger = {
                 quickAddLedgerGroupId = uiState.groups.firstOrNull {
-                    it.groupId.startsWith("${com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID}_")
+                    com.example.accounting.domain.accounting.StandardSystemGroups.isExactSystemGroup(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID)
                 }?.groupId
                 isCreateLedgerOpen = true
             },
@@ -715,12 +735,16 @@ fun MainAppScreen(
 
     if (isCreateCompanyOpen) {
         CreateCompanyDialog(
-            onDismiss = { isCreateCompanyOpen = false },
+            onDismiss = { isCreateCompanyOpen = false; editingCompany = null },
             isLookingUp = uiState.isPinCodeLookupInProgress,
             lookupResult = uiState.pinCodeLookupResult,
             onLookupPinCode = { viewModel.lookupPinCode(it) },
+            existingCompany = editingCompany,
             onCreateCompany = { name, trade, gstin, pan, state, addr, email, phone, pinCode ->
                 viewModel.createCompany(name, trade, gstin, pan, state, addr, email, phone, pinCode)
+            },
+            onUpdateCompany = { companyId, name, trade, gstin, pan, state, addr, email, phone, pinCode ->
+                viewModel.updateCompany(companyId, name, trade, gstin, pan, state, addr, email, phone, pinCode)
             }
         )
     }
@@ -793,6 +817,8 @@ fun MainAppScreen(
             onDismiss = { selectedVoucherDetail = null; viewModel.clearVoucherAttachments() },
             onDeleteVoucher = { v -> viewModel.deleteVoucherSafely(v.voucherId) },
             onCorrectVoucher = { v -> viewModel.correctVoucher(v) },
+            onUpdateVoucherMetadata = { voucherId, narration, referenceNumber -> viewModel.updateVoucherMetadata(voucherId, narration, referenceNumber) },
+            isInventoryEnabled = com.example.accounting.presentation.viewmodel.isInventoryEnabled(uiState),
             allVouchers = uiState.vouchers,
             attachments = attachmentsForThisVoucher,
             isAttachmentsLoading = uiState.isVoucherAttachmentsLoading,

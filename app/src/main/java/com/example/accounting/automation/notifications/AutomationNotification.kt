@@ -20,7 +20,11 @@ enum class NotificationCategory {
     PERIOD_LOCK,
     YEAR_END_ALERT,
     INVOICE_REMINDER,
-    RECURRING_VOUCHER
+    RECURRING_VOUCHER,
+    /** Phase 8A, Part 1 - GSTR-1 draft preparation/validation errors and statutory filing-due-date
+     * reminders. Distinct from [COMPLIANCE_ALERT] (the existing GSTIN-readiness check) - this
+     * category is specifically about a prepared RETURN's own state, not general ledger hygiene. */
+    GST_RETURN_FILING
 }
 
 data class AutomationNotification(

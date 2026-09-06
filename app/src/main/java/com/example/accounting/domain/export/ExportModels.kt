@@ -12,7 +12,10 @@ enum class ExportFormat { JSON, CSV, GSTR_JSON }
  * sense for `GST_TRANSACTIONS`, not `VOUCHER`). */
 enum class ExportType {
     VOUCHER, PARTY, LEDGER, INVOICE,
-    TRIAL_BALANCE, PROFIT_AND_LOSS, BALANCE_SHEET, OUTSTANDING, GST_SUMMARY, GST_TRANSACTIONS
+    TRIAL_BALANCE, PROFIT_AND_LOSS, BALANCE_SHEET, OUTSTANDING, GST_SUMMARY, GST_TRANSACTIONS,
+    /** Phase 8A, Part 1 - the prepared [com.example.accounting.domain.taxation.gstreturn.Gstr1ReturnData]
+     * draft for one [com.example.accounting.domain.taxation.gstreturn.GstReturn]. */
+    GST_RETURN
 }
 
 /**
@@ -24,13 +27,13 @@ object ExportFormatSupport {
     private val TABULAR_TYPES = setOf(
         ExportType.VOUCHER, ExportType.PARTY, ExportType.LEDGER,
         ExportType.TRIAL_BALANCE, ExportType.PROFIT_AND_LOSS, ExportType.BALANCE_SHEET,
-        ExportType.OUTSTANDING, ExportType.GST_SUMMARY, ExportType.GST_TRANSACTIONS
+        ExportType.OUTSTANDING, ExportType.GST_SUMMARY, ExportType.GST_TRANSACTIONS, ExportType.GST_RETURN
     )
 
     fun supports(exportType: ExportType, format: ExportFormat): Boolean = when (format) {
         ExportFormat.JSON -> true
         ExportFormat.CSV -> exportType in TABULAR_TYPES
-        ExportFormat.GSTR_JSON -> exportType == ExportType.GST_TRANSACTIONS
+        ExportFormat.GSTR_JSON -> exportType == ExportType.GST_TRANSACTIONS || exportType == ExportType.GST_RETURN
     }
 }
 

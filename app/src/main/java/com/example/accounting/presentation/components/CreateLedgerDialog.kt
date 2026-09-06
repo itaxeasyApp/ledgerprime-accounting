@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,6 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -111,29 +115,45 @@ fun CreateLedgerDialog(
     // ledger filed straight under the System Bank Accounts group) OR an ancestor walk (a ledger
     // filed under a company-created User Group nested under it), never only one.
     val isBankGroup = remember(selectedGroupId, groupsMap) {
-        selectedGroupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") ||
+        StandardSystemGroups.isExactSystemGroup(selectedGroupId, StandardSystemGroups.BANK_GROUP_ID) ||
             StandardSystemGroups.isUnder(selectedGroupId, StandardSystemGroups.BANK_GROUP_ID, groupsMap)
     }
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        // decorFitsSystemWindows = false is required for navigationBarsPadding() below to have any
+        // effect at all - a Compose Dialog's window is a separate Android window from the host
+        // Activity and does not propagate WindowInsets into its content by default (confirmed live:
+        // navigationBarsPadding() alone was a silent no-op, verified via a UI-tree bounds dump
+        // showing the footer's tap targets completely unchanged before/after adding it).
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        // Debug finding (live-device audit) - this dialog's form is long enough (14 field rows once
+        // Bank Details shows) that, without an explicit bound here, the Dialog window's own default
+        // wrap-content sizing left the Column's height constraint effectively unconstrained, so the
+        // `weight(1f, fill = false)` scrollable body never actually had to share space with the
+        // footer - it just grew to fit everything, pushing Save/Cancel off the bottom of the
+        // visible screen (confirmed via a UI-tree bounds dump: identical footer bounds before and
+        // after the decorFitsSystemWindows/navigationBarsPadding fix, which DID work unmodified for
+        // the shorter CreatePartyDialog/CreateVoucherDialog forms). Bounding the Surface's own
+        // height gives the Column a real, finite budget, so `weight` can do its job: the footer
+        // always gets its full size, the middle section scrolls for whatever's left over.
+        val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp * 0.88f
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
                 .fillMaxWidth(0.94f)
+                .heightIn(max = maxDialogHeight)
                 .padding(vertical = 16.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Fixed header - never scrolls with the form body, so the dialog's identity/close
+                // affordance stays reachable regardless of how long the form below gets.
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -152,9 +172,15 @@ fun CreateLedgerDialog(
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
+                HorizontalDivider()
 
-                Spacer(modifier = Modifier.height(14.dp))
-
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
                     value = ledgerName,
                     onValueChange = { ledgerName = it },
@@ -357,11 +383,20 @@ fun CreateLedgerDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
 
-                Spacer(modifier = Modifier.height(18.dp))
-
+                HorizontalDivider()
+                // Fixed footer, outside the scrollable body - `navigationBarsPadding()` is the
+                // actual bug fix (live-device audit finding): on an edge-to-edge window (mandatory
+                // since Android 15 for this app's targetSdk 36), a bottom action row with no inset
+                // padding renders behind the system navigation bar and becomes untappable. Pinning
+                // this row outside the scroll area also means Save/Cancel are always visible,
+                // never requiring the user to scroll a long form to find them.
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onDismiss) {

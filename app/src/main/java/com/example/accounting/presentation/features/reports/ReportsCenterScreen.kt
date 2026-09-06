@@ -184,11 +184,11 @@ private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (Strin
         when (reportKey) {
             "Trial Balance" -> TrialBalanceView(report = uiState.trialBalance)
             "Profit & Loss" -> if (uiState.currentCompany?.businessType == BusinessType.SERVICE) {
-                IncomeAndExpenditureView(report = uiState.incomeAndExpenditure)
+                IncomeAndExpenditureView(report = uiState.incomeAndExpenditure, trialBalance = uiState.trialBalance)
             } else {
-                ProfitAndLossView(report = uiState.profitAndLoss)
+                ProfitAndLossView(report = uiState.profitAndLoss, trialBalance = uiState.trialBalance)
             }
-            "Balance Sheet" -> BalanceSheetView(report = uiState.balanceSheet)
+            "Balance Sheet" -> BalanceSheetView(report = uiState.balanceSheet, trialBalance = uiState.trialBalance)
             "Cash Flow" -> CashFlowView(report = uiState.cashFlowReport)
         }
     }
@@ -240,8 +240,20 @@ private fun AccountsCategory(uiState: AccountingUiState, onOpenDayBook: () -> Un
         }
         return
     }
-    val cashLedgerIds = remember(uiState.ledgers) { uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }.map { it.ledgerId }.toSet() }
-    val bankLedgerIds = remember(uiState.ledgers) { uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) }.map { it.ledgerId }.toSet() }
+    val cashLedgerIds = remember(uiState.ledgers, uiState.groups) {
+        val groupsById = uiState.groups.associateBy { it.groupId }
+        uiState.ledgers.filter {
+            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+        }.map { it.ledgerId }.toSet()
+    }
+    val bankLedgerIds = remember(uiState.ledgers, uiState.groups) {
+        val groupsById = uiState.groups.associateBy { it.groupId }
+        uiState.ledgers.filter {
+            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
+        }.map { it.ledgerId }.toSet()
+    }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         BackRow(reportKey!!, onBack = { reportKey = null })
         when (reportKey) {
@@ -280,7 +292,7 @@ private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnD
             }
         )
         when (reportKey) {
-            "GST Summary" -> GSTCenterView(report = uiState.gstSummary)
+            "GST Summary" -> GSTCenterView(report = uiState.gstSummary, trialBalance = uiState.trialBalance)
             "HSN/SAC Summary" -> HsnSacSummaryView(uiState.hsnSacSummary)
             "GST Return Dashboard" -> GstReturnDashboardView(
                 uiState = uiState,
@@ -296,7 +308,10 @@ private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnD
                 onSubmitOnline = gstReturnActions.onSubmitOnline,
                 onUpdateGstEnabled = gstReturnActions.onUpdateGstEnabled,
                 onUpdateGstScheme = gstReturnActions.onUpdateGstScheme,
-                onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency
+                onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency,
+                onExportCsv = gstReturnActions.onExportCsv,
+                onExportGstrJson = gstReturnActions.onExportGstrJson,
+                onSetNilReturn = gstReturnActions.onSetNilReturn
             )
         }
     }
@@ -323,7 +338,14 @@ data class GstReturnDashboardActions(
     val onSubmitOnline: () -> Unit,
     val onUpdateGstEnabled: (Boolean) -> Unit,
     val onUpdateGstScheme: (com.example.accounting.domain.taxation.gstreturn.GstScheme) -> Unit,
-    val onUpdateGstFilingFrequency: (com.example.accounting.domain.taxation.gstreturn.GstReturnPeriodicity) -> Unit
+    val onUpdateGstFilingFrequency: (com.example.accounting.domain.taxation.gstreturn.GstReturnPeriodicity) -> Unit,
+    /** Phase 8A, Part 2 - CSV/GST JSON export+share, alongside the existing plain-JSON
+     * onGenerateJson/onShareArtifact pair. Both build and share a file the same way
+     * [AccountingViewModel.exportReportAndShare] already does for Trial Balance/P&L/Balance Sheet. */
+    val onExportCsv: () -> Unit = {},
+    val onExportGstrJson: () -> Unit = {},
+    /** Phase 8A, Part 2 - see [com.example.accounting.presentation.viewmodel.AccountingViewModel.setSelectedGstReturnNil]. */
+    val onSetNilReturn: (Boolean) -> Unit = {}
 )
 
 @Composable

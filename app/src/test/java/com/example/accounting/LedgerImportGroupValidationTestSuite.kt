@@ -106,4 +106,51 @@ class LedgerImportGroupValidationTestSuite {
         assertTrue("expected the pre-existing 'missing group id column' message, was: $message", message?.contains("group id column") == true)
         assertTrue(repository.getLedgers(companyId).first().isEmpty())
     }
+
+    /**
+     * Import-review group-picker fix - [groupIdOverride] (the reviewer's own dropdown choice) must
+     * win even when the file's own "groupid" column exists and is different, since the file column
+     * is never something a real external Balance Sheet export could reliably supply as this app's
+     * internal groupId string.
+     */
+    @Test
+    fun testReviewAndCreate_groupIdOverride_winsOverFileColumn() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompanyAndFy()
+        dao.insertGroup(GroupEntity("GRP_FROM_PICKER", companyId, "Bank OD A/c", PrimaryGroup.LIABILITIES, null, true, false, 1))
+        val repository = AccountingRepository(dao, db = null)
+        val service = DataImportManagementService(CsvJsonDataImportAdapter(dao), repository)
+
+        // The file column names a group that does not even exist - proving it is never consulted
+        // once an override is supplied.
+        val result = service.reviewAndCreate(companyId, ledgerSuggestion("GRP_DOES_NOT_EXIST"), ImportSuggestionType.LEDGER, groupIdOverride = "GRP_FROM_PICKER")
+
+        assertTrue(result is AccountingResult.Success)
+        val ledgers = repository.getLedgers(companyId).first()
+        assertEquals(1, ledgers.size)
+        assertEquals("GRP_FROM_PICKER", ledgers.first().groupId)
+    }
+
+    /** [groupIdOverride] alone must be sufficient - a file with no group column at all (the normal
+     * case for a real external Balance Sheet export) must still succeed once the reviewer picks a
+     * Group in the UI. */
+    @Test
+    fun testReviewAndCreate_groupIdOverride_worksWithNoFileGroupColumnAtAll() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompanyAndFy()
+        dao.insertGroup(GroupEntity("GRP_FROM_PICKER", companyId, "Secured Loans", PrimaryGroup.LIABILITIES, null, true, false, 1))
+        val repository = AccountingRepository(dao, db = null)
+        val service = DataImportManagementService(CsvJsonDataImportAdapter(dao), repository)
+        val suggestion = ImportRowSuggestion(
+            rowNumber = 1, suggestionType = ImportSuggestionType.LEDGER,
+            fieldValues = mapOf("name" to "Imported Ledger"), confidenceScore = 1.0
+        )
+
+        val result = service.reviewAndCreate(companyId, suggestion, ImportSuggestionType.LEDGER, groupIdOverride = "GRP_FROM_PICKER")
+
+        assertTrue(result is AccountingResult.Success)
+        val ledgers = repository.getLedgers(companyId).first()
+        assertEquals(1, ledgers.size)
+        assertEquals("GRP_FROM_PICKER", ledgers.first().groupId)
+    }
 }

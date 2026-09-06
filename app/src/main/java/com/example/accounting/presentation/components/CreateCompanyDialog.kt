@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,17 +50,24 @@ fun CreateCompanyDialog(
     isLookingUp: Boolean = false,
     lookupResult: com.example.accounting.domain.profile.PinCodeLookupResult? = null,
     onLookupPinCode: (String) -> Unit = {},
-    onCreateCompany: (String, String, String, String, String, String, String, String, String) -> Unit
+    /** Edit-Company fix - same create-vs-edit dialog pattern as [CreateLedgerDialog]'s
+     * [CreateLedgerDialog]/`existingLedger`: non-null here switches the dialog into editing this
+     * exact company (fields pre-filled, [onUpdateCompany] called instead of [onCreateCompany]) -
+     * previously there was no UI anywhere to change a company's own name/GSTIN/PAN/address/phone/
+     * email after creation, despite the repository already supporting it. */
+    existingCompany: com.example.accounting.domain.company.Company? = null,
+    onCreateCompany: (String, String, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onUpdateCompany: (companyId: String, String, String, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> }
 ) {
-    var name by remember { mutableStateOf("") }
-    var tradeName by remember { mutableStateOf("") }
-    var gstin by remember { mutableStateOf("") }
-    var pan by remember { mutableStateOf("") }
-    var stateCode by remember { mutableStateOf("27") }
-    var address by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var pinCode by remember { mutableStateOf("") }
+    var name by remember(existingCompany) { mutableStateOf(existingCompany?.name ?: "") }
+    var tradeName by remember(existingCompany) { mutableStateOf(existingCompany?.tradeName ?: "") }
+    var gstin by remember(existingCompany) { mutableStateOf(existingCompany?.gstin ?: "") }
+    var pan by remember(existingCompany) { mutableStateOf(existingCompany?.pan ?: "") }
+    var stateCode by remember(existingCompany) { mutableStateOf(existingCompany?.stateCode ?: "27") }
+    var address by remember(existingCompany) { mutableStateOf(existingCompany?.address ?: "") }
+    var email by remember(existingCompany) { mutableStateOf(existingCompany?.email ?: "") }
+    var phone by remember(existingCompany) { mutableStateOf(existingCompany?.phone ?: "") }
+    var pinCode by remember(existingCompany) { mutableStateOf(existingCompany?.pinCode ?: "") }
 
     LaunchedEffect(pinCode) {
         if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
@@ -73,7 +82,9 @@ fun CreateCompanyDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        // decorFitsSystemWindows = false - required for navigationBarsPadding() below to have any
+        // effect inside a Dialog's separate window (see CreateLedgerDialog's fuller note).
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -82,24 +93,21 @@ fun CreateCompanyDialog(
                 .fillMaxWidth(0.94f)
                 .padding(vertical = 16.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
-                            text = "Add Company",
+                            text = if (existingCompany != null) "Edit Company" else "Add Company",
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Set up a new business to track",
+                            text = if (existingCompany != null) "Update this company's details" else "Set up a new business to track",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -108,9 +116,15 @@ fun CreateCompanyDialog(
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
+                HorizontalDivider()
 
-                Spacer(modifier = Modifier.height(14.dp))
-
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -219,11 +233,14 @@ fun CreateCompanyDialog(
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(18.dp))
-
+                HorizontalDivider()
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onDismiss) {
@@ -232,13 +249,17 @@ fun CreateCompanyDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
+                            if (existingCompany != null) {
+                                onUpdateCompany(existingCompany.companyId, name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
+                            } else {
+                                onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
+                            }
                             onDismiss()
                         },
                         enabled = name.isNotBlank(),
                         modifier = Modifier.testTag("submit_company_button")
                     ) {
-                        Text("Create Company")
+                        Text(if (existingCompany != null) "Update Company" else "Create Company")
                     }
                 }
             }

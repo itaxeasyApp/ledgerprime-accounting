@@ -109,11 +109,18 @@ internal object VoucherPostingEngine {
             }
             for (item in items) {
                 val ledger = dao.getLedgerById(voucher.companyId, item.ledgerId)
-                // Direct-prefix check kept as a guaranteed fast path (matches every ledger filed
+                // Direct-match check kept as a guaranteed fast path (matches every ledger filed
                 // straight under the System group, the common case) alongside the ancestor walk
                 // (covers a ledger filed under a User Group nested further down) - never only one.
+                // Bank/Bank-OD collision fix (live-device audit finding) - a raw
+                // `startsWith("GRP_BANK_")` also matched "GRP_BANK_OD_..." (Bank OD is a LIABILITY,
+                // "GRP_BANK_OD" itself starts with "GRP_BANK_"), letting a Bank OD/loan ledger
+                // through as if it were an ordinary Cash/Bank asset ledger for Contra transfers -
+                // isExactSystemGroup resolves the longest matching bare group id first, so
+                // "GRP_BANK_OD_x" now correctly fails this check.
                 val isCashOrBank = ledger != null && (
-                    ledger.groupId.startsWith("GRP_BANK_") || ledger.groupId.startsWith("GRP_CASH_") ||
+                    StandardSystemGroups.isExactSystemGroup(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                        StandardSystemGroups.isExactSystemGroup(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
                         StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
                         StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
                     )

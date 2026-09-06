@@ -41,8 +41,19 @@ class DataImportManagementService(
      * [ImportRowSuggestion.fieldValues] - [resolvedType] is the human reviewer's own confirmed
      * choice (never trusted from [ImportRowSuggestion.suggestionType] alone, since that field is
      * itself only a best-effort guess). A missing required column is a structured
-     * [AppError.ValidationError], never a guessed default. */
-    suspend fun reviewAndCreate(companyId: String, suggestion: ImportRowSuggestion, resolvedType: ImportSuggestionType): AccountingResult<Any> {
+     * [AppError.ValidationError], never a guessed default.
+     *
+     * Import-review group-picker fix - [groupIdOverride], when supplied, is the human reviewer's
+     * own group choice from a live dropdown of the company's real, already-existing Groups (built
+     * from [AccountingRepository.getGroups], same source [com.example.accounting.presentation.components.CreateLedgerDialog]
+     * uses) and always wins over whatever the imported file's own "groupid"/"group" column
+     * contained. Before this, a LEDGER row's group came only from that raw file column, which had
+     * to already be this app's own internal groupId string (e.g. "GRP_BANK_OD_COMP123") - not
+     * something any real external Balance Sheet export would ever contain, making it practically
+     * impossible to correctly classify an imported Bank OD/Loan/etc. ledger. `null` (the default)
+     * preserves the original file-column-only behavior exactly, for any caller that already has a
+     * valid internal groupId (existing tests, programmatic imports). */
+    suspend fun reviewAndCreate(companyId: String, suggestion: ImportRowSuggestion, resolvedType: ImportSuggestionType, groupIdOverride: String? = null): AccountingResult<Any> {
         val fields = suggestion.fieldValues
         return when (resolvedType) {
             ImportSuggestionType.PARTY -> {
@@ -62,8 +73,8 @@ class DataImportManagementService(
             ImportSuggestionType.LEDGER -> {
                 val name = firstNonBlank(fields, "name", "ledgername", "ledger")
                     ?: return AccountingResult.Failure(AppError.ValidationError("Row ${suggestion.rowNumber}: could not find a ledger name column."))
-                val groupId = firstNonBlank(fields, "groupid", "group")
-                    ?: return AccountingResult.Failure(AppError.ValidationError("Row ${suggestion.rowNumber}: could not find a group id column."))
+                val groupId = groupIdOverride ?: firstNonBlank(fields, "groupid", "group")
+                    ?: return AccountingResult.Failure(AppError.ValidationError("Row ${suggestion.rowNumber}: no Account Group was selected and the file has no group id column."))
                 // Verified live: AccountingRepository.createLedger performs no existence check of
                 // its own on `ledger.groupId` before inserting - without this lookup, an imported
                 // row with a typo'd or cross-company group id would silently create a ledger that

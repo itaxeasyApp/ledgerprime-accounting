@@ -756,6 +756,14 @@ interface AccountingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertGstReturnSection(section: GstReturnSectionEntity)
 
+    /** Phase 8A, Part 2 - cleans up a return's own STALE section rows whose key is no longer part
+     * of the current build (e.g. a return PREPAREd before Part 1's real-statutory-table rebuild
+     * still carries old "B2C"/"NIL_EXEMPT" rows that upsert alone would never remove, since it only
+     * ever adds/updates the keys the CURRENT build actually returns). Scoped to one gstReturnId and
+     * an explicit keep-list - never a blanket delete. */
+    @Query("DELETE FROM gst_return_sections WHERE gstReturnId = :gstReturnId AND sectionKey NOT IN (:keepKeys)")
+    suspend fun deleteGstReturnSectionsNotIn(gstReturnId: String, keepKeys: List<String>)
+
     @Query("SELECT * FROM gst_return_submissions WHERE gstReturnId = :gstReturnId ORDER BY attemptNumber ASC")
     suspend fun getSubmissionsForGstReturn(gstReturnId: String): List<GstReturnSubmissionEntity>
 

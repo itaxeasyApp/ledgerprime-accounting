@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +113,11 @@ fun CreateVoucherDialog(
      * already-cancelled original so the user only has to fix what was wrong, not retype everything.
      * `null` (every other caller) leaves the form's normal empty-state defaults untouched. */
     prefillFrom: Voucher? = null,
+    /** Extend-correction-to-all-types fix - (gstRatePercent, hsnSacCode) for a Sale/Purchase
+     * `prefillFrom`, sourced by the caller from the cancelled original's own GstTransaction (never
+     * carried on `Voucher`/`JournalItem` itself - see `AccountingViewModel.correctVoucher`'s doc
+     * comment). `null` whenever `prefillFrom` isn't a GST-bearing account-only Sale/Purchase. */
+    prefillGstDetail: Pair<Double, String>? = null,
     onDismiss: () -> Unit,
     onAddNewParty: (PartyRole) -> Unit = {},
     onAddNewBankLedger: () -> Unit = {},
@@ -180,7 +187,8 @@ fun CreateVoucherDialog(
     // ancestor walk (covers a ledger filed under a nested User Group), never only one.
     val groupsById = remember(groups) { groups.associateBy { it.groupId } }
     fun isCashOrBankLedger(ledger: Ledger) =
-        ledger.groupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") || ledger.groupId.startsWith("${StandardSystemGroups.CASH_GROUP_ID}_") ||
+        StandardSystemGroups.isExactSystemGroup(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+            StandardSystemGroups.isExactSystemGroup(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
             StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
             StandardSystemGroups.isUnder(ledger.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
     val cashBankLedgers = remember(ledgers, groupsById) { ledgers.filter(::isCashOrBankLedger) }
@@ -211,7 +219,30 @@ fun CreateVoucherDialog(
                 ?: if (selectedType == VoucherType.CONTRA) cashBankLedgers.lastOrNull()?.ledgerId ?: "" else ledgers.lastOrNull()?.ledgerId ?: ""
         )
     }
-    var amountInput by remember(prefillFrom) { mutableStateOf(prefillFrom?.totalDebits?.takeIf { it.isPositive }?.formatPlain() ?: "") }
+    // Correct-Voucher amount-prefill fix - a Sale/Purchase's totalDebits is the GRAND total
+    // (taxable value + every GST duty line combined, e.g. Purchase Account 100000 + CGST 14000 +
+    // SGST 14000 = totalDebits 128000), but the account-only Sale/Purchase amount FIELD below
+    // means the TAXABLE base only (GST is added ON TOP of it again at posting time via
+    // postAccountOnlyTradingDocument -> TradingWorkflowEngine). Prefilling this field with
+    // totalDebits therefore silently double-counted tax on every corrected Sale/Purchase re-post
+    // (a ₹1,28,000 purchase would repost as ₹1,63,840 if the user didn't notice and fix the figure
+    // manually) - never a benign display quirk, an actual inflated repost. For a Sale/Purchase this
+    // now seeds from the trade-ledger line's own amount (lineOrder != 1, the same line
+    // [prefillTradeItem] below resolves for [tradeLedgerId]) - the true taxable value, matching
+    // exactly what this field means when a user types a fresh voucher. Every other voucher type
+    // (Contra/Journal/Receipt/Payment) keeps using totalDebits - unchanged, since those really do
+    // mean the whole line amount with no separate GST component to double-count.
+    var amountInput by remember(prefillFrom) {
+        mutableStateOf(
+            prefillFrom?.let { pf ->
+                if (pf.voucherType == VoucherType.SALES || pf.voucherType == VoucherType.PURCHASE) {
+                    pf.items.firstOrNull { it.lineOrder != 1 }?.amount
+                } else {
+                    pf.totalDebits
+                }
+            }?.takeIf { it.isPositive }?.formatPlain() ?: ""
+        )
+    }
     var narration by remember(prefillFrom) { mutableStateOf(prefillFrom?.narration ?: "") }
     var referenceNumber by remember(prefillFrom) { mutableStateOf(prefillFrom?.referenceNumber ?: "") }
     var debitDropdownExpanded by remember { mutableStateOf(false) }
@@ -220,15 +251,29 @@ fun CreateVoucherDialog(
     val amountMoney = remember(amountInput) { Money.parse(amountInput) }
 
     // ==== Sale/Purchase item-line form state ====
-    var partyLedgerId by remember { mutableStateOf("") }
-    var tradeLedgerId by remember {
-        mutableStateOf(ledgers.firstOrNull { if (isSaleFlow) isSalesLedger(it) else isPurchaseLedger(it) }?.ledgerId ?: "")
+    // Extend-correction-to-all-types fix - a Sale/Purchase prefillFrom's party line is always
+    // lineOrder == 1 (the same convention AccountingRepository.resolveTradeCounterparty relies on
+    // elsewhere in this codebase, confirmed in TradingWorkflowEngine.build()/buildAccountOnly()),
+    // the trade ledger is the other line.
+    val isPrefillTrading = prefillFrom?.voucherType == VoucherType.SALES || prefillFrom?.voucherType == VoucherType.PURCHASE
+    val prefillPartyItem = remember(prefillFrom) { prefillFrom?.items?.firstOrNull { it.lineOrder == 1 } }
+    val prefillTradeItem = remember(prefillFrom) { prefillFrom?.items?.firstOrNull { it.lineOrder != 1 } }
+    var partyLedgerId by remember(prefillFrom) {
+        mutableStateOf(if (isPrefillTrading) prefillPartyItem?.ledgerId ?: "" else "")
+    }
+    var tradeLedgerId by remember(prefillFrom) {
+        mutableStateOf(
+            (if (isPrefillTrading) prefillTradeItem?.ledgerId else null)
+                ?: ledgers.firstOrNull { if (isSaleFlow) isSalesLedger(it) else isPurchaseLedger(it) }?.ledgerId ?: ""
+        )
     }
     var lines by remember { mutableStateOf(listOf(LineFormState())) }
     // Accounting-flow audit fix - Account-Only Sale/Purchase GST rate/HSN, only ever read when
     // isInventoryEnabled is false and gstApplicable is true (see TradingForm's own gating).
-    var accountOnlyGstRateInput by remember { mutableStateOf("0") }
-    var accountOnlyHsnSacInput by remember { mutableStateOf("") }
+    // Extend-correction-to-all-types fix - seeded from prefillGstDetail when correcting a Sale/
+    // Purchase (never carried on Voucher/JournalItem itself, see prefillGstDetail's doc comment).
+    var accountOnlyGstRateInput by remember(prefillFrom) { mutableStateOf(prefillGstDetail?.first?.let { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() } ?: "0") }
+    var accountOnlyHsnSacInput by remember(prefillFrom) { mutableStateOf(prefillGstDetail?.second ?: "") }
     var partyDropdownExpanded by remember { mutableStateOf(false) }
     var tradeDropdownExpanded by remember { mutableStateOf(false) }
     val itemsMap = remember(stockItems) { stockItems.associateBy { it.itemId } }
@@ -300,10 +345,33 @@ fun CreateVoucherDialog(
     }
 
     // ==== Receipt/Payment settlement form state ====
-    var settlementPartyLedgerId by remember { mutableStateOf("") }
-    var settlementCashBankLedgerId by remember { mutableStateOf(cashBankLedgers.firstOrNull()?.ledgerId ?: "") }
+    // Extend-correction-to-all-types fix - prefills party ledger, cash/bank ledger, and amount from
+    // the cancelled original; deliberately never the original invoice allocation (see
+    // VOUCHER_CORRECTION_ELIGIBLE_TYPES's doc comment - cancelling the original settlement already
+    // makes its invoice(s) outstanding again, so the user re-allocates on repost). Receipt debits
+    // the cash/bank ledger (party is credited); Payment is the reverse - resolve each side by type,
+    // not by lineOrder, since Receipt/Payment vouchers don't follow the trading lineOrder==1
+    // convention.
+    val isPrefillSettlement = prefillFrom?.voucherType == VoucherType.RECEIPT || prefillFrom?.voucherType == VoucherType.PAYMENT
+    val prefillSettlementPartyItem = remember(prefillFrom) {
+        prefillFrom?.items?.firstOrNull { if (prefillFrom.voucherType == VoucherType.RECEIPT) it.type == com.example.accounting.core.common.DrCr.CREDIT else it.type == com.example.accounting.core.common.DrCr.DEBIT }
+    }
+    val prefillSettlementCashBankItem = remember(prefillFrom) {
+        prefillFrom?.items?.firstOrNull { if (prefillFrom.voucherType == VoucherType.RECEIPT) it.type == com.example.accounting.core.common.DrCr.DEBIT else it.type == com.example.accounting.core.common.DrCr.CREDIT }
+    }
+    var settlementPartyLedgerId by remember(prefillFrom) {
+        mutableStateOf(if (isPrefillSettlement) prefillSettlementPartyItem?.ledgerId ?: "" else "")
+    }
+    var settlementCashBankLedgerId by remember(prefillFrom) {
+        mutableStateOf(
+            (if (isPrefillSettlement) prefillSettlementCashBankItem?.ledgerId else null)
+                ?: cashBankLedgers.firstOrNull()?.ledgerId ?: ""
+        )
+    }
     var paymentMode by remember { mutableStateOf("BANK") }
-    var settlementAmountInput by remember { mutableStateOf("") }
+    var settlementAmountInput by remember(prefillFrom) {
+        mutableStateOf(if (isPrefillSettlement) prefillFrom?.totalDebits?.takeIf { it.isPositive }?.formatPlain() ?: "" else "")
+    }
     var allocationInputs by remember { mutableStateOf(mapOf<String, String>()) }
     var settlementPartyDropdownExpanded by remember { mutableStateOf(false) }
     val eligibleSettlementParties = remember(ledgers, isReceiptFlow) {
@@ -317,7 +385,9 @@ fun CreateVoucherDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        // decorFitsSystemWindows = false - required for navigationBarsPadding() below to have any
+        // effect inside a Dialog's separate window (see CreateLedgerDialog's fuller note).
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -326,14 +396,25 @@ fun CreateVoucherDialog(
                 .fillMaxWidth(0.94f)
                 .padding(vertical = 16.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Hoisted out of the scrollable body below - also needed by the fixed footer's
+                // Post button (`enabled = isReady && ...`), which now lives outside that scroll area.
+                val isReady = when {
+                    isTradingFlow -> partyLedgerId.isNotBlank() && tradeLedgerId.isNotBlank() &&
+                        if (isInventoryEnabled) {
+                            lines.any { it.itemId.isNotBlank() && (it.quantityInput.toDoubleOrNull() ?: 0.0) > 0.0 }
+                        } else {
+                            amountMoney.isPositive
+                        }
+                    isNoteFlow -> originalVoucherId.isNotBlank()
+                    isSettlementFlow -> settlementPartyLedgerId.isNotBlank() && settlementCashBankLedgerId.isNotBlank() && settlementAmountMoney.isPositive && unallocatedRemainder.paise >= 0L
+                    else -> amountMoney.isPositive && debitLedgerId.isNotBlank() && creditLedgerId.isNotBlank()
+                }
+
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -352,9 +433,15 @@ fun CreateVoucherDialog(
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
+                HorizontalDivider()
 
-                Spacer(modifier = Modifier.height(14.dp))
-
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 if (!lockedType) {
                 Text(
                     text = "Voucher Nature",
@@ -382,8 +469,14 @@ fun CreateVoucherDialog(
                                 selectedType = type
                                 when (type) {
                                     VoucherType.CONTRA -> {
-                                        debitLedgerId = cashBankLedgers.firstOrNull { it.groupId.startsWith("${StandardSystemGroups.BANK_GROUP_ID}_") }?.ledgerId ?: cashBankLedgers.firstOrNull()?.ledgerId ?: ""
-                                        creditLedgerId = cashBankLedgers.firstOrNull { it.groupId.startsWith("${StandardSystemGroups.CASH_GROUP_ID}_") }?.ledgerId ?: cashBankLedgers.lastOrNull()?.ledgerId ?: ""
+                                        debitLedgerId = cashBankLedgers.firstOrNull {
+                                            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                                                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
+                                        }?.ledgerId ?: cashBankLedgers.firstOrNull()?.ledgerId ?: ""
+                                        creditLedgerId = cashBankLedgers.firstOrNull {
+                                            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                                                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+                                        }?.ledgerId ?: cashBankLedgers.lastOrNull()?.ledgerId ?: ""
                                     }
                                     VoucherType.SALES -> {
                                         partyLedgerId = ledgers.firstOrNull(::isDebtorLedger)?.ledgerId ?: ""
@@ -614,17 +707,6 @@ fun CreateVoucherDialog(
                     isSettlementFlow -> settlementAmountMoney
                     else -> amountMoney
                 }
-                val isReady = when {
-                    isTradingFlow -> partyLedgerId.isNotBlank() && tradeLedgerId.isNotBlank() &&
-                        if (isInventoryEnabled) {
-                            lines.any { it.itemId.isNotBlank() && (it.quantityInput.toDoubleOrNull() ?: 0.0) > 0.0 }
-                        } else {
-                            amountMoney.isPositive
-                        }
-                    isNoteFlow -> originalVoucherId.isNotBlank()
-                    isSettlementFlow -> settlementPartyLedgerId.isNotBlank() && settlementCashBankLedgerId.isNotBlank() && settlementAmountMoney.isPositive && unallocatedRemainder.paise >= 0L
-                    else -> amountMoney.isPositive && debitLedgerId.isNotBlank() && creditLedgerId.isNotBlank()
-                }
 
                 Surface(
                     shape = RoundedCornerShape(8.dp),
@@ -651,7 +733,7 @@ fun CreateVoucherDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+            }
 
                 // Save as Draft is offered only for the generic double-entry flows (Contra/Journal/
                 // Receipt/Payment) where the form already holds a flat debit/credit ledger pair -
@@ -662,7 +744,14 @@ fun CreateVoucherDialog(
                     debitLedgerId.isNotBlank() && creditLedgerId.isNotBlank()
                 }
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                     if (!isTradingFlow && !isNoteFlow) {
                         Spacer(modifier = Modifier.width(8.dp))

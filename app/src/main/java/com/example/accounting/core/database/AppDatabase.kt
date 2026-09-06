@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.accounting.core.common.Constants
 import com.example.accounting.core.database.converters.RoomConverters
 import com.example.accounting.data.local.dao.AccountingDao
 import com.example.accounting.data.local.entity.AccountingPeriodEntity
@@ -91,7 +92,7 @@ import com.example.accounting.data.local.entity.VoucherStockLineEntity
         GstReturnSectionEntity::class,
         GstReturnSubmissionEntity::class
     ],
-    version = 22,
+    version = 24,
     exportSchema = false
 )
 @TypeConverters(RoomConverters::class)
@@ -1118,6 +1119,82 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+        /**
+         * Group-hierarchy audit fix - `AccountingRepository.createCompany()` was seeding only a
+         * flat 10-group subset (Bank/Cash/Debtors/Creditors/Duties/Sales/Purchase/Direct-Indirect
+         * Expenses/Capital, all with `parentGroupId = NULL`) instead of the canonical, correctly
+         * nested 28-group hierarchy (`StandardSystemGroups.getStandardGroupsForCompany`) already
+         * used elsewhere in this file. Every company created before this fix is missing 17 System
+         * Groups entirely - most importantly Loans (Liability)/Bank OD A/c/Secured Loans/Unsecured
+         * Loans, so a company with a real Bank OD, CC, or loan account had no existing appropriate
+         * Liabilities-side Group to file it under at all.
+         *
+         * Purely additive and idempotent: `INSERT OR IGNORE` keyed on each group's already-unique
+         * `groupId` primary key, so a company's own already-existing groups (Bank/Cash/Debtors/
+         * Creditors/Duties/Sales/Purchase/Direct-Indirect Expenses/Capital) are left completely
+         * untouched - not reparented, not renamed, not reclassified - only the groups that never
+         * existed for that company are backfilled. No ledger, voucher, or journal-item row is
+         * touched; no existing Group's `parentGroupId` changes, so no prior Trial
+         * Balance/Balance Sheet figure is altered by this migration (the report engine derives
+         * Bank/Cash/Debtors/Creditors/Duties totals by exact `groupId` lookup, never by walking
+         * up from a child - see `AccountingRepository.generateBalanceSheet`'s `netDebit`/`netCredit`
+         * helpers). Satisfies Invariant 21 (no destructive fallback migration). Parent groups are
+         * inserted before the children that reference them by `parentGroupId` for readability only
+         * - `account_groups` has no self-referencing foreign key, so insert order has no functional
+         * effect.
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                fun backfillGroup(bareId: String, name: String, primaryGroup: String, parentBareId: String?, affectsGrossProfit: Boolean, displayOrder: Int) {
+                    val parentExpr = if (parentBareId != null) "'${parentBareId}_' || companyId" else "NULL"
+                    db.execSQL(
+                        """
+                        INSERT OR IGNORE INTO account_groups (groupId, companyId, name, primaryGroup, parentGroupId, isSystem, affectsGrossProfit, displayOrder)
+                        SELECT '${bareId}_' || companyId, companyId, '$name', '$primaryGroup', $parentExpr, 1, ${if (affectsGrossProfit) 1 else 0}, $displayOrder
+                        FROM companies
+                        """.trimIndent()
+                    )
+                }
+
+                // EQUITY
+                backfillGroup("GRP_RESERVES", Constants.SYS_RESERVES_SURPLUS, "EQUITY", null, false, 20)
+
+                // ASSETS (parent container first, then its children)
+                backfillGroup("GRP_CURRENT_ASSETS", Constants.SYS_CURRENT_ASSETS, "ASSETS", null, false, 30)
+                backfillGroup("GRP_DEPOSITS", Constants.SYS_DEPOSITS_ASSET, "ASSETS", "GRP_CURRENT_ASSETS", false, 33)
+                backfillGroup("GRP_LOANS_ADV", Constants.SYS_LOANS_ADVANCES, "ASSETS", "GRP_CURRENT_ASSETS", false, 34)
+                backfillGroup("GRP_STOCK", Constants.SYS_STOCK_IN_HAND, "ASSETS", "GRP_CURRENT_ASSETS", true, 35)
+                backfillGroup("GRP_FIXED_ASSETS", Constants.SYS_FIXED_ASSETS, "ASSETS", null, false, 40)
+                backfillGroup("GRP_INVESTMENTS", Constants.SYS_INVESTMENTS, "ASSETS", null, false, 50)
+                backfillGroup("GRP_MISC_EXP", Constants.SYS_MISC_EXPENSES, "ASSETS", null, false, 55)
+
+                // LIABILITIES (parent containers first, then their children)
+                backfillGroup("GRP_CURRENT_LIAB", Constants.SYS_CURRENT_LIABILITIES, "LIABILITIES", null, false, 60)
+                backfillGroup("GRP_PROVISIONS", Constants.SYS_PROVISIONS, "LIABILITIES", "GRP_CURRENT_LIAB", false, 62)
+                backfillGroup("GRP_LOANS", Constants.SYS_LOANS_LIABILITY, "LIABILITIES", null, false, 70)
+                backfillGroup("GRP_BANK_OD", Constants.SYS_BANK_OD, "LIABILITIES", "GRP_LOANS", false, 71)
+                backfillGroup("GRP_SECURED_LOANS", Constants.SYS_SECURED_LOANS, "LIABILITIES", "GRP_LOANS", false, 72)
+                backfillGroup("GRP_UNSECURED_LOANS", Constants.SYS_UNSECURED_LOANS, "LIABILITIES", "GRP_LOANS", false, 73)
+                backfillGroup("GRP_BRANCH_DIV", Constants.SYS_BRANCH_DIVISIONS, "LIABILITIES", null, false, 75)
+
+                // INCOME
+                backfillGroup("GRP_DIR_INCOME", Constants.SYS_DIRECT_INCOMES, "INCOME", null, true, 90)
+                backfillGroup("GRP_INDIR_INCOME", Constants.SYS_INDIRECT_INCOMES, "INCOME", null, false, 100)
+            }
+        }
+
+        /** Phase 8A, Part 2 - adds [GstReturnEntity.isNilReturn], the user's own explicit
+         * declaration that a period genuinely has zero outward supplies (never inferred silently
+         * from an empty section - see [Gstr1Validator]'s own "zero outward supplies" warning,
+         * which this flag is the one thing that suppresses). Defaults to 0/false for every
+         * existing row - an already-prepared return was never marked Nil before this column
+         * existed, so `false` is the only honest backfill, never a guess either way. */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gst_returns ADD COLUMN isNilReturn INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
     }
 }

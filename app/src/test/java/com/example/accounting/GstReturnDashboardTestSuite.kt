@@ -94,6 +94,9 @@ class GstReturnDashboardTestSuite {
 
         override suspend fun getSectionsForGstReturn(gstReturnId: String) = sections.values.filter { it.gstReturnId == gstReturnId }.sortedBy { it.sectionKey }
         override suspend fun upsertGstReturnSection(section: GstReturnSectionEntity) { sections["${section.gstReturnId}|${section.sectionKey}"] = section }
+        override suspend fun deleteGstReturnSectionsNotIn(gstReturnId: String, keepKeys: List<String>) {
+            sections.keys.filter { it.startsWith("$gstReturnId|") && sections[it]?.sectionKey !in keepKeys }.forEach { sections.remove(it) }
+        }
 
         override suspend fun getSubmissionsForGstReturn(gstReturnId: String) = submissions.filter { it.gstReturnId == gstReturnId }.sortedBy { it.attemptNumber }
         override suspend fun insertGstReturnSubmission(submission: GstReturnSubmissionEntity) { submissions += submission }
@@ -432,11 +435,12 @@ class GstReturnDashboardTestSuite {
         val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR1, GstReturnPeriodicity.MONTHLY, GstFilingMode.OFFLINE)
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         val sections = repo.getGstReturnSections(gr.gstReturnId)
-        // GSTR-1's real section set (B2B/B2C/EXP/NIL_EXEMPT/HSN - see t39 for the fuller check of
-        // each bucket's actual content), not one generic "SUMMARY" bucket.
-        assertEquals(5, sections.size)
+        // GSTR-1's real, statutorily-named section set (Phase 8A, Part 1 - B2B/B2CL/B2CS/CDNR/
+        // CDNUR/EXP/NIL/HSN/DOC_ISSUED via Gstr1ReturnBuilder - see t39 for the fuller check of
+        // each table's actual content), not one generic "SUMMARY" bucket.
+        assertEquals(9, sections.size)
         assertTrue(sections.all { it.resultDataJson != null })
-        assertTrue(sections.any { it.sectionKey == "B2C" })
+        assertTrue(sections.any { it.sectionKey == "B2CS" })
     }
 
     // ==========================================
@@ -696,11 +700,18 @@ class GstReturnDashboardTestSuite {
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         val sections = repo.getGstReturnSections(gr.gstReturnId).associateBy { it.sectionKey }
 
-        assertTrue("Real GSTR-1 section keys must exist", sections.keys.containsAll(setOf("B2B", "B2C", "EXP", "NIL_EXEMPT", "HSN")))
+        // Phase 8A, Part 1 - real statutory GSTR-1 tables (Gstr1ReturnBuilder), not the old generic
+        // B2C/NIL_EXEMPT buckets: the unregistered intra-state sale is B2CS (never invoice-level),
+        // and NIL_EXEMPT was renamed to NIL to match the real Table 8 name.
+        assertTrue("Real GSTR-1 section keys must exist", sections.keys.containsAll(setOf("B2B", "B2CL", "B2CS", "EXP", "NIL", "HSN", "DOC_ISSUED")))
         assertTrue(sections.getValue("B2B").resultDataJson!!.contains("\"count\":1"))
-        assertTrue(sections.getValue("B2C").resultDataJson!!.contains("\"count\":1"))
-        assertTrue("HSN summary must cover both outward lines", sections.getValue("HSN").resultDataJson!!.contains("\"count\":2"))
+        assertTrue(sections.getValue("B2CS").resultDataJson!!.contains("\"count\":1"))
+        assertTrue("B2CL/EXP must be empty for this data", sections.getValue("B2CL").resultDataJson!!.contains("\"count\":0"))
         assertTrue("No export in this data", sections.getValue("EXP").resultDataJson!!.contains("\"count\":0"))
+        // Both lines share the same HSN+rate (8471 @ 18%), so HSN has exactly one aggregated row
+        // whose taxable value is the SUM of both invoices (₹1000 + ₹500 = ₹1500 = 150000 paise).
+        assertTrue("HSN summary must have one aggregated row for the shared HSN/rate", sections.getValue("HSN").resultDataJson!!.contains("\"count\":1"))
+        assertTrue("HSN aggregate must sum both outward lines' taxable value", sections.getValue("HSN").resultDataJson!!.contains("\"taxableValuePaise\":150000"))
     }
 
     /** Same idea for GSTR-3B: forward-charge ITC and RCM must land in separate real sections

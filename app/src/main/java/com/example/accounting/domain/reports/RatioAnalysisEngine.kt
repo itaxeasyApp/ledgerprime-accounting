@@ -20,7 +20,8 @@ object RatioAnalysisEngine {
         // subtracts Debtors/Bank/Cash/Stock and Duties&Taxes out into their own named fields for
         // display) - the true totals a Current/Quick Ratio needs must add those named buckets back in.
         val totalCurrentAssetsPaise = balanceSheet.currentAssets.paise + balanceSheet.sundryDebtors.paise +
-            balanceSheet.bankAccounts.paise + balanceSheet.cashInHand.paise + balanceSheet.stockInHand.paise
+            balanceSheet.bankAccounts.paise + balanceSheet.cashInHand.paise + balanceSheet.stockInHand.paise +
+            balanceSheet.gstRecoverable.paise
         val totalCurrentLiabilitiesPaise = balanceSheet.currentLiabilities.paise + balanceSheet.dutiesAndTaxesLiability.paise
         val quickAssetsPaise = totalCurrentAssetsPaise - balanceSheet.stockInHand.paise
 

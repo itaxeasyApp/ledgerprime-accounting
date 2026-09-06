@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -102,6 +103,16 @@ fun ReportsScreen(
     }
 }
 
+/**
+ * Trial Balance safety pass - [generateTrialBalance][com.example.accounting.data.repository.AccountingRepository.generateTrialBalance]
+ * used to throw before ever returning a report when Debit != Credit, which meant the ONE report
+ * whose entire purpose is to reveal such an imbalance could never actually be displayed - and
+ * because [generateProfitAndLoss][com.example.accounting.data.repository.AccountingRepository.generateProfitAndLoss]
+ * calls it internally, that imbalance took P&L/Sales/Purchases figures down with it too, even
+ * though they have nothing to do with the unrelated ledger causing it. The repository now always
+ * returns the report; this view now always shows a clear Balanced/Out of Balance status strip
+ * (never just a banner that appears only on failure), so the difference is visible, not hidden.
+ */
 @Composable
 fun TrialBalanceView(report: TrialBalanceReport?) {
     if (report == null) {
@@ -112,10 +123,6 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Context header - the engine enforces Total Debit = Total Credit unconditionally
-        // (throwing a structured error before a report ever reaches here if it doesn't - see
-        // AppError.TrialBalanceNotBalanced); the UI presents figures, not the internal invariant.
-        // An imbalance banner only appears in the (should-never-happen) case one slips through.
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -125,22 +132,8 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
             Text(report.financialYearCode, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        if (!report.isBalanced) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Imbalance detected - difference ${report.difference.formatPlain()}. Please review recent entries.",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-        }
+        TrialBalanceStatusStrip(report)
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Table Header
         Row(
@@ -204,8 +197,72 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
     }
 }
 
+/** Always-visible Balanced/Out-of-Balance status strip - Total Debit, Total Credit and the exact
+ * Difference are shown regardless of outcome (never only surfaced on failure), so a bookkeeper can
+ * see at a glance both that the books balance AND the actual figures behind that fact. */
 @Composable
-fun ProfitAndLossView(report: ProfitAndLossReport?) {
+private fun TrialBalanceStatusStrip(report: TrialBalanceReport) {
+    val (bg, fg, label) = if (report.isBalanced) {
+        Triple(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, "Balanced")
+    } else {
+        Triple(MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer, "Out of Balance")
+    }
+    Surface(shape = RoundedCornerShape(10.dp), color = bg, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (report.isBalanced) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    contentDescription = null, tint = fg, modifier = Modifier.size(18.dp)
+                )
+                Text(label, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = fg, modifier = Modifier.weight(1f).padding(start = 6.dp))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column { Text("Total Debit", style = MaterialTheme.typography.labelSmall, color = fg); Text(report.totalClosingDebit.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace), color = fg) }
+                Column { Text("Total Credit", style = MaterialTheme.typography.labelSmall, color = fg); Text(report.totalClosingCredit.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace), color = fg) }
+                Column { Text("Difference", style = MaterialTheme.typography.labelSmall, color = fg); Text(report.difference.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace), color = fg) }
+            }
+            if (!report.isBalanced) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Review recent entries - this most often means an opening balance was entered on one side only.",
+                    style = MaterialTheme.typography.bodySmall, color = fg
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Reusable warning banner for every OTHER financial statement (P&L, Income & Expenditure, Balance
+ * Sheet, GST Summary) - shown whenever the underlying [TrialBalanceReport] is out of balance, since
+ * a statement built on unreliable underlying figures should say so rather than present numbers with
+ * silent, unstated confidence. Never blocks the statement from rendering (the numbers themselves may
+ * still be entirely correct - most Income/Expense figures are unaffected by an unrelated Balance-
+ * Sheet-side ledger's incomplete opening entry) - it is a disclosure, not a gate.
+ */
+@Composable
+fun TrialBalanceWarningBanner(trialBalance: TrialBalanceReport?) {
+    if (trialBalance == null || trialBalance.isBalanced) return
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Trial Balance is out of balance by ${trialBalance.difference.formatPlain()} - this statement may be unreliable until it's corrected.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+        }
+    }
+}
+
+@Composable
+fun ProfitAndLossView(report: ProfitAndLossReport?, trialBalance: TrialBalanceReport? = null) {
     if (report == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Calculating Profit & Loss...", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -220,6 +277,7 @@ fun ProfitAndLossView(report: ProfitAndLossReport?) {
             .padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        TrialBalanceWarningBanner(trialBalance)
         // Trading Account (Gross Profit) Card
         ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -282,7 +340,7 @@ fun ProfitAndLossView(report: ProfitAndLossReport?) {
 }
 
 @Composable
-fun IncomeAndExpenditureView(report: IncomeExpenditureReport?) {
+fun IncomeAndExpenditureView(report: IncomeExpenditureReport?, trialBalance: TrialBalanceReport? = null) {
     if (report == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Calculating Income & Expenditure...", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -297,6 +355,7 @@ fun IncomeAndExpenditureView(report: IncomeExpenditureReport?) {
             .padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        TrialBalanceWarningBanner(trialBalance)
         ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Income & Expenditure Account", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
@@ -330,7 +389,7 @@ fun IncomeAndExpenditureView(report: IncomeExpenditureReport?) {
 }
 
 @Composable
-fun BalanceSheetView(report: BalanceSheetReport?) {
+fun BalanceSheetView(report: BalanceSheetReport?, trialBalance: TrialBalanceReport? = null) {
     if (report == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Calculating Balance Sheet...", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -345,6 +404,11 @@ fun BalanceSheetView(report: BalanceSheetReport?) {
             .padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // A Balance Sheet still throws its OWN, independent imbalance check (a real Assets =
+        // Liabilities + Equity failure never reaches this view) - this banner is for the DIFFERENT,
+        // non-fatal case where the underlying Trial Balance is out of balance elsewhere (some other
+        // ledger's incomplete opening entry) while THIS statement's own identity still happens to hold.
+        TrialBalanceWarningBanner(trialBalance)
         // Context header - the engine enforces Assets = Liabilities + Equity unconditionally
         // (AppError.BalanceSheetNotBalanced would have been thrown before a report reaches here).
         Surface(
@@ -406,6 +470,9 @@ fun BalanceSheetView(report: BalanceSheetReport?) {
                 ReportLineItem(label = "Bank Accounts", amount = report.bankAccounts)
                 ReportLineItem(label = "Cash in Hand", amount = report.cashInHand)
                 ReportLineItem(label = "Other Current Assets", amount = report.currentAssets)
+                if (report.gstRecoverable.isPositive) {
+                    ReportLineItem(label = "Net GST Recoverable (Input Tax Credit)", amount = report.gstRecoverable)
+                }
                 if (report.miscExpensesAsset.isPositive) {
                     ReportLineItem(label = "Misc. Expenses (Asset)", amount = report.miscExpensesAsset)
                 }
@@ -425,7 +492,7 @@ fun BalanceSheetView(report: BalanceSheetReport?) {
 }
 
 @Composable
-fun GSTCenterView(report: GSTSummaryReport?) {
+fun GSTCenterView(report: GSTSummaryReport?, trialBalance: TrialBalanceReport? = null) {
     if (report == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Calculating GST Returns Summary...", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -440,6 +507,7 @@ fun GSTCenterView(report: GSTSummaryReport?) {
             .padding(bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        TrialBalanceWarningBanner(trialBalance)
         // GSTR-1 Outward Supplies Card
         ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {

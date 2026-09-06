@@ -11,12 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -25,9 +26,15 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,17 +49,30 @@ import com.example.accounting.core.common.DrCr
 import com.example.accounting.data.local.dao.VoucherAttachmentRow
 import com.example.accounting.domain.accounting.Voucher
 
-/** Voucher types [onCorrectVoucher] supports - deliberately Contra/Journal only. Both are always a
- * flat, unconditional 2-line debit/credit voucher (no invoice allocation, no GST, no stock),
- * exactly what [CreateVoucherDialog]'s prefill can always reconstruct byte-for-byte from
- * [Voucher.items]. Receipt/Payment build through the Settlement form instead (invoice allocation
- * against outstanding invoices) - correctly prefilling a REPOST of that allocation state is a
- * meaningfully harder, higher-risk problem than this pass takes on, so those keep today's plain
- * "Delete & Reverse then re-enter" flow unchanged; Sale/Purchase/Notes similarly keep their
- * existing correction mechanism (Credit/Debit Note, or cancel+repost from scratch). */
+/** Voucher types [onCorrectVoucher] supports. Contra/Journal are always a flat, unconditional
+ * 2-line debit/credit voucher (no invoice allocation, no GST, no stock) - [CreateVoucherDialog]'s
+ * prefill reconstructs them byte-for-byte from [Voucher.items].
+ *
+ * Extend-correction-to-all-types fix - Sale/Purchase and Receipt/Payment are now included too:
+ * - Sale/Purchase: only the ACCOUNT-ONLY shape is safely reconstructible this pass (party ledger,
+ *   trade ledger, amount, GST rate/HSN via a lookup at correction time). An inventory-tracked
+ *   Sale/Purchase additionally carries stock lines whose running-average-cost reconstruction is a
+ *   materially higher-risk problem, deliberately left for a dedicated pass - see the caller-side
+ *   `isInventoryEnabled` guard on [canCorrect] below, which this set alone does not express.
+ * - Receipt/Payment: prefills party ledger, cash/bank ledger, amount, narration, reference, date -
+ *   never the original invoice allocation. Cancelling the original settlement already makes its
+ *   invoice(s) outstanding again automatically, so the user re-allocates on repost against the
+ *   now-current outstanding list - a correct step, not a stopgap.
+ *
+ * Credit/Debit Notes are deliberately excluded - they already have their own correction mechanism
+ * (issuing another note), unchanged by this. */
 val VOUCHER_CORRECTION_ELIGIBLE_TYPES = setOf(
     com.example.accounting.domain.accounting.VoucherType.CONTRA,
-    com.example.accounting.domain.accounting.VoucherType.JOURNAL
+    com.example.accounting.domain.accounting.VoucherType.JOURNAL,
+    com.example.accounting.domain.accounting.VoucherType.SALES,
+    com.example.accounting.domain.accounting.VoucherType.PURCHASE,
+    com.example.accounting.domain.accounting.VoucherType.RECEIPT,
+    com.example.accounting.domain.accounting.VoucherType.PAYMENT
 )
 
 @Composable
@@ -60,10 +80,21 @@ fun VoucherDetailDialog(
     voucher: Voucher,
     onDismiss: () -> Unit,
     onDeleteVoucher: ((Voucher) -> Unit)? = null,
+    /** True in-place edit (live-device audit finding) - narration/reference number only, the one
+     * genuinely safe thing to mutate directly (see [com.example.accounting.data.repository.AccountingRepository.updateVoucherMetadata]'s
+     * doc comment for why amount/ledger/date stay on the [onCorrectVoucher] reversal path instead).
+     * `null` (the default) hides the Edit affordance entirely for callers that don't wire it. */
+    onUpdateVoucherMetadata: ((voucherId: String, narration: String, referenceNumber: String) -> Unit)? = null,
     /** Architecture correction (Voucher Correct workflow) - only ever shown for
      * [VOUCHER_CORRECTION_ELIGIBLE_TYPES]; `null` (the default) hides the affordance entirely for
      * callers that don't wire it. */
     onCorrectVoucher: ((Voucher) -> Unit)? = null,
+    /** Extend-correction-to-all-types fix - gates Sale/Purchase correction eligibility to
+     * account-only companies (see [VOUCHER_CORRECTION_ELIGIBLE_TYPES]'s doc comment for why
+     * inventory-tracked Sale/Purchase correction stays out of scope this pass). Irrelevant for
+     * every other voucher type. Defaults to `false` (the safer default: hides Sale/Purchase
+     * correction) so a caller that doesn't pass this explicitly never over-offers it. */
+    isInventoryEnabled: Boolean = false,
     /** Every voucher in the company, used only to resolve the two-way "Corrects .../Corrected by
      * ..." link display below - never mutated, never posted from here. Defaulted empty so every
      * existing call site keeps compiling with the link display simply not shown. */
@@ -84,6 +115,14 @@ fun VoucherDetailDialog(
     val correctsOriginal = voucher.referenceVoucherId
         ?.let { refId -> allVouchers.firstOrNull { it.voucherId == refId && it.voucherType == voucher.voucherType } }
     val correctedByVoucher = allVouchers.firstOrNull { it.referenceVoucherId == voucher.voucherId && it.voucherType == voucher.voucherType }
+    // True in-place edit (live-device audit finding) - local-only draft state for narration/
+    // reference number, keyed on the voucher so switching to a different voucher (dialog stays
+    // open, new `voucher` passed in) always starts from that voucher's own current values, never a
+    // stale edit carried over. Date is never editable here (see onUpdateVoucherMetadata's doc
+    // comment) - only shown.
+    var isEditingMetadata by remember(voucher.voucherId) { mutableStateOf(false) }
+    var editedNarration by remember(voucher.voucherId) { mutableStateOf(voucher.narration) }
+    var editedReference by remember(voucher.voucherId) { mutableStateOf(voucher.referenceNumber) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -99,6 +138,16 @@ fun VoucherDetailDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(20.dp)
+                    // The line-items table below used to sit in a LazyColumn sized with
+                    // Modifier.weight(1f, fill = false) inside this non-scrolling Column - once the
+                    // narration/correction-link banner/attachments/buttons around it already filled
+                    // the dialog's bounded height (routine on a phone screen), Column's weight
+                    // distribution had zero space left to give the only weighted child, so the
+                    // table silently rendered zero rows even though voucher.items (and the Total
+                    // row's correct sum below it) were never empty. Scrolling the whole dialog
+                    // instead guarantees every section - including the table - always gets the
+                    // space it actually needs.
+                    .verticalScroll(rememberScrollState())
             ) {
                 // Header
                 Row(
@@ -124,18 +173,67 @@ fun VoucherDetailDialog(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                         }
-                        Text(
-                            text = "Date: ${voucher.date} | Ref: ${voucher.referenceNumber.ifBlank { "N/A" }}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (!isEditingMetadata) {
+                            Text(
+                                text = "Date: ${voucher.date} | Ref: ${voucher.referenceNumber.ifBlank { "N/A" }}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (onUpdateVoucherMetadata != null && !voucher.isCancelled && !isEditingMetadata) {
+                            IconButton(onClick = {
+                                editedNarration = voucher.narration
+                                editedReference = voucher.referenceNumber
+                                isEditingMetadata = true
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit narration/reference")
+                            }
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
+
+                if (isEditingMetadata) {
+                    Text(
+                        text = "Date: ${voucher.date} (not editable - see Correct Voucher for a date fix)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editedReference,
+                        onValueChange = { editedReference = it },
+                        label = { Text("Reference Number") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editedNarration,
+                        onValueChange = { editedNarration = it },
+                        label = { Text("Narration") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { isEditingMetadata = false }) {
+                            Text("Cancel")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            onUpdateVoucherMetadata?.invoke(voucher.voucherId, editedNarration, editedReference)
+                            isEditingMetadata = false
+                        }) {
+                            Text("Save")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
 
                 if (correctsOriginal != null || correctedByVoucher != null) {
                     Surface(
@@ -187,10 +285,8 @@ fun VoucherDetailDialog(
 
                 HorizontalDivider()
 
-                LazyColumn(
-                    modifier = Modifier.weight(1f, fill = false)
-                ) {
-                    items(voucher.items) { item ->
+                Column {
+                    voucher.items.forEach { item ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -249,8 +345,14 @@ fun VoucherDetailDialog(
                 // Correct Voucher is only offered for a still-live (not already cancelled), not
                 // already-corrected, correction-eligible voucher - correcting an already-corrected
                 // one would leave two "corrected by" links pointing at the same original.
+                // Extend-correction-to-all-types fix - Sale/Purchase additionally requires
+                // account-only mode (see VOUCHER_CORRECTION_ELIGIBLE_TYPES's doc comment); every
+                // other eligible type is ungated by isInventoryEnabled.
+                val isSaleOrPurchase = voucher.voucherType == com.example.accounting.domain.accounting.VoucherType.SALES ||
+                    voucher.voucherType == com.example.accounting.domain.accounting.VoucherType.PURCHASE
                 val canCorrect = onCorrectVoucher != null && !voucher.isCancelled && correctedByVoucher == null &&
-                    voucher.voucherType in VOUCHER_CORRECTION_ELIGIBLE_TYPES
+                    voucher.voucherType in VOUCHER_CORRECTION_ELIGIBLE_TYPES &&
+                    (!isSaleOrPurchase || !isInventoryEnabled)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),

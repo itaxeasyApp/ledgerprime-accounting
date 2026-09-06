@@ -124,14 +124,15 @@ internal fun TradingForm(
     )
     Spacer(modifier = Modifier.height(8.dp))
 
-    // PARTY/COUNTERPARTY audit fix - Customer/Supplier is an optional role, never a mandatory
-    // gate: this list used to be filtered down to only Debtors-group (Sale) / Creditors-group
-    // (Purchase) ledgers, which made it impossible to post against any other valid existing
-    // ledger (e.g. a straight cash sale posted to the Cash ledger, or an income/expense account
-    // that was never formally registered as a Party). Every ledger is offered; Debtor/Creditor-
-    // group ledgers (the common case) are just sorted to the top for convenience.
+    // Reinstated per explicit user request (this was previously widened to "every ledger, Debtor/
+    // Creditor just sorted to top" - see git history - to cover a straight cash sale/an
+    // unregistered income-expense account; the user has since asked twice for the Customer/
+    // Supplier picker to show ONLY real Debtor/Creditor-group ledgers on a Sale/Purchase, matching
+    // the trade-ledger picker below (already Sales/Purchase-group only) - never a mixed unfiltered
+    // list of tax/bank/duty ledgers a party could never actually be). A cash sale or a not-yet-
+    // registered party still has "+ Add New Customer/Supplier" right below the list to create one.
     val partyLedgerOptions = remember(ledgers, isSale) {
-        ledgers.sortedByDescending { if (isSale) isDebtorLedger(it) else isCreditorLedger(it) }
+        ledgers.filter { if (isSale) isDebtorLedger(it) else isCreditorLedger(it) }
     }
     ExposedDropdownMenuBox(expanded = partyDropdownExpanded, onExpandedChange = onPartyDropdownExpandedChange) {
         OutlinedTextField(

@@ -67,6 +67,22 @@ class GstReturnManagementService(
     suspend fun markFiled(companyId: String, gstReturnId: String, acknowledgementNumber: String): AccountingResult<GstReturn> =
         repository.markGstReturnFiled(companyId, gstReturnId, acknowledgementNumber)
 
+    /** Phase 8A, Part 2 - see [com.example.accounting.data.repository.AccountingRepository.setGstReturnNilFlag]'s own KDoc. */
+    suspend fun setNilReturn(companyId: String, gstReturnId: String, isNil: Boolean): AccountingResult<GstReturn> =
+        repository.setGstReturnNilFlag(companyId, gstReturnId, isNil)
+
     suspend fun submitOnline(companyId: String, gstReturnId: String, fy: FinancialYear): AccountingResult<GstReturn> =
         repository.submitGstReturnOnline(companyId, gstReturnId, fy, onlineFilingGateway)
+
+    /** Phase 8A, Part 1 - JSON/CSV/GSTR_JSON export of the prepared GSTR-1 draft (see
+     * [com.example.accounting.data.repository.AccountingRepository.exportGstReturnAs]). */
+    suspend fun exportDraft(companyId: String, gstReturnId: String, fy: FinancialYear, format: com.example.accounting.domain.export.ExportFormat): AccountingResult<com.example.accounting.domain.export.ExportResult> =
+        repository.exportGstReturnAs(companyId, gstReturnId, fy, format)
+
+    /** Phase 8A, Part 1 - restores a DRAFT return's sections from a previously-exported JSON of the
+     * same shape [exportDraft] produces (portability/backup, never a GST-portal-native importer -
+     * see [com.example.accounting.data.repository.AccountingRepository.importGstReturnDraftJson]'s
+     * own KDoc for why Tally/Marg/portal-native import formats are explicitly out of scope here). */
+    suspend fun importDraft(companyId: String, gstReturnId: String, jsonContent: String): AccountingResult<GstReturn> =
+        repository.importGstReturnDraftJson(companyId, gstReturnId, jsonContent)
 }

@@ -28,7 +28,14 @@ data class GstReturn(
     val errorMessage: String? = null,
     val latestRequestArtifactId: String? = null,
     val latestResponseArtifactId: String? = null,
-    val schemaVersion: String = "1.0"
+    val schemaVersion: String = "1.0",
+    /** Phase 8A, Part 2 - the user's own explicit declaration that this period genuinely has zero
+     * outward supplies (a real GST concept - a taxpayer files GSTR-1 as "Nil" rather than simply
+     * leaving every table empty with no acknowledgement). Never inferred automatically from empty
+     * sections - [Gstr1Validator] instead WARNS when every section is empty and this is still
+     * `false`, so the user either fixes a real data gap or explicitly confirms Nil; this flag is
+     * what suppresses that warning once they do. */
+    val isNilReturn: Boolean = false
 )
 
 /**

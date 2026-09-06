@@ -1136,7 +1136,9 @@ data class GstReturnEntity(
     val errorMessage: String?,
     val latestRequestArtifactId: String?,
     val latestResponseArtifactId: String?,
-    val schemaVersion: String
+    val schemaVersion: String,
+    /** Phase 8A, Part 2 - see [com.example.accounting.domain.taxation.gstreturn.GstReturn.isNilReturn]. */
+    @ColumnInfo(defaultValue = "0") val isNilReturn: Boolean = false
 )
 
 /**

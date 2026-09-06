@@ -1,5 +1,6 @@
 package com.example.accounting.automation.jobs
 
+import com.example.accounting.automation.compliance.GstReturnAutomationChecker
 import com.example.accounting.automation.compliance.InvoiceReminderChecker
 import com.example.accounting.automation.compliance.SuspenseBalanceChecker
 import com.example.accounting.automation.notifications.AutomationNotification
@@ -110,6 +111,20 @@ class DailyInvoiceReminderTask(
 
     override suspend fun execute(companyId: String, financialYearId: String?): AutomationTaskResult =
         invoiceReminderChecker.checkInvoiceReminders(companyId)
+}
+
+/** Phase 8A, Part 1 - "filing-period reminder" automation requirement, checked daily (mirroring
+ * [DailyInvoiceReminderTask]'s own daily due-date-threshold pattern) so the statutory due date is
+ * never missed by a full month between MONTHLY-cadence runs. */
+class DailyGstReturnFilingReminderTask(
+    private val gstReturnChecker: GstReturnAutomationChecker
+) : AutomationTask {
+    override val taskId: String = "DAILY_GSTR1_FILING_REMINDER"
+    override val name: String = "GSTR-1 Filing-Due Reminder"
+    override val frequency: TaskFrequency = TaskFrequency.DAILY
+
+    override suspend fun execute(companyId: String, financialYearId: String?): AutomationTaskResult =
+        gstReturnChecker.checkFilingReminder(companyId)
 }
 
 class DailyReportTask(

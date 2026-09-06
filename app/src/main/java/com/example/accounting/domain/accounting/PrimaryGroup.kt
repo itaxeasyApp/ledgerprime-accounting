@@ -131,22 +131,58 @@ object StandardSystemGroups {
         )
     }
 
+    // Every bare system-group id defined above, longest-first - used by [isExactSystemGroup] to
+    // resolve which bare id a company-scoped groupId actually belongs to. Bank/Bank-OD collision
+    // fix (live-device audit finding) - "GRP_BANK_OD" itself starts with "GRP_BANK_", so a plain
+    // `groupId.startsWith("${BANK_GROUP_ID}_")` check (used throughout this codebase as a fast path
+    // for "is this ledger's group Bank Accounts") also matched every Bank OD ledger, silently
+    // folding a liability into the Bank/Assets total wherever that check was used (Dashboard's Bank
+    // card, the Cash/Bank ledger picker in Money and voucher-entry screens, Contra-voucher
+    // validation, Bank Book). Sorting longest-first and taking the first match means "GRP_BANK_OD_x"
+    // always resolves to the more specific "GRP_BANK_OD", never the shorter "GRP_BANK".
+    private val ALL_BARE_GROUP_IDS: List<String> by lazy {
+        listOf(
+            CAPITAL_GROUP_ID, RESERVES_GROUP_ID, CURRENT_ASSETS_GROUP_ID, BANK_GROUP_ID, CASH_GROUP_ID,
+            DEPOSITS_GROUP_ID, LOANS_ADVANCES_GROUP_ID, STOCK_GROUP_ID, DEBTORS_GROUP_ID, FIXED_ASSETS_GROUP_ID,
+            INVESTMENTS_GROUP_ID, MISC_EXPENSES_GROUP_ID, CURRENT_LIABILITIES_GROUP_ID, DUTIES_GROUP_ID,
+            PROVISIONS_GROUP_ID, CREDITORS_GROUP_ID, LOANS_GROUP_ID, BANK_OD_GROUP_ID, SECURED_LOANS_GROUP_ID,
+            UNSECURED_LOANS_GROUP_ID, BRANCH_DIVISIONS_GROUP_ID, SALES_GROUP_ID, DIRECT_INCOME_GROUP_ID,
+            INDIRECT_INCOME_GROUP_ID, PURCHASE_GROUP_ID, DIRECT_EXPENSE_GROUP_ID, INDIRECT_EXPENSE_GROUP_ID,
+            SUSPENSE_GROUP_ID, ROUND_OFF_GROUP_ID
+        ).sortedByDescending { it.length }
+    }
+
+    /**
+     * Collision-safe replacement for a bare `groupId.startsWith("${bareId}_")` check - resolves
+     * [groupId] to whichever known bare system-group id it actually matches (longest match wins,
+     * so "GRP_BANK_OD_x" resolves to "GRP_BANK_OD", never the shorter "GRP_BANK"), then compares
+     * that against [bareId]. Every "is this ledger's group Bank/Cash/etc.?" call site in this
+     * codebase should use this (or [isUnder], which now calls this internally) instead of a raw
+     * `startsWith`.
+     */
+    fun isExactSystemGroup(groupId: String, bareId: String): Boolean {
+        val longestMatch = ALL_BARE_GROUP_IDS.firstOrNull { groupId.startsWith("${it}_") }
+        return longestMatch == bareId
+    }
+
     /**
      * Architecture correction (real Group hierarchy) - the correct way to answer "is this ledger's
      * group a Bank/Cash/Debtor/etc. account?": walk [AccountGroup.parentGroupId] all the way to the
-     * root, checking each ancestor's `groupId` against [rootGroupIdPrefix], instead of the flat
-     * `ledgerGroupId.startsWith(...)` check every call site used to do independently. A User Group
-     * nested arbitrarily deep under a System Group (e.g. a company's own "HDFC Current A/c" group
-     * filed under the System "Bank Accounts" group) is now correctly recognized, not just a ledger
-     * filed directly under the System group itself. [groupsById] is always the caller's own
-     * already-loaded `groups` list keyed by `groupId` - never a second fetch. Cycle-safe (a
-     * `parentGroupId` chain can never legitimately cycle, but a corrupt one must not infinite-loop).
+     * root, checking each ancestor's `groupId` against [rootGroupIdPrefix] via [isExactSystemGroup]
+     * (never a raw `startsWith` - see its own doc comment for the Bank/Bank-OD collision this
+     * fixes), instead of the flat `ledgerGroupId.startsWith(...)` check every call site used to do
+     * independently. A User Group nested arbitrarily deep under a System Group (e.g. a company's
+     * own "HDFC Current A/c" group filed under the System "Bank Accounts" group) is now correctly
+     * recognized, not just a ledger filed directly under the System group itself. [groupsById] is
+     * always the caller's own already-loaded `groups` list keyed by `groupId` - never a second
+     * fetch. Cycle-safe (a `parentGroupId` chain can never legitimately cycle, but a corrupt one
+     * must not infinite-loop).
      */
     fun isUnder(ledgerGroupId: String, rootGroupIdPrefix: String, groupsById: Map<String, AccountGroup>): Boolean {
         var current: AccountGroup? = groupsById[ledgerGroupId]
         val visited = mutableSetOf<String>()
         while (current != null && visited.add(current.groupId)) {
-            if (current.groupId.startsWith("${rootGroupIdPrefix}_")) return true
+            if (isExactSystemGroup(current.groupId, rootGroupIdPrefix)) return true
             current = current.parentGroupId?.let { groupsById[it] }
         }
         return false

@@ -170,6 +170,13 @@ data class AccountingUiState(
      * the dialog prefilled. Always cleared on that dialog's dismiss, success or not - never leaks
      * into an unrelated later voucher. */
     val pendingVoucherCorrection: com.example.accounting.domain.accounting.Voucher? = null,
+    /** Extend-correction-to-all-types fix - (gstRatePercent, hsnSacCode) captured from the
+     * cancelled original's own [com.example.accounting.domain.taxation.gst.GstTransaction] just
+     * before cancellation (an account-only Sale/Purchase repost needs these fields but
+     * `Voucher`/`JournalItem` don't carry them). `null` whenever the correction isn't a GST-bearing
+     * account-only Sale/Purchase. Cleared alongside [pendingVoucherCorrection] in lockstep - never
+     * meaningful on its own. */
+    val pendingVoucherCorrectionGstDetail: Pair<Double, String>? = null,
     val currentSubscription: CompanySubscription? = null,
     val voucherDraftsPendingReview: List<VoucherDraft> = emptyList(),
     val outstandingReport: OutstandingReport? = null,
@@ -624,6 +631,38 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Edit-Company fix - see [AccountingRepository.updateCompany]. `companies`/`currentCompany`
+     * refresh on their own once this returns (`loadCompaniesAndInitialData`'s `getCompanies()`
+     * collector is a live Room Flow over the `companies` table) - no manual state patch needed
+     * here, same as every other DB write in this ViewModel. */
+    fun updateCompany(
+        companyId: String,
+        name: String,
+        tradeName: String,
+        gstin: String,
+        pan: String,
+        stateCode: String,
+        address: String,
+        email: String,
+        phone: String,
+        pinCode: String = ""
+    ) {
+        viewModelScope.launch {
+            val existing = _uiState.value.companies.find { it.companyId == companyId } ?: return@launch
+            val updated = existing.copy(
+                name = name, tradeName = tradeName,
+                gstin = Constants.normalizeTaxId(gstin), pan = Constants.normalizeTaxId(pan),
+                stateCode = stateCode, address = address, email = email, phone = phone, pinCode = pinCode
+            )
+            val result = repository.updateCompany(updated)
+            if (result is AccountingResult.Success) {
+                emitMessage("Updated company '${updated.name}'")
+            } else {
+                emitMessage("Error updating company: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
     fun createBranch(
         code: String,
         name: String,
@@ -859,21 +898,50 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** True in-place edit (live-device audit finding) - narration/reference number only, see
+     * [AccountingRepository.updateVoucherMetadata]'s doc comment for why amount/ledger/date stay
+     * on the reversal-based [correctVoucher] path instead. */
+    fun updateVoucherMetadata(voucherId: String, narration: String, referenceNumber: String) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val fy = _uiState.value.currentFinancialYear ?: return@launch
+            val result = repository.updateVoucherMetadata(comp.companyId, fy.financialYearId, voucherId, narration, referenceNumber)
+            if (result is AccountingResult.Success) {
+                emitMessage("Voucher updated successfully")
+                refreshFinancialReports()
+            } else {
+                emitMessage("Voucher update failed: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
     /**
      * Architecture correction (Voucher Correct workflow) - "Correct Voucher" cancels the original
      * via the exact same guarded, append-only [com.example.accounting.data.repository.AccountingRepository.deleteVoucherSafely]
      * as "Delete & Reverse" (same period-lock/atomicity checks, no new bypass), then - only on
      * success - signals the UI (via [AccountingUiState.pendingVoucherCorrection]) to reopen New
      * Voucher prefilled from the original so the user can fix and repost. This is cancel-then-
-     * recreate, never an in-place mutation of posted history (Rule 12). Scoped to the flat 2-line
-     * voucher shapes [postQuickVoucher] builds directly (Receipt/Payment/Contra/Journal); Sale/
-     * Purchase/Notes keep their existing correction mechanism (Credit/Debit Note, or cancel+repost
-     * from scratch) unchanged.
+     * recreate, never an in-place mutation of posted history (Rule 12).
+     *
+     * Extend-correction-to-all-types fix - originally scoped to only the flat 2-line voucher
+     * shapes [postQuickVoucher] builds directly (Receipt/Payment/Contra/Journal); now also covers
+     * account-only Sale/Purchase (gated by [com.example.accounting.presentation.viewmodel.isInventoryEnabled]
+     * in [VoucherDetailDialog]'s own eligibility check - an inventory-tracked Sale/Purchase still
+     * isn't offered "Correct Voucher" here, since reconstructing its stock lines/running-average-cost
+     * is a materially higher-risk problem deliberately left for a dedicated pass). For a Sale/
+     * Purchase, the original's GST rate/HSN (not carried on `Voucher`/`JournalItem` itself) is
+     * read from its [com.example.accounting.domain.taxation.gst.GstTransaction] *before*
+     * cancellation reverses it, so [CreateVoucherDialog]'s account-only prefill can restore it.
+     * Credit/Debit Notes keep their existing, separate correction mechanism (issuing another note)
+     * unchanged - never routed through here.
      */
     fun correctVoucher(voucher: com.example.accounting.domain.accounting.Voucher) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
             val fy = _uiState.value.currentFinancialYear ?: return@launch
+            val gstDetail = if (voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE) {
+                repository.getGstTransactionsForVoucher(voucher.voucherId).firstOrNull()?.let { it.gstRatePercent to it.hsnSacCode }
+            } else null
             val idempotencyKey = UUID.randomUUID().toString()
             val result = repository.deleteVoucherSafely(comp.companyId, fy.financialYearId, voucher.voucherId, idempotencyKey, "SENIOR_ACCOUNTANT")
             if (result is AccountingResult.Success) {
@@ -881,7 +949,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     com.example.accounting.automation.jobs.AutomationEvent.VoucherDeleted(comp.companyId, voucher.voucherId, voucher.voucherId)
                 )
                 refreshFinancialReports()
-                _uiState.update { it.copy(pendingVoucherCorrection = voucher) }
+                _uiState.update { it.copy(pendingVoucherCorrection = voucher, pendingVoucherCorrectionGstDetail = gstDetail) }
                 emitMessage("Original voucher cancelled - review and repost the corrected version")
             } else {
                 emitMessage("Could not start correction: ${result.errorOrNull()?.message}")
@@ -890,7 +958,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun consumeVoucherCorrection() {
-        _uiState.update { it.copy(pendingVoucherCorrection = null) }
+        _uiState.update { it.copy(pendingVoucherCorrection = null, pendingVoucherCorrectionGstDetail = null) }
     }
 
     fun postQuickVoucher(
@@ -1569,6 +1637,21 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         router.navigate(AppRoute.ChartOfAccounts)
     }
 
+    /** Runs [block], returning its result - or `null` (and appending a short label to [failures])
+     * if it throws [com.example.accounting.core.database.AccountingTransactionException]. Used by
+     * [refreshFinancialReports] so one report's real accounting-integrity failure (e.g. an
+     * unbalanced Balance Sheet) never blocks every OTHER, independent report from updating - they
+     * used to all live/die together in one `try` block, so a single unbalanced ledger anywhere
+     * silently froze Receivables/Payables/GST Summary/Income & Expenditure/Outstanding at their
+     * previous (often never-set, i.e. zero-on-screen) values too, even though none of those actually
+     * depend on the whole trial balance netting to zero. */
+    private suspend fun <T> reportOrNull(label: String, failures: MutableList<String>, block: suspend () -> T): T? = try {
+        block()
+    } catch (e: com.example.accounting.core.database.AccountingTransactionException) {
+        failures += "$label: ${e.appError.message}"
+        null
+    }
+
     fun refreshFinancialReports() {
         // The ledgers and vouchers Flow collectors in observeCompanyData/observeFinancialYearData
         // both call this whenever their table changes, and posting a voucher changes both tables
@@ -1579,25 +1662,43 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         reportsRefreshJob = viewModelScope.launch {
             val compId = _uiState.value.currentCompany?.companyId ?: return@launch
             val fyId = _uiState.value.currentFinancialYear?.financialYearId ?: return@launch
+            val today = LocalDate.now()
 
-            try {
-                val tb = repository.generateTrialBalance(compId, fyId)
-                val pnl = repository.generateProfitAndLoss(compId, fyId)
-                val bs = repository.generateBalanceSheet(compId, fyId)
-                val gst = repository.generateGSTSummary(compId, fyId)
-                val incExp = repository.generateIncomeAndExpenditure(compId, fyId)
+            // Each report is computed independently - a failure in one (most commonly Balance
+            // Sheet/Trial Balance throwing on a genuinely unbalanced ledger) no longer prevents the
+            // others from refreshing. A report that fails simply keeps showing its LAST successful
+            // value (never silently reset to zero/null just because an unrelated report failed).
+            val failures = mutableListOf<String>()
+            val tb = reportOrNull("Trial Balance", failures) { repository.generateTrialBalance(compId, fyId) }
+            val pnl = reportOrNull("Profit & Loss", failures) { repository.generateProfitAndLoss(compId, fyId) }
+            val bs = reportOrNull("Balance Sheet", failures) { repository.generateBalanceSheet(compId, fyId) }
+            val gst = reportOrNull("GST Summary", failures) { repository.generateGSTSummary(compId, fyId) }
+            val incExp = reportOrNull("Income & Expenditure", failures) { repository.generateIncomeAndExpenditure(compId, fyId) }
+            // Dashboard/Sales/Purchase Receivables & Payables cards read outstandingReport/
+            // receivablesReport/payablesReport directly (MainAppScreen.kt, DashboardScreen.kt) -
+            // those used to only refresh on a Reports-tab visit (refreshReportsCenterExtras),
+            // so every card showed a stale 0.00 (falling through to the coarser, non-aging-aware
+            // balanceSheet.sundryDebtors/currentLiabilities fallback) right after posting a
+            // voucher until the user happened to open Reports once. Refreshing them here too
+            // keeps them live on every vouchers/ledgers change, same as every other report above.
+            val outstanding = reportOrNull("Outstanding", failures) { reportService.outstanding(compId, today = today) }
+            val receivables = reportOrNull("Receivables", failures) { reportService.receivables(compId, today) }
+            val payables = reportOrNull("Payables", failures) { reportService.payables(compId, today) }
 
-                _uiState.update {
-                    it.copy(
-                        trialBalance = tb,
-                        profitAndLoss = pnl,
-                        incomeAndExpenditure = incExp,
-                        balanceSheet = bs,
-                        gstSummary = gst
-                    )
-                }
-            } catch (e: com.example.accounting.core.database.AccountingTransactionException) {
-                emitMessage("Financial statement generation failed: ${e.appError.message}")
+            _uiState.update {
+                it.copy(
+                    trialBalance = tb ?: it.trialBalance,
+                    profitAndLoss = pnl ?: it.profitAndLoss,
+                    incomeAndExpenditure = incExp ?: it.incomeAndExpenditure,
+                    balanceSheet = bs ?: it.balanceSheet,
+                    gstSummary = gst ?: it.gstSummary,
+                    outstandingReport = outstanding ?: it.outstandingReport,
+                    receivablesReport = receivables ?: it.receivablesReport,
+                    payablesReport = payables ?: it.payablesReport
+                )
+            }
+            if (failures.isNotEmpty()) {
+                emitMessage("Some financial statements could not be generated: ${failures.joinToString("; ")}")
             }
         }
     }
@@ -1720,9 +1821,12 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     fun cashAndBankLedgers(): List<Ledger> {
         val ledgers = _uiState.value.ledgers
+        val groupsById = _uiState.value.groups.associateBy { it.groupId }
         return ledgers.filter {
-            it.groupId.startsWith(com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID) ||
-                it.groupId.startsWith(com.example.accounting.domain.accounting.StandardSystemGroups.CASH_GROUP_ID)
+            com.example.accounting.domain.accounting.StandardSystemGroups.isExactSystemGroup(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID) ||
+                com.example.accounting.domain.accounting.StandardSystemGroups.isExactSystemGroup(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.CASH_GROUP_ID) ||
+                com.example.accounting.domain.accounting.StandardSystemGroups.isUnder(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+                com.example.accounting.domain.accounting.StandardSystemGroups.isUnder(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.CASH_GROUP_ID, groupsById)
         }
     }
 
@@ -2127,24 +2231,34 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // ---- Reports Center extras (Outstanding/Receivables/Payables/Cash Flow/Ratio Analysis/HSN-SAC) ----
+    // ---- Reports Center extras (Cash Flow/Ratio Analysis/HSN-SAC) ----
+    // Outstanding/Receivables/Payables are refreshed reactively by refreshFinancialReports() on
+    // every vouchers/ledgers change instead (Dashboard/Sales/Purchase cards need them live, not
+    // just on a Reports-tab visit) - recomputing them here too would just be redundant work.
 
     fun refreshReportsCenterExtras() {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
             val fy = _uiState.value.currentFinancialYear ?: return@launch
-            val today = LocalDate.now()
-            val outstanding = reportService.outstanding(comp.companyId, today = today)
-            val receivables = reportService.receivables(comp.companyId, today)
-            val payables = reportService.payables(comp.companyId, today)
-            val cashFlow = reportService.cashFlow(comp.companyId, fy.financialYearId, fy.startDate..fy.endDate)
-            val ratios = reportService.ratioAnalysis(comp.companyId, fy.financialYearId)
-            val hsnSac = reportService.hsnSacSummary(comp.companyId, fy.financialYearId)
-            _uiState.update {
-                it.copy(
-                    outstandingReport = outstanding, receivablesReport = receivables, payablesReport = payables,
-                    cashFlowReport = cashFlow, ratioAnalysisReport = ratios, hsnSacSummary = hsnSac
-                )
+            // Crash fix (live-device audit finding) - ratioAnalysis()/cashFlow() both transitively
+            // call generateBalanceSheet() -> generateTrialBalance(), which throws
+            // AccountingTransactionException on any unbalanced trial balance (e.g. a Balance-Sheet
+            // migration import that has only entered some ledgers' opening balances so far - an
+            // expected transient state, not corruption). refreshFinancialReports() already guards
+            // its own identical calls with this same catch/snackbar pattern; this function fired on
+            // every Reports-tab visit with no guard at all, fatally crashing the whole app instead
+            // of degrading gracefully.
+            try {
+                val cashFlow = reportService.cashFlow(comp.companyId, fy.financialYearId, fy.startDate..fy.endDate)
+                val ratios = reportService.ratioAnalysis(comp.companyId, fy.financialYearId)
+                val hsnSac = reportService.hsnSacSummary(comp.companyId, fy.financialYearId)
+                _uiState.update {
+                    it.copy(
+                        cashFlowReport = cashFlow, ratioAnalysisReport = ratios, hsnSacSummary = hsnSac
+                    )
+                }
+            } catch (e: com.example.accounting.core.database.AccountingTransactionException) {
+                emitMessage("Financial statement generation failed: ${e.appError.message}")
             }
         }
     }
@@ -2286,6 +2400,20 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Phase 8A, Part 2 - see [com.example.accounting.data.repository.AccountingRepository.setGstReturnNilFlag]'s
+     * own KDoc for why this is a real, persisted, user-driven declaration rather than an inferred flag. */
+    fun setSelectedGstReturnNil(isNil: Boolean) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val gstReturnId = _uiState.value.selectedGstReturn?.gstReturnId ?: return@launch
+            when (val result = gstReturnService.setNilReturn(comp.companyId, gstReturnId, isNil)) {
+                is AccountingResult.Success -> emitMessage(if (isNil) "Marked as a Nil Return." else "Nil Return declaration removed.")
+                is AccountingResult.Failure -> emitMessage("Could not update: ${result.error.message}")
+            }
+            reopenSelectedGstReturn(gstReturnId)
+        }
+    }
+
     fun submitSelectedGstReturnOnline() {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -2327,10 +2455,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun reviewAndCreateImportRow(suggestion: ImportRowSuggestion, resolvedType: ImportSuggestionType) {
+    fun reviewAndCreateImportRow(suggestion: ImportRowSuggestion, resolvedType: ImportSuggestionType, groupIdOverride: String? = null) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
-            val result = dataImportService.reviewAndCreate(comp.companyId, suggestion, resolvedType)
+            val result = dataImportService.reviewAndCreate(comp.companyId, suggestion, resolvedType, groupIdOverride)
             val outcome = when (result) {
                 is AccountingResult.Success -> "Created"
                 is AccountingResult.Failure -> "Failed: ${result.error.message}"
@@ -2456,6 +2584,38 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         val mimeType = if (ext == "csv") "text/csv" else "application/json"
         val safeName = reportKey.lowercase().replace(" & ", "_").replace(" ", "_")
         val file = File(getApplication<Application>().cacheDir, "${safeName}_export_${System.currentTimeMillis()}.$ext")
+        file.writeText(exportResult.content)
+        return documentPreviewService.buildShareIntent(getApplication(), file, mimeType)
+    }
+
+    /** Phase 8A, Part 2 - CSV/GST JSON export+share for the currently-selected GSTR-1 return,
+     * mirroring [exportReportAndShare]'s exact file-then-share pattern (never a second export
+     * mechanism). Requires READY (same gate the "Generate JSON"/Export buttons already enforce in
+     * the UI) - this defensively re-checks it here too, since [AccountingRepository.exportGstReturnAs]
+     * itself has no such gate (it exports whatever the return's current sections reflect, READY or
+     * not, for the round-trip-import use case) but a not-yet-validated draft should never be shared
+     * as if it were a finished return. */
+    suspend fun exportSelectedGstReturnAndShare(format: com.example.accounting.domain.export.ExportFormat): android.content.Intent? {
+        val comp = _uiState.value.currentCompany ?: return null
+        val fy = _uiState.value.currentFinancialYear ?: return null
+        val gstReturn = _uiState.value.selectedGstReturn ?: return null
+        if (gstReturn.status != com.example.accounting.domain.taxation.gstreturn.GstReturnStatus.READY) {
+            emitMessage("Export requires the return to be READY - run Validate first.")
+            return null
+        }
+        val result = gstReturnService.exportDraft(comp.companyId, gstReturn.gstReturnId, fy, format)
+        if (result is AccountingResult.Failure) {
+            emitMessage("Export failed: ${result.error.message}")
+            return null
+        }
+        val exportResult = (result as AccountingResult.Success).data
+        val ext = when (format) {
+            com.example.accounting.domain.export.ExportFormat.CSV -> "csv"
+            else -> "json"
+        }
+        val mimeType = if (ext == "csv") "text/csv" else "application/json"
+        val safeName = "gstr1_${gstReturn.periodKey}_${format.name.lowercase()}"
+        val file = File(getApplication<Application>().cacheDir, "${safeName}_${System.currentTimeMillis()}.$ext")
         file.writeText(exportResult.content)
         return documentPreviewService.buildShareIntent(getApplication(), file, mimeType)
     }

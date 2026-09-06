@@ -74,14 +74,20 @@ fun DashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val isService = uiState.currentCompany?.businessType == BusinessType.SERVICE
-    val netProfit = if (isService) uiState.incomeAndExpenditure?.surplusOrDeficit ?: Money.ZERO else uiState.profitAndLoss?.netProfit ?: Money.ZERO
     val salesFigure = uiState.profitAndLoss?.salesRevenue ?: Money.ZERO
     val purchasesFigure = uiState.profitAndLoss?.purchases ?: Money.ZERO
     val receivables = uiState.receivablesReport?.totalOutstanding ?: (uiState.balanceSheet?.sundryDebtors ?: Money.ZERO)
     val payables = uiState.payablesReport?.totalOutstanding ?: (uiState.balanceSheet?.currentLiabilities ?: Money.ZERO)
     val gstPayable = uiState.gstSummary?.netTaxPayable ?: Money.ZERO
-    val cashBalance = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
-    val bankBalance = uiState.ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
+    val groupsById = uiState.groups.associateBy { it.groupId }
+    val cashBalance = uiState.ledgers.filter {
+        StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+            StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+    }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
+    val bankBalance = uiState.ledgers.filter {
+        StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+            StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
+    }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
 
     LazyColumn(
         modifier = modifier
@@ -133,8 +139,6 @@ fun DashboardScreen(
                     payables = payables,
                     salesFigure = salesFigure,
                     purchasesFigure = purchasesFigure,
-                    netProfit = netProfit,
-                    netProfitLabel = if (isService) "Surplus / Deficit" else "Profit / Loss",
                     gstPayable = gstPayable,
                     income = if (isService) uiState.incomeAndExpenditure?.income else null,
                     expenditure = if (isService) uiState.incomeAndExpenditure?.expenditure else null,

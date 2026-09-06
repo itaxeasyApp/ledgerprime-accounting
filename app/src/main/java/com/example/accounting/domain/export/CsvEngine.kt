@@ -1,5 +1,7 @@
 package com.example.accounting.domain.export
 
+import com.example.accounting.domain.taxation.gstreturn.Gstr1ReturnData
+
 /**
  * A generic, report/DTO-agnostic CSV engine (Phase 7E, Section 8/9) - distinct from and never
  * modifying `domain.rendering.CsvExporter` (Phase 7D, frozen, document-line-specific). Every
@@ -153,4 +155,101 @@ fun List<GSTTransactionExportDto>.toGstTransactionCsvRows(): List<List<String?>>
         it.cgstPaise.toString(), it.sgstPaise.toString(), it.igstPaise.toString(), it.cessPaise.toString(),
         it.direction, it.lineOrder.toString()
     )
+}
+
+/**
+ * Phase 8A, Part 1 - a single flattened CSV over every GSTR-1 table, one row per (invoice/note/
+ * summary-row, rate-line), discriminated by the leading "section" column - CSV has no native
+ * concept of "multiple sheets," so this is the one-file-per-export convention this project's
+ * [CsvEngine] already establishes, applied to a multi-table source the same way [OutstandingExportDto]
+ * already flattens its own rows. Irrelevant columns for a given section are simply blank, never a
+ * fabricated value.
+ */
+fun Gstr1ReturnData.toCsvHeaders(): List<String> = listOf(
+    "section", "recipientGstinOrPos", "documentNumber", "documentDate", "originalDocumentNumber", "originalDocumentDate",
+    "hsnSacCode", "gstRatePercent", "taxableValuePaise", "cgstPaise", "sgstPaise", "igstPaise", "cessPaise",
+    "totalValuePaise", "reverseCharge", "noteType"
+)
+
+fun Gstr1ReturnData.toCsvRows(): List<List<String?>> {
+    val rows = mutableListOf<List<String?>>()
+    b2b.forEach { party ->
+        party.invoices.forEach { inv ->
+            inv.rateLines.forEach { rl ->
+                rows += listOf(
+                    "B2B", party.recipientGstin, inv.invoiceNumber, inv.invoiceDate.toString(), null, null,
+                    null, rl.gstRatePercent.toString(), rl.taxableValue.paise.toString(), rl.cgst.paise.toString(),
+                    rl.sgst.paise.toString(), rl.igst.paise.toString(), rl.cess.paise.toString(),
+                    rl.invoiceValue.paise.toString(), inv.reverseCharge.toString(), null
+                )
+            }
+        }
+    }
+    b2cl.forEach { inv ->
+        inv.rateLines.forEach { rl ->
+            rows += listOf(
+                "B2CL", inv.posStateCode, inv.invoiceNumber, inv.invoiceDate.toString(), null, null,
+                null, rl.gstRatePercent.toString(), rl.taxableValue.paise.toString(), rl.cgst.paise.toString(),
+                rl.sgst.paise.toString(), rl.igst.paise.toString(), rl.cess.paise.toString(),
+                rl.invoiceValue.paise.toString(), null, null
+            )
+        }
+    }
+    b2cs.forEach { row ->
+        rows += listOf(
+            "B2CS", row.posStateCode, null, null, null, null, null, row.gstRatePercent.toString(),
+            row.taxableValue.paise.toString(), row.cgst.paise.toString(), row.sgst.paise.toString(),
+            row.igst.paise.toString(), row.cess.paise.toString(), null, null, null
+        )
+    }
+    cdnr.forEach { party ->
+        party.notes.forEach { note ->
+            note.rateLines.forEach { rl ->
+                rows += listOf(
+                    "CDNR", party.recipientGstin, note.noteNumber, note.noteDate.toString(),
+                    note.originalInvoiceNumber, note.originalInvoiceDate.toString(), null, rl.gstRatePercent.toString(),
+                    rl.taxableValue.paise.toString(), rl.cgst.paise.toString(), rl.sgst.paise.toString(),
+                    rl.igst.paise.toString(), rl.cess.paise.toString(), rl.invoiceValue.paise.toString(),
+                    note.reverseCharge.toString(), note.noteType.name
+                )
+            }
+        }
+    }
+    cdnur.forEach { note ->
+        note.rateLines.forEach { rl ->
+            rows += listOf(
+                "CDNUR", note.posStateCode, note.noteNumber, note.noteDate.toString(),
+                note.originalInvoiceNumber, note.originalInvoiceDate.toString(), null, rl.gstRatePercent.toString(),
+                rl.taxableValue.paise.toString(), rl.cgst.paise.toString(), rl.sgst.paise.toString(),
+                rl.igst.paise.toString(), rl.cess.paise.toString(), rl.invoiceValue.paise.toString(),
+                note.reverseCharge.toString(), note.noteType.name
+            )
+        }
+    }
+    exports.forEach { exp ->
+        rows += listOf(
+            "EXP", null, exp.invoiceNumber, exp.invoiceDate.toString(), null, null, null, null,
+            exp.taxableValue.paise.toString(), null, null, null, null, null, null, null
+        )
+    }
+    nilRated.forEach { row ->
+        rows += listOf(
+            "NIL", if (row.interState) "INTER" else "INTRA", null, null, null, null, null, null,
+            row.taxableValue.paise.toString(), null, null, null, null, null, null, row.bucket.name
+        )
+    }
+    hsn.forEach { row ->
+        rows += listOf(
+            "HSN", null, null, null, null, null, row.hsnSacCode, row.gstRatePercent.toString(),
+            row.taxableValue.paise.toString(), row.cgst.paise.toString(), row.sgst.paise.toString(),
+            row.igst.paise.toString(), row.cess.paise.toString(), row.totalValue.paise.toString(), null, null
+        )
+    }
+    documentsIssued.forEach { row ->
+        rows += listOf(
+            "DOC_ISSUED", row.natureOfDocument, row.seriesFrom, null, row.seriesTo, null, null, null,
+            null, null, null, null, null, null, null, "${row.totalCount}/${row.cancelledCount}/${row.netIssued}"
+        )
+    }
+    return rows
 }

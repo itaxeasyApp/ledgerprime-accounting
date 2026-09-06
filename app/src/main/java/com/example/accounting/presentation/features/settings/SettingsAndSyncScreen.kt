@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Sync
@@ -72,6 +73,10 @@ fun SettingsAndSyncScreen(
     uiState: AccountingUiState,
     onCompanySwitch: (Company) -> Unit,
     onOpenCreateCompany: () -> Unit,
+    /** Edit-Company fix - previously there was no UI anywhere to change a company's own name/
+     * GSTIN/PAN/address/phone/email after creation, so the app-bar/Dashboard's "GSTIN:
+     * Unregistered" could never be corrected even after the real GSTIN was known. */
+    onEditCompany: (Company) -> Unit = {},
     onTogglePeriodLock: (AccountingPeriod) -> Unit,
     onTriggerSync: () -> Unit,
     onUpdateAccountingConfiguration: (AccountingMode?, BusinessType?) -> Unit = { _, _ -> },
@@ -131,8 +136,14 @@ fun SettingsAndSyncScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            if (isSelected) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onEditCompany(comp) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit ${comp.name}", modifier = Modifier.size(18.dp))
+                                }
+                                if (isSelected) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(Icons.Default.CheckCircle, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                }
                             }
                         }
                     }

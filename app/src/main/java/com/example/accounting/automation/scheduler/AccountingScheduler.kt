@@ -1,11 +1,13 @@
 package com.example.accounting.automation.scheduler
 
 import com.example.accounting.automation.compliance.GstComplianceChecker
+import com.example.accounting.automation.compliance.GstReturnAutomationChecker
 import com.example.accounting.automation.compliance.InvoiceReminderChecker
 import com.example.accounting.automation.compliance.SuspenseBalanceChecker
 import com.example.accounting.automation.compliance.YearEndValidator
 import com.example.accounting.automation.jobs.AutomationEvent
 import com.example.accounting.automation.jobs.DailyFailedSyncDetector
+import com.example.accounting.automation.jobs.DailyGstReturnFilingReminderTask
 import com.example.accounting.automation.jobs.DailyInvoiceReminderTask
 import com.example.accounting.automation.jobs.DailyReportTask
 import com.example.accounting.automation.jobs.DailySuspenseCheckTask
@@ -14,6 +16,8 @@ import com.example.accounting.automation.jobs.DailyUnreconciledCheckTask
 import com.example.accounting.automation.jobs.EventDrivenAutomationProcessor
 import com.example.accounting.automation.jobs.MonthlyFinancialSummaryTask
 import com.example.accounting.automation.jobs.MonthlyGstPreparationTask
+import com.example.accounting.automation.jobs.MonthlyGstReturnDraftPreparationTask
+import com.example.accounting.automation.jobs.MonthlyGstReturnValidationTask
 import com.example.accounting.automation.jobs.MonthlyRecurringVoucherGenerationTask
 import com.example.accounting.automation.jobs.YearlyClosingCheckTask
 import com.example.accounting.automation.jobs.YearlyClosingReminderTask
@@ -42,6 +46,7 @@ class AccountingScheduler(
 
     private val suspenseChecker = SuspenseBalanceChecker(dao)
     private val gstChecker = GstComplianceChecker(dao)
+    private val gstReturnChecker = GstReturnAutomationChecker(dao, repository)
     private val yearEndValidator = YearEndValidator(dao)
     private val reportTasks = ScheduledReportTasks(dao)
     private val invoiceReminderChecker = InvoiceReminderChecker(repository)
@@ -52,13 +57,16 @@ class AccountingScheduler(
         suspenseCheckTask = DailySuspenseCheckTask(suspenseChecker),
         reportTask = DailyReportTask(reportTasks),
         unreconciledCheckTask = DailyUnreconciledCheckTask(dao),
-        invoiceReminderTask = DailyInvoiceReminderTask(invoiceReminderChecker)
+        invoiceReminderTask = DailyInvoiceReminderTask(invoiceReminderChecker),
+        gstReturnFilingReminderTask = DailyGstReturnFilingReminderTask(gstReturnChecker)
     )
 
     val monthlyWorker = MonthlyAutomationWorker(
         financialSummaryTask = MonthlyFinancialSummaryTask(reportTasks),
         gstPrepTask = MonthlyGstPreparationTask(gstChecker),
-        recurringVoucherGenerationTask = MonthlyRecurringVoucherGenerationTask(repository)
+        recurringVoucherGenerationTask = MonthlyRecurringVoucherGenerationTask(repository),
+        gstReturnDraftPreparationTask = MonthlyGstReturnDraftPreparationTask(gstReturnChecker),
+        gstReturnValidationTask = MonthlyGstReturnValidationTask(gstReturnChecker)
     )
 
     val yearlyWorker = YearlyAutomationWorker(

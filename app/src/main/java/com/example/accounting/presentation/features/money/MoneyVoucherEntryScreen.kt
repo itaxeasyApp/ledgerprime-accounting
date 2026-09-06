@@ -69,6 +69,7 @@ import java.time.LocalDate
 fun MoneyVoucherEntryScreen(
     voucherType: VoucherType,
     ledgers: List<Ledger>,
+    groups: List<com.example.accounting.domain.accounting.AccountGroup> = emptyList(),
     onBack: () -> Unit,
     onSubmit: (VoucherType, LocalDate, debitLedgerId: String, creditLedgerId: String, amount: Money, narration: String, refNumber: String, applyRoundOff: Boolean) -> Unit,
     /** Phase 7J UI fix: lets Receive Money/Pay Money open Customer/Supplier creation inline
@@ -96,8 +97,14 @@ fun MoneyVoucherEntryScreen(
         else -> "Transfer"
     }
 
-    val cashBankLedgers = remember(ledgers) {
-        ledgers.filter { it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID) }
+    val groupsById = remember(groups) { groups.associateBy { it.groupId } }
+    val cashBankLedgers = remember(ledgers, groupsById) {
+        ledgers.filter {
+            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+        }
     }
     // PARTY/COUNTERPARTY audit fix - Customer/Supplier is an optional role, never a mandatory
     // gate: this used to restrict Receive Money/Pay Money to Debtors-group/Creditors-group
@@ -116,7 +123,10 @@ fun MoneyVoucherEntryScreen(
             cashBankLedgers
         } else {
             ledgers.filterNot {
-                it.groupId.startsWith(StandardSystemGroups.BANK_GROUP_ID) || it.groupId.startsWith(StandardSystemGroups.CASH_GROUP_ID)
+                StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
+                    StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                    StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById) ||
+                    StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
             }.sortedByDescending { it.groupId.startsWith(preferredGroupId) }
         }
     }
