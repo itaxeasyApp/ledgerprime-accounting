@@ -42,11 +42,13 @@ import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.RoundOffEngine
 import com.example.accounting.domain.accounting.StandardSystemGroups
 import com.example.accounting.domain.accounting.VoucherType
+import com.example.accounting.domain.banking.UpiPaymentLink
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.presentation.components.ActionButton
 import com.example.accounting.presentation.components.ActionButtonStyle
 import com.example.accounting.presentation.components.Amount
 import com.example.accounting.presentation.components.FormField
+import com.example.accounting.presentation.components.QrCodeImage
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.theme.Spacing
 import java.time.LocalDate
@@ -72,6 +74,14 @@ fun MoneyVoucherEntryScreen(
      * `CreatePartyDialog` trigger every other screen already uses, never a second creation path.
      * Null/no-op for Transfer, which has no counterparty (Cash/Bank only). */
     onAddParty: ((PartyRole) -> Unit)? = null,
+    /** The company's own real UPI VPA (e.g. "business@okaxis"), blank if none has been saved yet -
+     * sourced from the user's own [com.example.accounting.domain.banking.BankUpiProfile] or
+     * business profile, never fabricated. Only used for [VoucherType.RECEIPT]'s "Get paid via UPI"
+     * QR; ignored for Pay Money/Transfer. */
+    companyUpiVpa: String = "",
+    companyPayeeName: String = "",
+    /** Opens the existing UPI Details screen so the user can add their own UPI ID when [companyUpiVpa] is blank. */
+    onOpenUpiSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val title = when (voucherType) {
@@ -200,6 +210,17 @@ fun MoneyVoucherEntryScreen(
         FormField(value = narration, onValueChange = { narration = it }, label = "Note (optional)", modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(Spacing.md))
 
+        if (voucherType == VoucherType.RECEIPT) {
+            UpiReceiveQrCard(
+                vpa = companyUpiVpa,
+                payeeName = companyPayeeName,
+                amount = amountMoney,
+                note = narration.ifBlank { refNumber },
+                onOpenUpiSettings = onOpenUpiSettings
+            )
+            Spacer(modifier = Modifier.height(Spacing.md))
+        }
+
         SectionCard(elevated = true) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
@@ -233,6 +254,67 @@ fun MoneyVoucherEntryScreen(
                 onSubmit(voucherType, LocalDate.now(), debitLedgerId, creditLedgerId, amountMoney, narration, refNumber, applyRoundOff)
             }
         )
+    }
+}
+
+/**
+ * "Get paid via UPI" - Receive Money only. Encodes a real NPCI UPI deep link
+ * ([UpiPaymentLink.build]) off the company's own saved [vpa] and renders it as a real QR
+ * ([QrCodeImage]); the customer scans it in any UPI app to pay. This app cannot detect whether
+ * that payment actually landed (no bank/PSP webhook integration exists) - the caption says so
+ * plainly, and the user still submits this same form afterward to record the real Receipt
+ * voucher, exactly as they would without this card.
+ */
+@Composable
+private fun UpiReceiveQrCard(
+    vpa: String,
+    payeeName: String,
+    amount: Money,
+    note: String,
+    onOpenUpiSettings: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    SectionCard(elevated = true) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Get paid via UPI", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (vpa.isBlank()) "Add your UPI ID to generate a payment QR for customers" else "Show a QR the customer can scan to pay $vpa",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (vpa.isNotBlank()) {
+                Switch(checked = expanded, onCheckedChange = { expanded = it })
+            }
+        }
+        if (vpa.isBlank()) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            ActionButton(text = "Add UPI ID", style = ActionButtonStyle.SECONDARY, onClick = onOpenUpiSettings, modifier = Modifier.fillMaxWidth())
+        } else if (expanded) {
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            val link = remember(vpa, payeeName, amount, note) {
+                UpiPaymentLink.build(payeeVpa = vpa, payeeName = payeeName, amount = amount.takeIf { it.isPositive }, note = note)
+            }
+            if (link != null) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    QrCodeImage(content = link, modifier = Modifier.size(220.dp))
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Text(vpa, style = MaterialTheme.typography.bodyMedium)
+                    if (amount.isPositive) {
+                        Amount(amount, style = MaterialTheme.typography.titleMedium, emphasize = true)
+                    }
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Text(
+                        "Scan in any UPI app to pay. Once the payment actually arrives, submit this form as usual to record it - this QR does not do that automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Text("Saved UPI ID looks invalid (expected something like name@bank).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
     }
 }
 

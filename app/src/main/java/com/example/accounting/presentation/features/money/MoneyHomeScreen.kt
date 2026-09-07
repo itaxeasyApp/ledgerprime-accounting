@@ -232,18 +232,31 @@ fun MoneyTabContent(
                 )
             }
         }
-        is MoneySubScreen.Entry -> MoneyVoucherEntryScreen(
-            voucherType = s.voucherType,
-            ledgers = uiState.ledgers,
-            groups = uiState.groups,
-            onBack = { sub = MoneySubScreen.Home },
-            onSubmit = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
-                onSubmitMoneyVoucher(type, date, debitId, creditId, amount, narration, ref, roundOff)
-                sub = MoneySubScreen.Home
-            },
-            onAddParty = onAddParty,
-            modifier = modifier
-        )
+        is MoneySubScreen.Entry -> {
+            // Real UPI details only - the company's own saved BankUpiProfile (Phase 7J-B) first,
+            // falling back to the business profile's upiId/businessName; never fabricated. Both
+            // are values the user typed in themselves via UPI Details / Business Profile.
+            val companyUpiProfile = uiState.bankUpiProfiles.firstOrNull { it.partyId == null && it.upi != null }
+            val companyUpiVpa = companyUpiProfile?.upi?.upiId ?: uiState.businessProfile?.upiId.orEmpty()
+            val companyPayeeName = companyUpiProfile?.upi?.payeeName?.takeIf { it.isNotBlank() }
+                ?: uiState.businessProfile?.businessName?.takeIf { it.isNotBlank() }
+                ?: uiState.currentCompany?.name.orEmpty()
+            MoneyVoucherEntryScreen(
+                voucherType = s.voucherType,
+                ledgers = uiState.ledgers,
+                groups = uiState.groups,
+                onBack = { sub = MoneySubScreen.Home },
+                onSubmit = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
+                    onSubmitMoneyVoucher(type, date, debitId, creditId, amount, narration, ref, roundOff)
+                    sub = MoneySubScreen.Home
+                },
+                onAddParty = onAddParty,
+                companyUpiVpa = companyUpiVpa,
+                companyPayeeName = companyPayeeName,
+                onOpenUpiSettings = { sub = MoneySubScreen.Upi },
+                modifier = modifier
+            )
+        }
     }
 }
 
