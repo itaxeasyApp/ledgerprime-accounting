@@ -263,6 +263,12 @@ class GstReturnAutomationChecker(
         val name = "GSTR-1 Filing-Due Reminder"
         val target = resolveCompletedPeriod(companyId, today)
             ?: return AutomationTaskResult(taskName = name, frequency = TaskFrequency.DAILY, status = TaskExecutionStatus.SKIPPED, message = "GSTR-1 does not apply to this company.")
+        // Phase 8A, Part 2 - user-facing reminder control (Company.gstr1ReminderEnabled). Gates
+        // ONLY this reminder notification, never draft preparation/validation above - those two
+        // automation checks are unaffected by this toggle.
+        if (dao.getCompanyById(companyId)?.gstr1ReminderEnabled == false) {
+            return AutomationTaskResult(taskName = name, frequency = TaskFrequency.DAILY, status = TaskExecutionStatus.SKIPPED, message = "GSTR-1 reminders are turned off for this company.")
+        }
         val (fy, quarter, month) = target
         val period = GstPeriod.of(fy, quarter, month)
         val existing = dao.findGstReturn(companyId, period.periodKey, GstReturnType.GSTR1.name, GstScheme.REGULAR.name)

@@ -165,18 +165,23 @@ fun MoneyTabContent(
     onDiscardDraft: (String) -> Unit,
     onSubmitMoneyVoucher: (VoucherType, LocalDate, String, String, Money, String, String, Boolean) -> Unit,
     onAddParty: (PartyRole) -> Unit,
-    /** Bug #3 fix - QR/Barcode scan for Receive Payment, threaded down to
-     * [MoneyVoucherEntryScreen] only while its Entry sub-screen is a RECEIPT. Never gated by
-     * Inventory Mode/Items tab. */
-    onScanBarcode: (() -> Unit)? = null,
-    scannedBarcodeValue: String? = null,
-    onScannedValueConsumed: () -> Unit = {},
     /** 13-point correctness pass, item 8 (Editable Ledgers) - opens [CreateLedgerDialog] in edit
      * mode for this ledger. */
     onEditLedger: (Ledger) -> Unit = {},
+    /** Dashboard's "Cash"/"Bank" Business Snapshot cards - see [AccountingUiState.moneyDeepLink]'s
+     * own KDoc. Consumed immediately (one-shot), same pattern as `reportsDeepLink`. */
+    moneyDeepLink: String? = null,
+    onMoneyDeepLinkConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var sub by remember { mutableStateOf<MoneySubScreen>(MoneySubScreen.Home) }
+    androidx.compose.runtime.LaunchedEffect(moneyDeepLink) {
+        when (moneyDeepLink) {
+            "Cash" -> sub = MoneySubScreen.Cash
+            "Bank" -> sub = MoneySubScreen.Bank
+        }
+        if (moneyDeepLink != null) onMoneyDeepLinkConsumed()
+    }
     // Architecture correction (real Group hierarchy) - a direct prefix check (every ledger filed
     // straight under the System group) OR an ancestor walk (a ledger filed under a company-created
     // User Group nested under it, e.g. a specific bank's own sub-group) - a company may have as
@@ -237,9 +242,6 @@ fun MoneyTabContent(
                 sub = MoneySubScreen.Home
             },
             onAddParty = onAddParty,
-            onScanBarcode = onScanBarcode,
-            scannedBarcodeValue = scannedBarcodeValue,
-            onScannedValueConsumed = onScannedValueConsumed,
             modifier = modifier
         )
     }

@@ -123,6 +123,10 @@ fun VoucherDetailDialog(
     var isEditingMetadata by remember(voucher.voucherId) { mutableStateOf(false) }
     var editedNarration by remember(voucher.voucherId) { mutableStateOf(voucher.narration) }
     var editedReference by remember(voucher.voucherId) { mutableStateOf(voucher.referenceNumber) }
+    // Real confirmation, not a silent one-tap action - this now genuinely deletes the voucher
+    // (never a same-voucher offsetting entry left behind), so it is irreversible in a way the old
+    // "Delete & Reverse" (which at least left a visible, auditable trail) was not.
+    var showDeleteConfirm by remember(voucher.voucherId) { mutableStateOf(false) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -172,6 +176,19 @@ fun VoucherDetailDialog(
                                 text = voucher.voucherNumber,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
+                            if (voucher.isCancelled) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer
+                                ) {
+                                    Text(
+                                        text = "CANCELLED",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         }
                         if (!isEditingMetadata) {
                             Text(
@@ -360,17 +377,19 @@ fun VoucherDetailDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (onDeleteVoucher != null) {
+                        // An already-cancelled voucher has nothing left to cancel - the repository's
+                        // own idempotency guard already rejects a second call, but hiding the button
+                        // here is the real fix: a cancelled voucher must never look like a live one
+                        // with an available action, which is what the CANCELLED badge above exists
+                        // to prevent from being missed.
+                        if (onDeleteVoucher != null && !voucher.isCancelled) {
                             androidx.compose.material3.OutlinedButton(
-                                onClick = {
-                                    onDeleteVoucher(voucher)
-                                    onDismiss()
-                                },
+                                onClick = { showDeleteConfirm = true },
                                 colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                     contentColor = MaterialTheme.colorScheme.error
                                 )
                             ) {
-                                Text("Delete & Reverse")
+                                Text("Delete Voucher")
                             }
                         }
                         if (canCorrect) {
@@ -392,5 +411,31 @@ fun VoucherDetailDialog(
                 }
             }
         }
+    }
+
+    if (showDeleteConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete this voucher?") },
+            text = {
+                Text(
+                    "This removes ${voucher.voucherNumber} and its accounting entries entirely - " +
+                        "ledger balances are reversed correctly, but nothing about this voucher will be " +
+                        "visible anywhere afterward. This cannot be undone."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteVoucher?.invoke(voucher)
+                        onDismiss()
+                    }
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+            }
+        )
     }
 }

@@ -26,19 +26,17 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,11 +65,11 @@ fun AppTopBar(
     companies: List<Company>,
     currentFinancialYear: FinancialYear?,
     financialYears: List<FinancialYear>,
-    pendingSyncCount: Int,
-    isSyncing: Boolean,
     onCompanySelected: (Company) -> Unit,
     onFinancialYearSelected: (FinancialYear) -> Unit,
-    onSyncClicked: () -> Unit,
+    /** Real add-a-year capability (previously missing entirely) - extends backward from the
+     * earliest FY already on file, real dates, never a fabricated/fixed year. */
+    onAddPreviousFinancialYear: () -> Unit = {},
     onNewCompanyClicked: () -> Unit,
     onSearchClicked: () -> Unit = {},
     onProfileClicked: () -> Unit = {},
@@ -277,35 +275,14 @@ fun AppTopBar(
                                 }
                             )
                         }
-                    }
-                }
-
-                // Sync action button with badge
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (pendingSyncCount > 0) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier
-                        .clickable(enabled = !isSyncing) { onSyncClicked() }
-                        .testTag("sync_action_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (isSyncing) Icons.Default.Sync else if (pendingSyncCount > 0) Icons.Default.CloudSync else Icons.Default.CloudDone,
-                            contentDescription = "Sync",
-                            tint = if (pendingSyncCount > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(18.dp)
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("+ Add Previous Year", color = MaterialTheme.colorScheme.primary) },
+                            onClick = {
+                                onAddPreviousFinancialYear()
+                                fyDropdownOpen = false
+                            }
                         )
-                        if (pendingSyncCount > 0) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "$pendingSyncCount",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
                     }
                 }
 

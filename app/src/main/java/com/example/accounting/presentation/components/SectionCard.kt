@@ -51,7 +51,12 @@ fun SectionCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    // weight(1f, fill = false): reserves trailing's own natural width FIRST (an
+                    // unweighted sibling in a Row always measures before a weighted one), so a long
+                    // subtitle wraps within its own remaining space instead of squeezing trailing
+                    // (e.g. a StatusBadge) down to near-zero width, where its text would wrap
+                    // letter-by-letter - same fix as BackRow's own title Modifier.weight(1f, fill = false).
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
                         Text(title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                         if (subtitle != null) {
                             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

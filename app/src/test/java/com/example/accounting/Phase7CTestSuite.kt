@@ -136,7 +136,10 @@ class Phase7CTestSuite {
     // Day Book
     // ==========================================
     @Test
-    fun testGenerateDayBook_ordersChronologically_andDistinguishesPostedVsCancelled() = runBlocking {
+    fun testGenerateDayBook_ordersChronologically_andExcludesDeletedVoucher() = runBlocking {
+        // Real delete (explicit correction): a cancelled voucher is genuinely gone, never left
+        // visible in the Day Book with a CANCELLED status - Rule 12's old "posted vouchers are
+        // never physically deleted" design is no longer how cancellation works.
         val dao = freshDao()
         val ledgers = dao.seed()
         val repo = AccountingRepository(dao)
@@ -147,11 +150,10 @@ class Phase7CTestSuite {
         VoucherPostingEngine.cancel(dao, companyId, fyId, "V3", "IK_CANCEL_V3", "TESTER")
 
         val report = repo.generateDayBook(companyId, LocalDate.of(2026, 5, 1)..LocalDate.of(2026, 5, 31))
-        assertEquals(listOf("V1", "V2", "V3"), report.rows.map { it.voucherId })
+        assertEquals(listOf("V1", "V2"), report.rows.map { it.voucherId })
         assertEquals(DayBookEntryStatus.POSTED, report.rows[0].status)
         assertEquals(DayBookEntryStatus.POSTED, report.rows[1].status)
-        assertEquals(DayBookEntryStatus.CANCELLED, report.rows[2].status)
-        // Cancelled voucher's total must not count toward the report total.
+        // Deleted voucher's total must not count toward the report total.
         assertEquals(8_000_00L, report.totalAmount.paise)
     }
 
@@ -187,9 +189,13 @@ class Phase7CTestSuite {
         postVoucher(dao, "V_UNPAID", VoucherType.SALES, "2026-05-01", ledgers.getValue("debtors"), ledgers.getValue("sales"), 10_000_00L)
         dao.insertInvoice(invoiceEntity("INV_UNPAID", InvoiceType.SALES_INVOICE, customer.partyId, "V_UNPAID", "2026-05-01", "2026-05-31"))
 
-        // Fully paid via settlement allocation - should be excluded.
+        // Fully paid via settlement allocation - should be excluded. The settlement voucher must be
+        // a real, posted voucher (real Indian accounting/GST practice, and now also the real
+        // production behavior - see computeOutstandingPaise's own doc: a settlementVoucherId that
+        // resolves to no voucher is treated as "this settlement isn't real", same as a cancelled one).
         postVoucher(dao, "V_PAID", VoucherType.SALES, "2026-05-02", ledgers.getValue("debtors"), ledgers.getValue("sales"), 5_000_00L)
         dao.insertInvoice(invoiceEntity("INV_PAID", InvoiceType.SALES_INVOICE, customer.partyId, "V_PAID", "2026-05-02", "2026-06-01"))
+        postVoucher(dao, "V_RECEIPT", VoucherType.RECEIPT, "2026-05-02", ledgers.getValue("cash"), ledgers.getValue("debtors"), 5_000_00L)
         dao.insertSettlementAllocations(listOf(SettlementAllocationEntity("ALLOC_1", companyId, fyId, "V_RECEIPT", "V_PAID", 5_000_00L, 0L)))
 
         // Cancelled - should be excluded.
@@ -275,7 +281,10 @@ class Phase7CTestSuite {
         assertEquals("Walk-in Counter Sale", row.partyName)
         assertEquals(4_000_00L, row.outstandingAmount.paise)
 
-        // Fully settled -> no longer outstanding.
+        // Fully settled -> no longer outstanding. The settlement voucher must be a real, posted
+        // voucher (see computeOutstandingPaise's own doc: a settlementVoucherId that resolves to no
+        // voucher is treated as "this settlement isn't real", same as a cancelled one).
+        postVoucher(dao, "V_WALKIN_RCT", VoucherType.RECEIPT, "2026-05-01", ledgers.getValue("cash"), walkInLedgerId, 4_000_00L)
         dao.insertSettlementAllocations(listOf(SettlementAllocationEntity("ALLOC_WALKIN", companyId, fyId, "V_WALKIN_RCT", "V_WALKIN", 4_000_00L, 0L)))
         val afterSettlement = repo.generateReceivablesReport(companyId, today = LocalDate.of(2026, 5, 20))
         assertTrue(afterSettlement.rows.none { it.voucherId == "V_WALKIN" })

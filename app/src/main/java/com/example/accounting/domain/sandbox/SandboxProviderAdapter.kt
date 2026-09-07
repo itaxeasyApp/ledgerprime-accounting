@@ -145,3 +145,25 @@ interface SandboxProviderAdapter {
         assessmentYear: AssessmentYear
     ): AccountingResult<Form26AsResult>
 }
+
+/**
+ * The honest default (same shape as [com.example.accounting.domain.taxation.gstreturn.UnconfiguredGstOnlineFilingGateway])
+ * - there is no genuinely public, keyless GSTIN-lookup API (every real option, official GSP or
+ * third-party aggregator, requires its own signup/API key), so this NEVER fabricates a legal
+ * name/status for a GSTIN. It always reports the integration as unconfigured; a real
+ * [SandboxProviderAdapter] implementation (Sandbox.co.in or an equivalent licensed GSP, configured
+ * with THIS company's own API key via [com.example.accounting.core.security.SecureStorage] - never
+ * a shared/hardcoded one) is a real, separate integration step, not a UI change.
+ */
+class UnconfiguredSandboxProviderAdapter : SandboxProviderAdapter {
+    private val notConfigured = com.example.accounting.core.common.AccountingResult.Failure(
+        com.example.accounting.core.common.AppError.ValidationError(
+            "GSTIN lookup is not configured in this application. There is no free, keyless public API for this - " +
+                "connect a licensed GST Suvidha Provider (e.g. Sandbox.co.in) with your own API key to enable it."
+        )
+    )
+
+    override suspend fun verifyGstin(requestingCompany: BusinessProfile, environment: SandboxEnvironment, gstin: String): AccountingResult<GstinVerificationResult> = notConfigured
+    override suspend fun requestEInvoiceIrn(requestingCompany: BusinessProfile, environment: SandboxEnvironment, invoiceId: String): AccountingResult<EInvoiceIrnResult> = notConfigured
+    override suspend fun fetchForm26As(requestingCompany: BusinessProfile, environment: SandboxEnvironment, pan: String, assessmentYear: AssessmentYear): AccountingResult<Form26AsResult> = notConfigured
+}

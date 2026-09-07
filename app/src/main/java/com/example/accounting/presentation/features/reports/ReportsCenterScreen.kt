@@ -311,7 +311,19 @@ private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnD
                 onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency,
                 onExportCsv = gstReturnActions.onExportCsv,
                 onExportGstrJson = gstReturnActions.onExportGstrJson,
-                onSetNilReturn = gstReturnActions.onSetNilReturn
+                onSetNilReturn = gstReturnActions.onSetNilReturn,
+                onExportJson = gstReturnActions.onExportJson,
+                onPreviewPdf = gstReturnActions.onPreviewPdf,
+                onDownloadPdf = gstReturnActions.onDownloadPdf,
+                onPrintPdf = gstReturnActions.onPrintPdf,
+                onSharePdfSummary = gstReturnActions.onSharePdfSummary,
+                onUpdateGstReminderEnabled = gstReturnActions.onUpdateGstReminderEnabled,
+                onSaveProviderUsername = gstReturnActions.onSaveProviderUsername,
+                getProviderUsername = gstReturnActions.getProviderUsername,
+                onOpenSalesRegister = gstReturnActions.onOpenSalesRegister,
+                onOpenLedgers = gstReturnActions.onOpenLedgers,
+                onFixNow = gstReturnActions.onFixNow,
+                onMarkProcessingManually = gstReturnActions.onMarkProcessingManually
             )
         }
     }
@@ -345,7 +357,40 @@ data class GstReturnDashboardActions(
     val onExportCsv: () -> Unit = {},
     val onExportGstrJson: () -> Unit = {},
     /** Phase 8A, Part 2 - see [com.example.accounting.presentation.viewmodel.AccountingViewModel.setSelectedGstReturnNil]. */
-    val onSetNilReturn: (Boolean) -> Unit = {}
+    val onSetNilReturn: (Boolean) -> Unit = {},
+    /** Phase 8A, Part 2 - plain readable-JSON export, alongside [onExportCsv]/[onExportGstrJson]. */
+    val onExportJson: () -> Unit = {},
+    /** Phase 8A, Part 2 - PDF preview/download/print/share for the selected return's section-wise
+     * summary. See [com.example.accounting.presentation.viewmodel.AccountingViewModel.renderGstReturnPdf]'s
+     * own KDoc for why these are four genuinely distinct actions, not duplicates of each other. */
+    val onPreviewPdf: () -> Unit = {},
+    val onDownloadPdf: () -> Unit = {},
+    val onPrintPdf: () -> Unit = {},
+    val onSharePdfSummary: () -> Unit = {},
+    /** Phase 8A, Part 2 - see [com.example.accounting.presentation.viewmodel.AccountingViewModel.updateGstReminderEnabled]. */
+    val onUpdateGstReminderEnabled: (Boolean) -> Unit = {},
+    /** Reference-flow Authenticate step - the user's own GST-provider username, stored/read via
+     * the existing per-company [com.example.accounting.core.security.SecureStorage], never a
+     * shared or hardcoded credential. See
+     * [com.example.accounting.presentation.viewmodel.AccountingViewModel.saveGstProviderUsername]. */
+    val onSaveProviderUsername: (String) -> Unit = {},
+    val getProviderUsername: () -> String = { "" },
+    /** Dashboard step's Quick Actions - real existing destinations, mirroring
+     * [com.example.accounting.presentation.viewmodel.AccountingViewModel.viewReport]/`navigateTo`'s
+     * own pattern, never a tile with no real target. */
+    val onOpenSalesRegister: () -> Unit = {},
+    val onOpenLedgers: () -> Unit = {},
+    /** Error Details' "Fix Now" - see [com.example.accounting.presentation.features.reports.GstReturnDashboardView]'s own KDoc on this same param. */
+    val onFixNow: (String) -> Unit = {},
+    /** Online mode, filed manually at gst.gov.in - see
+     * [com.example.accounting.presentation.viewmodel.AccountingViewModel.markSelectedGstReturnProcessingManually]'s own KDoc. */
+    val onMarkProcessingManually: () -> Unit = {},
+    /** More tab (screen 8) - real existing app-level destinations, never a new screen. */
+    val onNavigateToProfile: () -> Unit = {},
+    val onNavigateToSettings: () -> Unit = {},
+    val onNavigateToSupport: () -> Unit = {},
+    val onLogoutCloudSync: () -> Unit = {},
+    val onActiveBottomTabChanged: (String) -> Unit = {}
 )
 
 @Composable

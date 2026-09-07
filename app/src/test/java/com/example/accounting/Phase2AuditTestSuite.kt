@@ -592,7 +592,12 @@ class Phase2AuditTestSuite {
      * current model genuinely cannot represent it safely.
      */
     @Test
-    fun i_ReversalRelationship_IsIdentifiableViaVoucherIdLineOrderAndNarration() = runBlocking {
+    fun i_CancelledVoucher_IsGenuinelyDeleted_AuditTrailLivesInAuditLog() = runBlocking {
+        // Explicit correction: real Indian accounting/GST practice never leaves a same-voucher
+        // offsetting entry behind - a voucher not yet reported to the government is genuinely
+        // deleted, not "reversed in place". The audit trail for that now lives in the AuditLog
+        // (a CANCEL_VOUCHER record), never in a pair of journal rows a viewer could mistake for two
+        // real transactions.
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_A", openingPaise = 0L))
         dao.insertLedger(ledger("LED_B", openingPaise = 500_00L))
@@ -610,27 +615,17 @@ class Phase2AuditTestSuite {
         VoucherPostingEngine.post(dao, voucher, originalItems, "IK-I-POST", "AUDITOR")
         VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-I-CANCEL", "AUDITOR")
 
+        // No journal items remain for this voucher at all - neither original nor reversal.
         val allItems = dao.getJournalItemsForVoucherSync(voucherId)
-        assertEquals(4, allItems.size)
+        assertEquals(0, allItems.size)
 
-        val (originals, reversals) = allItems.partition { it.itemId == "ORIG_1" || it.itemId == "ORIG_2" }
-        assertEquals(2, originals.size)
-        assertEquals(2, reversals.size)
+        // The voucher row itself is gone too.
+        assertEquals(null, dao.getVoucherById(companyId, voucherId))
 
-        // All 4 rows share the SAME voucherId - unambiguous voucher-level linkage.
-        assertTrue(allItems.all { it.voucherId == voucherId })
-
-        // Reversal rows are identifiable by lineOrder (appended after originals) and narration.
-        val maxOriginalOrder = originals.maxOf { it.lineOrder }
-        assertTrue(reversals.all { it.lineOrder > maxOriginalOrder })
-        assertTrue(reversals.all { it.narration.startsWith("Reversal: cancellation of voucher") })
-
-        // Original rows are byte-for-byte untouched (audit immutability) - not merely "present"
-        // but identical to what was originally inserted.
-        assertEquals(originalItems.toSet(), originals.toSet())
-
-        // Net effect per ledger is exactly zero, proving the pairing is safe in aggregate even
-        // without an explicit 1:1 reversal-of-item foreign key.
+        // Net effect per ledger is exactly zero (ledger balances are still correctly reversed),
+        // even though no journal rows survive to show the arithmetic. The real audit trail for
+        // this now lives in a CANCEL_VOUCHER AuditLog record (see VoucherPostingEngine.cancel),
+        // not in a pair of journal rows a viewer could mistake for two real transactions.
         assertEquals(0L, dao.getLedgerById(companyId, "LED_A")!!.currentBalancePaise)
         assertEquals(500_00L, dao.getLedgerById(companyId, "LED_B")!!.currentBalancePaise)
     }

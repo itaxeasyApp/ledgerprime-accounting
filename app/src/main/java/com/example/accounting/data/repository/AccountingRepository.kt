@@ -531,7 +531,8 @@ class AccountingRepository(
                 gstFilingFrequency = it.gstFilingFrequency,
                 isDefault = it.isDefault,
                 createdAt = it.createdAt,
-                pinCode = it.pinCode
+                pinCode = it.pinCode,
+                gstr1ReminderEnabled = it.gstr1ReminderEnabled
             )
         }
     }
@@ -558,7 +559,8 @@ class AccountingRepository(
             gstFilingFrequency = company.gstFilingFrequency,
             isDefault = company.isDefault,
             createdAt = System.currentTimeMillis(),
-            pinCode = company.pinCode
+            pinCode = company.pinCode,
+            gstr1ReminderEnabled = company.gstr1ReminderEnabled
         )
         dao.insertCompany(entity)
 
@@ -734,7 +736,11 @@ class AccountingRepository(
         /** Rule 33 follow-up - the Regular-scheme filing frequency (Monthly/QRMP-Quarterly). Same
          * "named explicit parameter on the company-profile update, no separate silent path"
          * rationale as [gstScheme]. */
-        gstFilingFrequency: com.example.accounting.domain.taxation.gstreturn.GstReturnPeriodicity? = null
+        gstFilingFrequency: com.example.accounting.domain.taxation.gstreturn.GstReturnPeriodicity? = null,
+        /** Phase 8A, Part 2 - see [com.example.accounting.domain.company.Company.gstr1ReminderEnabled].
+         * Same "named explicit parameter on this company-profile-update function" rationale as
+         * [gstScheme]/[gstFilingFrequency]. */
+        gstr1ReminderEnabled: Boolean? = null
     ): AccountingResult<Unit> {
         val existing = dao.getCompanyById(companyId)
             ?: return AccountingResult.Failure(AppError.ValidationError("Company not found"))
@@ -746,7 +752,8 @@ class AccountingRepository(
                 gstEnabled = gstEnabled ?: existing.gstEnabled,
                 gstOperatingMode = gstOperatingMode ?: existing.gstOperatingMode,
                 gstScheme = gstScheme ?: existing.gstScheme,
-                gstFilingFrequency = gstFilingFrequency ?: existing.gstFilingFrequency
+                gstFilingFrequency = gstFilingFrequency ?: existing.gstFilingFrequency,
+                gstr1ReminderEnabled = gstr1ReminderEnabled ?: existing.gstr1ReminderEnabled
             )
         )
 
@@ -969,20 +976,19 @@ class AccountingRepository(
      * over-allocation guard so both always agree on the same figure. Null if the voucher doesn't exist.
      *
      * Cancel/Reverse audit fix - an allocation whose OWN settlement (Receipt/Payment) voucher was
-     * later cancelled must not keep counting against this invoice: [VoucherPostingEngine.cancel]
-     * reverses a cancelled voucher's journal items/GST facts but - by design, same as every other
-     * voucher type - never deletes/mutates its [SettlementAllocationEntity] rows (Rule 12,
-     * append-only; the allocation itself is a true historical fact, only which voucher it's
-     * attributed to changes). So this is a read-time exclusion, exactly mirroring how
-     * [noteAdjustment] already excludes a cancelled Credit/Debit Note two lines below - never a
-     * write to `settlement_allocations` itself. Only an explicitly CONFIRMED cancellation excludes
-     * the allocation - a `settlementVoucherId` that resolves to no voucher at all is left counted
-     * exactly as before this fix, never treated as equivalent to "cancelled". */
+     * later cancelled must not keep counting against this invoice. [VoucherPostingEngine.cancel]
+     * now genuinely deletes a cancelled voucher (explicit correction: real Indian accounting/GST
+     * practice never leaves a same-voucher offsetting entry behind), so `settlementVoucherId`
+     * resolving to no voucher at all is the NORMAL, expected shape of "this settlement was
+     * cancelled" now - not a data-integrity anomaly to leave counted. [SettlementAllocationEntity]
+     * rows themselves are still never deleted/mutated (the allocation is a true historical fact);
+     * this is a read-time exclusion only, exactly mirroring how [noteAdjustment] already excludes a
+     * cancelled Credit/Debit Note two lines below. */
     private suspend fun computeOutstandingPaise(companyId: String, invoiceVoucherId: String): Long? {
         val invoice = dao.getVoucherById(companyId, invoiceVoucherId) ?: return null
         val allocated = dao.getAllocationsForInvoice(invoiceVoucherId).fold(0L) { acc, a ->
             val settlementVoucher = dao.getVoucherById(companyId, a.settlementVoucherId)
-            if (settlementVoucher?.isCancelled == true) acc else acc + a.allocatedAmountPaise
+            if (settlementVoucher == null || settlementVoucher.isCancelled) acc else acc + a.allocatedAmountPaise
         }
         val noteAdjustment = dao.getVouchersByCompany(companyId).first()
             .filter { it.referenceVoucherId == invoiceVoucherId && !it.isCancelled }
@@ -1117,6 +1123,48 @@ class AccountingRepository(
                 lockedBy = it.lockedBy
             )
         }
+    }
+
+    /** Adds one more real Financial Year for an existing company - previously there was no way to
+     * add a prior or future year at all; `createCompany()` seeds exactly one (the current one,
+     * derived from the real device date). [addPrevious] extends backward from the earliest FY on
+     * file (locked, since a past year's books are historical) or forward from the latest one
+     * (open, matching `createCompany()`'s own default for a brand-new FY) - never a fixed literal
+     * year, never mock data of any kind. Idempotent: adding the same year twice is a no-op success
+     * rather than a duplicate row or a thrown exception. */
+    suspend fun addFinancialYear(companyId: String, addPrevious: Boolean): AccountingResult<FinancialYear> {
+        val existing = dao.getFinancialYearsByCompany(companyId).first()
+        if (existing.isEmpty()) return AccountingResult.Failure(AppError.ValidationError("No existing financial year to extend from"))
+        val reference = if (addPrevious) existing.minByOrNull { it.startDate }!! else existing.maxByOrNull { it.startDate }!!
+        val refStart = safeParseDate(reference.startDate)
+        val newStart = if (addPrevious) refStart.minusYears(1) else refStart.plusYears(1)
+        val newEnd = newStart.plusYears(1).minusDays(1)
+        val fyId = "FY_${newStart.year}_${newEnd.year}_$companyId"
+        existing.firstOrNull { it.financialYearId == fyId }?.let { e ->
+            return AccountingResult.Success(
+                FinancialYear(
+                    financialYearId = e.financialYearId, companyId = e.companyId, fyCode = e.fyCode,
+                    startDate = safeParseDate(e.startDate), endDate = safeParseDate(e.endDate),
+                    isCurrent = e.isCurrent, isLocked = e.isLocked, lockedAt = e.lockedAt, lockedBy = e.lockedBy
+                )
+            )
+        }
+        val now = System.currentTimeMillis()
+        val entity = FinancialYearEntity(
+            financialYearId = fyId, companyId = companyId,
+            fyCode = "FY ${newStart.year}-${newEnd.year.toString().takeLast(2)}",
+            startDate = newStart.toString(), endDate = newEnd.toString(),
+            isCurrent = false, isLocked = addPrevious,
+            lockedAt = if (addPrevious) now else null, lockedBy = if (addPrevious) "SYSTEM" else null
+        )
+        dao.insertFinancialYear(entity)
+        return AccountingResult.Success(
+            FinancialYear(
+                financialYearId = entity.financialYearId, companyId = entity.companyId, fyCode = entity.fyCode,
+                startDate = newStart, endDate = newEnd, isCurrent = entity.isCurrent, isLocked = entity.isLocked,
+                lockedAt = entity.lockedAt, lockedBy = entity.lockedBy
+            )
+        )
     }
 
     fun getPeriods(financialYearId: String): Flow<List<AccountingPeriod>> = dao.getPeriodsByFinancialYear(financialYearId).map { list ->
@@ -2320,14 +2368,46 @@ class AccountingRepository(
     }
 
     /**
-     * Rule 12: VOUCHER CANCELLATION (Deletion Policy)
-     * Posted vouchers are never physically deleted. Cancellation is a single atomic compensating
-     * reversal via [DatabaseTransaction.cancelVoucherAtomic] - the sole authoritative path:
-     * - Inserts opposite-sign journal lines reversing every original line (originals untouched)
-     * - Reverses affected ledger running balances
-     * - Marks the voucher isCancelled = true
-     * - Appends an immutable CANCEL_VOUCHER audit record
-     * - Enqueues a cancellation outbox item with idempotencyKey
+     * See [deleteVoucherSafely]'s own KDoc for why this exists. Returns the first GstReturn (any
+     * type this company can file) whose own period genuinely covers [voucherDateStr] and whose
+     * status is PROCESSING or FILED - real evidence the government has already been told about this
+     * period - or null if no such return exists (a DRAFT/READY/VALIDATION_FAILED/FAILED/REJECTED
+     * return for that period is not evidence of anything reported, so cancellation stays allowed).
+     */
+    private suspend fun findFiledOrProcessingGstReturnCoveringDate(companyId: String, voucherDateStr: String): GstReturn? {
+        val voucherDate = safeParseDate(voucherDateStr) ?: return null
+        val candidates = dao.getGstReturnsForCompany(companyId).first()
+            .filter { it.status == GstReturnStatus.PROCESSING || it.status == GstReturnStatus.FILED }
+        for (entity in candidates) {
+            val fyEntity = dao.getFinancialYearById(entity.financialYearId) ?: continue
+            val fyStart = safeParseDate(fyEntity.startDate) ?: continue
+            val fyEnd = safeParseDate(fyEntity.endDate) ?: continue
+            val fy = com.example.accounting.domain.financialyear.FinancialYear(
+                financialYearId = fyEntity.financialYearId, companyId = fyEntity.companyId,
+                fyCode = fyEntity.fyCode, startDate = fyStart, endDate = fyEnd, isCurrent = fyEntity.isCurrent
+            )
+            val quarter = runCatching { GstQuarter.valueOf(entity.quarter) }.getOrNull() ?: continue
+            val range = runCatching { GstPeriod.of(fy, quarter, entity.month).dateRange() }.getOrNull() ?: continue
+            if (!voucherDate.isBefore(range.start) && !voucherDate.isAfter(range.endInclusive)) {
+                return entity.toDomain()
+            }
+        }
+        return null
+    }
+
+    /**
+     * VOUCHER CANCELLATION - real deletion (explicit correction: real Indian accounting/GST
+     * practice never leaves a same-voucher offsetting entry behind - a voucher not yet reported to
+     * the government is genuinely cancelled/deleted; one already reported requires a real,
+     * separate Credit/Debit Note instead, which this function refuses to let bypass - see the
+     * PROCESSING/FILED gate a few lines below). [DatabaseTransaction.cancelVoucherAtomic] is the
+     * sole authoritative path:
+     * - Reverses affected ledger running balances (proven-correct math, unchanged)
+     * - Deletes the original journal lines and GST transactions outright
+     * - Deletes the voucher row itself
+     * - Appends an immutable CANCEL_VOUCHER audit record (the real trail lives here, not in a
+     *   fabricated day-book entry)
+     * - Enqueues a deletion outbox item with idempotencyKey
      *
      * Pre-validates the period lock the same way [postVoucher] does (Project Principle 4:
      * locked/audit-locked periods reject postings, edits, AND cancellations) before entering
@@ -2348,6 +2428,30 @@ class AccountingRepository(
             return AccountingResult.Failure(
                 AppError.PeriodLocked(periodName = period.name, date = voucher.date)
             )
+        }
+
+        // Real Indian GST practice (explicit correction, not a hypothetical): once a voucher's own
+        // period has actually been reported to the government - PROCESSING (the user has told this
+        // app they already filed/submitted at the real portal, ARN pending entry) or FILED - it can
+        // never be cancelled outright, in accounting OR in the GSTR. The only correct correction at
+        // that point is a real, separate Credit/Debit Note voucher, which naturally reflects in the
+        // CDNR/CDNUR section of whichever return covers ITS OWN date - never a same-voucher
+        // self-reversal or any kind of retroactive "amendment" to the already-filed return. Scoped to
+        // voucherType.createsGst (Sales/Purchase/Credit Note/Debit Note) - a Payment/Receipt/Journal/
+        // Contra voucher never feeds a GST return, so this never blocks cancelling those.
+        if (voucher.voucherType.createsGst) {
+            val filedReturn = findFiledOrProcessingGstReturnCoveringDate(companyId, voucher.date)
+            if (filedReturn != null) {
+                val verb = if (filedReturn.status == GstReturnStatus.FILED) "filed" else "submitted"
+                return AccountingResult.Failure(
+                    AppError.BusinessRuleViolation(
+                        "Cannot cancel ${voucher.voucherType.displayName} '${voucher.voucherNumber}' - its period (${filedReturn.periodKey}) " +
+                            "has already been $verb in ${filedReturn.returnType}. Issue a Credit Note or Debit Note instead - " +
+                            "that is a real, separate voucher, and it will correctly appear in the CDNR/CDNUR section of whichever " +
+                            "return covers its own date."
+                    )
+                )
+            }
         }
 
         if (dbTransaction == null) {
@@ -2830,6 +2934,19 @@ class AccountingRepository(
         val suspenseDebitPaise = if (suspenseNetSigned > 0) suspenseNetSigned else 0L
         val suspenseCreditPaise = if (suspenseNetSigned < 0) -suspenseNetSigned else 0L
 
+        // Real bug fix (live-device audit finding) - "Round Off" is the SAME PrimaryGroup.SPECIAL_CONTROL
+        // control-account treatment as Suspense above, and needs the exact same explicit fold: a
+        // SPECIAL_CONTROL ledger's balance is invisible to totalLiabilitiesPaise/totalAssetsPaise
+        // below (neither is PrimaryGroup.LIABILITIES nor PrimaryGroup.ASSETS) unless looked up here.
+        // Round Off was missing this fold entirely, so ANY invoice that actually needed rounding
+        // (a non-round-rupee GST total) silently dropped that paise-level amount from BOTH sides of
+        // the Balance Sheet identity - reported as "Total Assets does not equal Total Liabilities +
+        // Equity" by exactly the Round Off amount, with Trial Balance itself still fully balanced.
+        val roundOffNode = GroupAggregationEngine.findNode(hierarchy, "${StandardSystemGroups.ROUND_OFF_GROUP_ID}_$companyId")
+        val roundOffNetSigned = (roundOffNode?.totalDebitPaise ?: 0L) - (roundOffNode?.totalCreditPaise ?: 0L)
+        val roundOffDebitPaise = if (roundOffNetSigned > 0) roundOffNetSigned else 0L
+        val roundOffCreditPaise = if (roundOffNetSigned < 0) -roundOffNetSigned else 0L
+
         // EQUITY
         val capitalPaise = netCredit(StandardSystemGroups.CAPITAL_GROUP_ID)
         val reservesPaise = netCredit(StandardSystemGroups.RESERVES_GROUP_ID)
@@ -2866,8 +2983,8 @@ class AccountingRepository(
         // above, so COGS is derived exactly once per report.
         val stockInHandPaise = pnl.closingStock.paise
 
-        val totalLiabilitiesPaise = capitalPaise + reservesPaise + pnl.netProfit.paise + loansPaise + currentLiabPaise + dutiesTaxesPaise + branchDivPaise + suspenseCreditPaise
-        val totalAssetsPaise = fixedAssetsPaise + investmentsPaise + currentAssetsPaise + debtorsPaise + bankPaise + cashPaise + miscExpPaise + suspenseDebitPaise + stockInHandPaise + gstRecoverablePaise
+        val totalLiabilitiesPaise = capitalPaise + reservesPaise + pnl.netProfit.paise + loansPaise + currentLiabPaise + dutiesTaxesPaise + branchDivPaise + suspenseCreditPaise + roundOffCreditPaise
+        val totalAssetsPaise = fixedAssetsPaise + investmentsPaise + currentAssetsPaise + debtorsPaise + bankPaise + cashPaise + miscExpPaise + suspenseDebitPaise + stockInHandPaise + gstRecoverablePaise + roundOffDebitPaise
 
         val report = BalanceSheetReport(
             companyName = company?.name ?: "Company",
@@ -2881,6 +2998,7 @@ class AccountingRepository(
             dutiesAndTaxesLiability = Money.fromPaise(dutiesTaxesPaise),
             branchDivisions = Money.fromPaise(branchDivPaise),
             suspenseCredit = Money.fromPaise(suspenseCreditPaise),
+            roundOffCredit = Money.fromPaise(roundOffCreditPaise),
             totalLiabilities = Money.fromPaise(totalLiabilitiesPaise),
             fixedAssets = Money.fromPaise(fixedAssetsPaise),
             investments = Money.fromPaise(investmentsPaise),
@@ -2892,6 +3010,7 @@ class AccountingRepository(
             stockInHand = Money.fromPaise(stockInHandPaise),
             gstRecoverable = Money.fromPaise(gstRecoverablePaise),
             suspenseDebit = Money.fromPaise(suspenseDebitPaise),
+            roundOffDebit = Money.fromPaise(roundOffDebitPaise),
             totalAssets = Money.fromPaise(totalAssetsPaise)
         )
 
@@ -3250,6 +3369,13 @@ class AccountingRepository(
                 "ITC_RCM" to bucketTotals(inward.filter { it.chargeType == GstChargeType.REVERSE_CHARGE })
             )
             GstReturnType.GSTR4 -> linkedMapOf("SUMMARY" to bucketTotals(transactions))
+            // CMP-08's real statutory computation is turnover-times-composition-rate, and the rate
+            // depends on business category (manufacturer/trader 1%, restaurant 5%, service 6%) -
+            // that categorization isn't modeled anywhere in this codebase yet, so a tax-liability
+            // figure here would be fabricated. This section carries only the real, already-computed
+            // turnover total (same [bucketTotals] real transactions GSTR-4 uses) - never an invented
+            // composition-tax number.
+            GstReturnType.CMP08 -> linkedMapOf("TURNOVER_SUMMARY" to bucketTotals(transactions))
         }
     }
 
@@ -3295,6 +3421,7 @@ class AccountingRepository(
         val sections = dao.getSectionsForGstReturn(gstReturnId)
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
+        val structuredIssues = mutableListOf<Map<String, Any?>>()
         // A section only ever starts PENDING - PREPARED/VALIDATION_PASSED/VALIDATION_FAILED all
         // prove Prepare has run at least once (re-validating an already-validated return, e.g.
         // after a failed submission attempt, must not be mistaken for "never prepared"). A return
@@ -3322,6 +3449,14 @@ class AccountingRepository(
                 issues.forEach { issue ->
                     val text = "[${issue.code}] ${issue.message}"
                     if (issue.severity == Gstr1ValidationSeverity.ERROR) errors += text else warnings += text
+                    // Structured, alongside the flattened "[CODE] message" strings above (never
+                    // replacing them - existing readers of "errors"/"warnings" keep working
+                    // unchanged) - a checklist/error-detail UI needs the real `code`/`voucherId`
+                    // Gstr1Validator already computed, not a re-parse of the human-readable text.
+                    structuredIssues += mapOf(
+                        "code" to issue.code, "message" to issue.message,
+                        "severity" to issue.severity.name, "voucherId" to issue.voucherId
+                    )
                 }
             }
         }
@@ -3341,7 +3476,7 @@ class AccountingRepository(
             dao.upsertGstReturnSection(
                 section.copy(
                     status = if (errors.isEmpty()) GstReturnSectionStatus.VALIDATION_PASSED else GstReturnSectionStatus.VALIDATION_FAILED,
-                    errorsJson = if (errors.isEmpty() && warnings.isEmpty()) null else gstReturnJsonAdapter.toJson(mapOf("errors" to errors, "warnings" to warnings)),
+                    errorsJson = if (errors.isEmpty() && warnings.isEmpty()) null else gstReturnJsonAdapter.toJson(mapOf("errors" to errors, "warnings" to warnings, "issues" to structuredIssues)),
                     updatedAt = now
                 )
             )
@@ -3429,6 +3564,23 @@ class AccountingRepository(
      * real acknowledgement number the user read off that response. This application never infers
      * FILED automatically from parsing an unknown response schema (Section 5/6: "do not fabricate").
      */
+    /** Filing Mode = Online, but the user filed it themselves directly at gst.gov.in instead of
+     * using [submitGstReturnOnline] (a real, common real-world path: many users still prefer the
+     * government portal directly) - this is the READY -> PROCESSING half of the exact same
+     * two-step flow Offline mode already uses (import a response file -> PROCESSING -> Mark as
+     * Filed), just without a response file to import, since there isn't one. [markGstReturnFiled]
+     * (PROCESSING -> FILED) still requires the user's own real acknowledgement number either way -
+     * never auto-filled, never fabricated. */
+    suspend fun markGstReturnProcessingManually(companyId: String, gstReturnId: String): AccountingResult<GstReturn> {
+        val entity = dao.getGstReturnById(companyId, gstReturnId)
+            ?: return AccountingResult.Failure(AppError.ResourceNotFound("GstReturn", gstReturnId))
+        if (!GstReturnStatusTransitions.isAllowed(entity.status, GstReturnStatus.PROCESSING)) {
+            return AccountingResult.Failure(AppError.BusinessRuleViolation("Cannot move ${entity.status} to PROCESSING."))
+        }
+        dao.updateGstReturn(entity.copy(status = GstReturnStatus.PROCESSING, updatedAt = System.currentTimeMillis()))
+        return AccountingResult.Success(dao.getGstReturnById(companyId, gstReturnId)!!.toDomain())
+    }
+
     suspend fun markGstReturnFiled(companyId: String, gstReturnId: String, acknowledgementNumber: String): AccountingResult<GstReturn> {
         val entity = dao.getGstReturnById(companyId, gstReturnId)
             ?: return AccountingResult.Failure(AppError.ResourceNotFound("GstReturn", gstReturnId))
@@ -3440,7 +3592,16 @@ class AccountingRepository(
         }
         val now = System.currentTimeMillis()
         dao.updateGstReturn(
-            entity.copy(status = GstReturnStatus.FILED, acknowledgementNumber = acknowledgementNumber, updatedAt = now)
+            entity.copy(
+                status = GstReturnStatus.FILED, acknowledgementNumber = acknowledgementNumber,
+                // The real moment the user told the app they'd filed - Online's own auto-submit
+                // path already sets this on submission; this manual path (Offline JSON filed at
+                // gst.gov.in, or Online filed there directly) reached FILED without ever going
+                // through that path, so it must set its own real timestamp here or every "Filed
+                // On" display (Acknowledgement, Filing Progress) is left blank for it.
+                submittedAt = entity.submittedAt ?: now,
+                updatedAt = now
+            )
         )
         return AccountingResult.Success(dao.getGstReturnById(companyId, gstReturnId)!!.toDomain())
     }

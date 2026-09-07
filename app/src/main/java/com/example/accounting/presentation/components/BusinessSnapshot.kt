@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.accounting.core.common.Money
+import com.example.ui.theme.IndigoTax
 
 /**
  * Widget - the Dashboard's "Business Snapshot" section: a prominent Cash/Bank row plus a compact
@@ -50,6 +52,10 @@ fun BusinessSnapshot(
     onViewPayables: () -> Unit,
     onViewProfitLoss: () -> Unit,
     onViewGstSummary: () -> Unit,
+    /** GST Dashboard's own entry point - moved here from its former standalone Quick Actions row
+     * (per explicit instruction) so every dashboard destination lives in one place: a real figure
+     * or a real destination, inside Business Snapshot's own container grid. */
+    onOpenGstDashboard: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -78,7 +84,7 @@ fun BusinessSnapshot(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             tradeSecond()
             StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewGstSummary() })
-            Spacer(modifier = Modifier.weight(1f))
+            StatCard("GST Dashboard", gstPayable, "File & track returns", Icons.Default.Receipt, IndigoTax, Modifier.weight(1f).clickable { onOpenGstDashboard() })
         }
     }
 }

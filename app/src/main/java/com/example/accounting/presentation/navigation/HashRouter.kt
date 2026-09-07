@@ -19,6 +19,11 @@ sealed class AppRoute(val path: String, val title: String) {
     object ChartOfAccounts : AppRoute("#chart-of-accounts", "Ledger Accounts")
     data class LedgerStatement(val ledgerId: String) : AppRoute("#statement/$ledgerId", "Ledger Statement")
     object Reports : AppRoute("#reports", "Reports Center")
+    /** A genuinely separate top-level screen (not nested inside Reports Center's category menu) -
+     * on a phone-sized screen, three stacked back-headers (Reports Center category -> GST menu ->
+     * this screen's own step header) ate real vertical space before any content; a dedicated
+     * route means only this screen's own header shows. */
+    object GstDashboard : AppRoute("#gst-dashboard", "GST Dashboard")
     object SettingsAndSync : AppRoute("#settings-sync", "Governance & Outbox Sync")
 
     object Sales : AppRoute("#sales", "Sales")

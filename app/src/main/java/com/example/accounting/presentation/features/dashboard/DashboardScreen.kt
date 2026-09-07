@@ -64,6 +64,10 @@ fun DashboardScreen(
     onViewPayables: () -> Unit,
     onViewProfitLoss: () -> Unit,
     onViewGstSummary: () -> Unit,
+    /** Phase 8A, Part 2 - a one-tap, first-class Home entry point straight to the GST Return
+     * Dashboard (Reports Center's own GST category still works too - this is additive, not a
+     * replacement), matching [onViewGstSummary]'s exact `viewReport(...)` deep-link pattern. */
+    onViewGstDashboard: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
@@ -149,7 +153,8 @@ fun DashboardScreen(
                     onViewReceivables = onViewReceivables,
                     onViewPayables = onViewPayables,
                     onViewProfitLoss = onViewProfitLoss,
-                    onViewGstSummary = onViewGstSummary
+                    onViewGstSummary = onViewGstSummary,
+                    onOpenGstDashboard = onViewGstDashboard
                 )
             }
         }

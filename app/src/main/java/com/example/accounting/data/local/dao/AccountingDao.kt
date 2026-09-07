@@ -377,6 +377,9 @@ interface AccountingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGstTransactions(transactions: List<GstTransactionEntity>)
 
+    @Query("DELETE FROM gst_transactions WHERE voucherId = :voucherId")
+    suspend fun deleteGstTransactionsByVoucher(voucherId: String)
+
     // ==================== SETTLEMENT ALLOCATIONS (Phase 5) ====================
     @Query("SELECT * FROM settlement_allocations WHERE invoiceVoucherId = :invoiceVoucherId")
     suspend fun getAllocationsForInvoice(invoiceVoucherId: String): List<SettlementAllocationEntity>

@@ -102,6 +102,15 @@ data class BalanceSheetReport(
     val dutiesAndTaxesLiability: Money,
     val branchDivisions: Money = Money.ZERO,
     val suspenseCredit: Money = Money.ZERO,
+    /** The invoice-rounding "Round Off" ledger's net credit balance - same PrimaryGroup.SPECIAL_CONTROL
+     * control-account treatment as Suspense (see [suspenseCredit]/[suspenseDebit]'s own doc), and
+     * the same reason it needs its own explicit fold here: unlike every named Liabilities/Assets
+     * bucket above, a SPECIAL_CONTROL ledger's balance is invisible to `totalLiabilitiesPrimaryPaise`/
+     * `totalAssetsPrimaryPaise` (they filter by PrimaryGroup.LIABILITIES/ASSETS) unless explicitly
+     * looked up and added in, same as `AccountingRepository.generateBalanceSheet` already did for
+     * Suspense - Round Off was missing that same fold, which silently dropped it from both sides of
+     * the Balance Sheet identity whenever an invoice actually needed rounding. */
+    val roundOffCredit: Money = Money.ZERO,
     val totalLiabilities: Money,
     // Assets side
     val fixedAssets: Money,
@@ -125,6 +134,9 @@ data class BalanceSheetReport(
      */
     val gstRecoverable: Money = Money.ZERO,
     val suspenseDebit: Money = Money.ZERO,
+    /** See [roundOffCredit]'s own doc - the same Round Off control-account balance, Debit-natured
+     * side. */
+    val roundOffDebit: Money = Money.ZERO,
     val totalAssets: Money
 ) {
     val isBalanced: Boolean get() = totalLiabilities.paise == totalAssets.paise

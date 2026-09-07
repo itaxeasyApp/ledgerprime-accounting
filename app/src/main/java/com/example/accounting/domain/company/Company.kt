@@ -77,7 +77,14 @@ data class Company(
      * field for this at all (only Ledger did); never required, mirrors [address]'s own optionality.
      * Appended last (never inserted mid-constructor) so every existing `Company(...)` call site
      * keeps compiling. */
-    val pinCode: String = ""
+    val pinCode: String = "",
+    /** Phase 8A, Part 2 - whether [com.example.accounting.automation.compliance.GstReturnAutomationChecker.checkFilingReminder]
+     * is allowed to emit GSTR-1 due-soon/overdue notifications for this company. Independent of
+     * [gstEnabled]/[gstScheme] (draft preparation and validation automation stay on regardless -
+     * this only gates the reminder notification, never the underlying prepare/validate checks).
+     * Defaults to `true` so every existing company keeps its current (always-on) behavior
+     * unchanged. */
+    val gstr1ReminderEnabled: Boolean = true
 ) {
     init {
         require(companyId.isNotBlank()) { "Company ID must not be blank" }

@@ -288,9 +288,12 @@ class GstReturnDashboardTestSuite {
     }
 
     @Test
-    fun t8_CompositionScheme_AppliesGstr4Only() {
+    fun t8_CompositionScheme_AppliesCmp08AndGstr4Only() {
+        // Composition dealers really do file both: CMP-08 (quarterly statement-cum-challan) and
+        // GSTR-4 (annual return) - never GSTR-1/GSTR-3B, which only apply under Regular.
         val rules = GstReturnApplicability.availableReturns(GstScheme.COMPOSITION)
-        assertEquals(listOf(GstReturnType.GSTR4), rules.map { it.returnType })
+        assertEquals(listOf(GstReturnType.CMP08, GstReturnType.GSTR4), rules.map { it.returnType })
+        assertTrue(rules.all { it.periodicity == GstReturnPeriodicity.QUARTERLY })
     }
 
     @Test

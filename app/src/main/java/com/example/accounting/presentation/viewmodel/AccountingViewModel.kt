@@ -196,6 +196,22 @@ data class AccountingUiState(
     val selectedGstReturn: GstReturn? = null,
     val selectedGstReturnSections: List<GstReturnSection> = emptyList(),
     val selectedGstReturnArtifacts: List<GstReturnArtifact> = emptyList(),
+    /** Phase 8A, Part 2 - real [com.example.accounting.automation.notifications.AutomationNotification]s
+     * already emitted by `GstReturnAutomationChecker` for the current company (category
+     * `GST_RETURN_FILING`), most recent first. Never fabricated - empty when no automation has run
+     * yet for this company. */
+    val gstAutomationNotifications: List<com.example.accounting.automation.notifications.AutomationNotification> = emptyList(),
+    /** GST Dashboard's own bottom nav (Dashboard/Invoices/Returns/Reports) lives in
+     * [com.example.accounting.presentation.MainAppScreen]'s Scaffold, outside the wizard's own
+     * local step state - this is the one-shot "jump to step X" channel between them, same
+     * request/consume shape as [reportsDeepLink]/[consumeReportsDeepLink]. */
+    val gstBottomNavRequest: String? = null,
+    /** Which of the GST bottom nav's own tabs ("Dashboard"/"Returns"/"More") is actually showing
+     * right now - unlike [gstBottomNavRequest] (one-shot, consumed to null immediately), this
+     * persists so the nav bar's `selected` highlight stays correct after the wizard lands on that
+     * step via ANY path, not just a tap on that same bottom nav tab (e.g. tapping the Dashboard's
+     * own "Return History" card must highlight "Returns" too). */
+    val gstActiveBottomTab: String = "Dashboard",
 
     // ==== Phase 7J-B.2 (Slice 2): Voucher Document Attachments ====
     /** Which voucher [voucherAttachments] currently holds - lets a screen avoid rendering a
@@ -214,7 +230,12 @@ data class AccountingUiState(
      * Holds the exact [ReportsCenterScreen] report-menu key (e.g. "Outstanding Receivables") to
      * auto-select on next Report Center composition; cleared once consumed so it never re-fires
      * on an unrelated later visit to the Reports tab. */
-    val reportsDeepLink: String? = null
+    val reportsDeepLink: String? = null,
+
+    /** Same one-shot request/consume shape as [reportsDeepLink] - the Dashboard's "Cash"/"Bank"
+     * Business Snapshot cards must land directly on that specific ledger list, never on the Money
+     * tab's own combined Cash+Bank landing page first. One of "Cash"/"Bank"; cleared once consumed. */
+    val moneyDeepLink: String? = null
 )
 
 /**
@@ -303,6 +324,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             com.example.accounting.automation.notifications.AutomationNotificationCenter.notifications.collect { notif ->
                 emitMessage("${notif.title}: ${notif.message}")
+                // Phase 8A, Part 2 - keep the GST Dashboard's Automation card live if a background
+                // job (WorkManager) emits a GSTR-1 notification while the app is open, not just on
+                // next openGstReturn().
+                if (notif.category == com.example.accounting.automation.notifications.NotificationCategory.GST_RETURN_FILING &&
+                    notif.companyId == _uiState.value.currentCompany?.companyId
+                ) {
+                    refreshGstAutomationNotifications()
+                }
             }
         }
 
@@ -320,6 +349,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         _uiState.update { it.copy(selectedTab = NavigationTab.REPORTS) }
                         refreshFinancialReports()
                         refreshReportsCenterExtras()
+                    }
+                    is AppRoute.GstDashboard -> {
+                        _uiState.update { it.copy(selectedTab = NavigationTab.REPORTS) }
+                        refreshFinancialReports()
+                        refreshGstAutomationNotifications()
                     }
                     is AppRoute.SettingsAndSync -> { /* reached from Profile - keep whatever tab was active */ }
                     is AppRoute.LedgerStatement -> { /* keep whatever tab was active (Home or Reports) */ }
@@ -501,6 +535,36 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(reportsDeepLink = null) }
     }
 
+    /** Dashboard's "Cash"/"Bank" Business Snapshot cards - jumps straight to that ledger list on
+     * the Money tab, never its combined Cash+Bank landing page. [target] is "Cash" or "Bank". */
+    fun viewMoney(target: String) {
+        _uiState.update { it.copy(moneyDeepLink = target) }
+        selectTab(NavigationTab.MONEY)
+    }
+
+    /** Called once [MoneyTabContent] has consumed [AccountingUiState.moneyDeepLink] and jumped to
+     * that sub-screen, so leaving/re-entering Money afterward starts at its own landing page again. */
+    fun consumeMoneyDeepLink() {
+        _uiState.update { it.copy(moneyDeepLink = null) }
+    }
+
+    /** The GST Dashboard's own bottom nav (Dashboard/Invoices/Returns/Reports/More) - see
+     * [AccountingUiState.gstBottomNavRequest]'s own KDoc. [target] is one of "Dashboard",
+     * "Returns", "More" - the wizard step names its own `LaunchedEffect` understands. */
+    fun requestGstBottomNav(target: String) {
+        _uiState.update { it.copy(gstBottomNavRequest = target) }
+    }
+
+    /** See [AccountingUiState.gstActiveBottomTab]'s own KDoc - called by the wizard itself
+     * whenever its step lands on Dashboard/History/More, by any path. */
+    fun setGstActiveBottomTab(tab: String) {
+        _uiState.update { it.copy(gstActiveBottomTab = tab) }
+    }
+
+    fun consumeGstBottomNavRequest() {
+        _uiState.update { it.copy(gstBottomNavRequest = null) }
+    }
+
     fun navigateTo(route: AppRoute) {
         router.navigate(route)
     }
@@ -528,6 +592,19 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(currentFinancialYear = fy) }
         observeFinancialYearData(compId, fy.financialYearId)
         emitMessage("Switched accounting boundary to: ${fy.fyCode}")
+    }
+
+    /** Real "add a year" capability - previously missing entirely, `createCompany()` only ever
+     * seeds the one current FY. `getFinancialYears` is an observed Room Flow, so the new row
+     * appears in [AccountingUiState.financialYears] on its own once inserted - no manual refresh. */
+    fun addPreviousFinancialYear() {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            when (val result = repository.addFinancialYear(comp.companyId, addPrevious = true)) {
+                is AccountingResult.Success -> emitMessage("Added ${result.data.fyCode}.")
+                is AccountingResult.Failure -> emitMessage("Could not add financial year: ${result.error.message}")
+            }
+        }
     }
 
     fun togglePeriodLock(period: AccountingPeriod) {
@@ -2317,6 +2394,28 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.update {
                 it.copy(selectedGstReturn = gstReturn, selectedGstReturnSections = sections, selectedGstReturnArtifacts = artifacts)
             }
+            refreshGstAutomationNotifications()
+        }
+    }
+
+    /** Phase 8A, Part 2 - populates [AccountingUiState.gstAutomationNotifications] from real
+     * [com.example.accounting.automation.notifications.AutomationNotificationCenter] history for
+     * the current company, filtered to GSTR-1's own category. Called when the GST Dashboard is
+     * opened and whenever a matching notification arrives while it's already open. */
+    private fun refreshGstAutomationNotifications() {
+        val comp = _uiState.value.currentCompany ?: return
+        val notifications = com.example.accounting.automation.notifications.AutomationNotificationCenter
+            .getAllNotifications(comp.companyId)
+            .filter { it.category == com.example.accounting.automation.notifications.NotificationCategory.GST_RETURN_FILING }
+        _uiState.update { it.copy(gstAutomationNotifications = notifications) }
+    }
+
+    /** Phase 8A, Part 2 - see [com.example.accounting.domain.company.Company.gstr1ReminderEnabled].
+     * Mirrors [updateGstEnabled]'s exact pattern. */
+    fun updateGstReminderEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            repository.updateAccountingConfiguration(comp.companyId, gstr1ReminderEnabled = enabled)
         }
     }
 
@@ -2388,6 +2487,21 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Online mode, but the user filed it themselves directly at gst.gov.in - see
+     * [com.example.accounting.application.gstreturn.GstReturnManagementService.markProcessingManually]'s
+     * own KDoc for why this is a real, separate action from [submitSelectedGstReturnOnline]. */
+    fun markSelectedGstReturnProcessingManually() {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val gstReturnId = _uiState.value.selectedGstReturn?.gstReturnId ?: return@launch
+            when (val result = gstReturnService.markProcessingManually(comp.companyId, gstReturnId)) {
+                is AccountingResult.Success -> emitMessage("Ready for you to enter your acknowledgement number.")
+                is AccountingResult.Failure -> emitMessage("Could not proceed: ${result.error.message}")
+            }
+            reopenSelectedGstReturn(gstReturnId)
+        }
+    }
+
     fun markSelectedGstReturnFiled(acknowledgementNumber: String) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -2427,6 +2541,27 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             }
             reopenSelectedGstReturn(gstReturnId)
         }
+    }
+
+    /** Product rule: the user's own GST-provider credentials, never LedgerPrime's, never shared
+     * across companies - stored via the existing per-company [SecureStorage.setCompanySetting]
+     * (`comp_<companyId>_gst_provider_username` under the hood), the exact same isolation
+     * `Company.gstin`/`gstScheme`/etc. already get, just for a secret rather than a plain column.
+     * Deliberately the username only - a GST Portal password/OTP is never persisted; a real
+     * provider integration authenticates per-attempt, it doesn't need this app to remember a
+     * password. [submitSelectedGstReturnOnline] (called separately, right after this) is the one
+     * real submission path - see [com.example.accounting.domain.taxation.gstreturn.UnconfiguredGstOnlineFilingGateway]
+     * for why it honestly fails today rather than fabricating a filed return. */
+    private val secureStorage by lazy { com.example.accounting.core.security.SecureStorage.getInstance(getApplication()) }
+
+    fun saveGstProviderUsername(username: String) {
+        val comp = _uiState.value.currentCompany ?: return
+        secureStorage.setCompanySetting(comp.companyId, "gst_provider_username", username)
+    }
+
+    fun getGstProviderUsername(): String {
+        val comp = _uiState.value.currentCompany ?: return ""
+        return secureStorage.getCompanySetting(comp.companyId, "gst_provider_username", "")
     }
 
     // ---- Data Import (CSV/JSON -> Draft/Suggestion -> Review -> Explicit Create) ----
@@ -2696,6 +2831,47 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val file = com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), report.toPdfData())
             documentPreviewService.print(getApplication(), file, "Day Book")
         }
+    }
+
+    // ---- GSTR-1 PDF Preview/Download/Print/Share (Phase 8A, Part 2) ----
+
+    /** Renders the currently-selected GST return's section-wise summary to a PDF file via
+     * [com.example.accounting.data.rendering.TabularPdfRenderer] - mirrors [renderReportPdf]'s
+     * exact pattern for the one report kind that pattern didn't originally cover. Null if nothing
+     * is selected. */
+    fun renderGstReturnPdf(): File? {
+        val comp = _uiState.value.currentCompany ?: return null
+        val gstReturn = _uiState.value.selectedGstReturn ?: return null
+        val data = com.example.accounting.presentation.features.reports.buildGstr1SummaryPdfData(
+            gstReturn, _uiState.value.selectedGstReturnSections, comp.name
+        )
+        return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), data)
+    }
+
+    fun printGstReturn() {
+        val file = renderGstReturnPdf() ?: run { emitMessage("No GST return selected."); return }
+        documentPreviewService.print(getApplication(), file, "GSTR-1 Summary")
+    }
+
+    fun shareGstReturnPdf(): android.content.Intent? {
+        val file = renderGstReturnPdf() ?: return null
+        return documentPreviewService.buildShareIntent(getApplication(), file, "application/pdf")
+    }
+
+    /** Plain-text share summary for the selected GST return - mirrors [buildReportShareText]'s
+     * exact pattern (pure formatting of already-computed [AccountingUiState] figures, never a
+     * recalculation), giving "Share" a genuinely different artifact from "Download"'s PDF file. */
+    fun buildGstReturnShareText(): String? {
+        val comp = _uiState.value.currentCompany ?: return null
+        val gstReturn = _uiState.value.selectedGstReturn ?: return null
+        val sections = _uiState.value.selectedGstReturnSections
+        val data = com.example.accounting.presentation.features.reports.buildGstr1SummaryPdfData(gstReturn, sections, comp.name)
+        val totals = data.totalsRow ?: return null
+        return "${data.title} - ${comp.name}\n" +
+            "Records: ${totals.getOrNull(1) ?: "0"}\n" +
+            "Taxable Value: ${totals.getOrNull(2) ?: "0"}\n" +
+            "Tax: ${totals.getOrNull(3) ?: "0"}\n" +
+            "Status: ${gstReturn.status}"
     }
 }
 

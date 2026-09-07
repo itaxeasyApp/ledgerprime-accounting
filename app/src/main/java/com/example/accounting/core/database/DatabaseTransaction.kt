@@ -229,15 +229,27 @@ internal object VoucherPostingEngine {
     }
 
     /**
-     * Cancels a posted voucher via a compensating reversal (Rule 12 - Deletion Policy).
-     * Posted vouchers are NEVER physically deleted; original journal items are never touched.
+     * Real cancellation (explicit correction, not the earlier "Rule 12 compensating reversal"
+     * design): per actual Indian accounting/GST practice, a voucher whose period has never been
+     * reported to the government is genuinely cancelled/deleted - never left visible alongside a
+     * same-voucher offsetting entry (that made a single cancelled "Sale Invoice" show both its
+     * original lines AND a reversal of itself, which is not a real transaction and confused the
+     * voucher's own detail view). [AccountingRepository.deleteVoucherSafely] already blocks this
+     * whole function from ever running once the voucher's period has a PROCESSING/FILED GST return
+     * - the only correct correction past that point is a real, separate Credit/Debit Note.
      * 0. Idempotent replay guard.
-     * 1. Rejects if already cancelled (no double reversal).
-     * 2. Inserts opposite-sign Journal Items reversing every original line.
-     * 3. Reverses ledger balance mutations using the same delta helper as posting.
-     * 4. Marks the voucher isCancelled = true.
-     * 5. Appends Audit Log (CANCEL_VOUCHER).
-     * 6. Enqueues Outbox cancellation entry.
+     * 1. Reverses ledger balance mutations using the same delta helper as posting (this math is
+     *    unchanged from the old design - only proven-correct here, nothing new).
+     * 2. Deletes the original Journal Items and GST transactions outright (never a same-voucher
+     *    offsetting entry).
+     * 3. Deletes the voucher row itself.
+     * 4. Appends Audit Log (CANCEL_VOUCHER) - the real audit trail lives here, not in fabricated
+     *    day-book entries.
+     * 5. Enqueues Outbox deletion entry.
+     * Stock movements (Phase 4, inventory-tracked vouchers only) still use their own existing
+     * compensating-reversal path below (step 6) - reversing average-cost history safely on a true
+     * delete is a materially different, higher-risk problem than reversing a ledger balance, and is
+     * deliberately out of scope for this pass.
      */
     suspend fun cancel(
         dao: AccountingDao,
@@ -255,73 +267,30 @@ internal object VoucherPostingEngine {
         val voucher = dao.getVoucherById(companyId, voucherId)
             ?: throw IllegalArgumentException("Voucher $voucherId not found")
 
-        // 1. Reject double-cancellation
-        if (voucher.isCancelled) {
-            throw AccountingTransactionException(
-                AppError.BusinessRuleViolation("Voucher ${voucher.voucherNumber} is already cancelled.")
-            )
-        }
-
         val originalItems = dao.getJournalItemsForVoucherSync(voucherId)
-        var nextLineOrder = (originalItems.maxOfOrNull { it.lineOrder } ?: 0) + 1
 
-        // 2 & 3. Insert compensating reversal lines and reverse ledger balances
-        val reversalItems = mutableListOf<JournalItemEntity>()
+        // 1. Reverse ledger balances - same math as the old design, just never re-inserted as a
+        // visible journal line afterward.
         for (item in originalItems) {
             val reversedType = if (item.type == DrCr.DEBIT) DrCr.CREDIT else DrCr.DEBIT
-
-            reversalItems += JournalItemEntity(
-                itemId = UUID.randomUUID().toString(),
-                voucherId = item.voucherId,
-                companyId = item.companyId,
-                financialYearId = item.financialYearId,
-                ledgerId = item.ledgerId,
-                type = reversedType,
-                amountPaise = item.amountPaise,
-                narration = "Reversal: cancellation of voucher ${voucher.voucherNumber}",
-                lineOrder = nextLineOrder++
-            )
-
             val ledger = dao.getLedgerById(companyId, item.ledgerId)
             if (ledger != null) {
                 val (newBalancePaise, newBalanceType) = applyLedgerDelta(ledger, reversedType, item.amountPaise)
                 dao.updateLedgerBalance(companyId, ledger.ledgerId, newBalancePaise, newBalanceType)
             }
         }
-        dao.insertJournalItems(reversalItems)
 
-        // 3.5. Audit fix (accounting-flow audit) - reverse this voucher's GST facts too, if it had
-        // any (Sale/Purchase/Credit-Debit Note). Previously cancellation only reversed
-        // journal_items/stock movements, leaving gst_transactions untouched - a cancelled GST-
-        // bearing voucher's tax liability stayed fully counted in GSTSummaryReport/filing figures
-        // forever. Mirrors TradingWorkflowEngine.buildNote's own negation pattern exactly: NEGATED
-        // taxable/CGST/SGST/IGST/CESS at the SAME direction as the original (never a new opposite-
-        // direction transaction - the standard GST-return representation), never a mutation of the
-        // original rows (Rule 12 - append-only), same voucherId as the cancelled voucher.
-        val originalGstTransactions = dao.getGstTransactionsForVoucher(voucherId)
-        val reversalGstTransactions = if (originalGstTransactions.isNotEmpty()) {
-            val reversalGroupId = UUID.randomUUID().toString()
-            originalGstTransactions.mapIndexed { index, gt ->
-                gt.copy(
-                    gstTransactionId = UUID.randomUUID().toString(),
-                    taxableAmountPaise = -gt.taxableAmountPaise,
-                    cgstPaise = -gt.cgstPaise,
-                    sgstPaise = -gt.sgstPaise,
-                    igstPaise = -gt.igstPaise,
-                    cessPaise = -gt.cessPaise,
-                    lineOrder = index + 1,
-                    createdAt = System.currentTimeMillis(),
-                    transactionGroupId = reversalGroupId
-                )
-            }.also { dao.insertGstTransactions(it) }
-        } else {
-            emptyList()
-        }
+        // 2. Delete the original Journal Items and GST transactions outright - the whole point is
+        // that nothing about this voucher remains visible anywhere once it's gone.
+        dao.deleteJournalItemsByVoucher(voucherId)
+        dao.deleteGstTransactionsByVoucher(voucherId)
 
-        // 4. Mark voucher cancelled (append-only; header row itself is updated, never deleted)
-        dao.cancelVoucher(companyId, voucherId, System.currentTimeMillis())
+        // 3. Delete the voucher row itself - a genuine delete, not an isCancelled flag on a row
+        // that still shows up everywhere.
+        dao.deleteVoucher(companyId, voucherId)
 
-        // 5. Audit Log
+        // 4. Audit Log - the real record that this happened, since the voucher/journal rows
+        // themselves are now gone rather than left behind as a visible trail.
         dao.insertAuditLog(
             AuditLogEntity(
                 logId = UUID.randomUUID().toString(),
@@ -330,15 +299,16 @@ internal object VoucherPostingEngine {
                 action = AuditAction.CANCEL_VOUCHER,
                 entityType = "VOUCHER",
                 entityId = voucherId,
-                description = "Cancelled voucher ${voucher.voucherNumber} via compensating reversal of ${originalItems.size} line(s)",
+                description = "Deleted voucher ${voucher.voucherNumber} (${originalItems.size} journal line(s) removed, ledger balances reversed)",
                 performedBy = userId,
                 timestamp = System.currentTimeMillis(),
                 payloadJson = "{\"voucherId\":\"$voucherId\",\"idempotencyKey\":\"$idempotencyKey\"}"
             )
         )
 
-        // 6. Outbox cancellation record - complete SyncEvent (Phase 6), carrying the compensating
-        // reversal lines so the server can apply the exact same reversal, not just a bare voucherId.
+        // 5. Outbox deletion record - no live backend exists to sync to today (see
+        // OutboxProcessor's own KDoc), so journalLines/gstTransactions are empty here rather than
+        // re-sending data that no longer exists locally either.
         dao.insertOutboxItem(
             OutboxSyncEntity(
                 syncId = UUID.randomUUID().toString(),
@@ -364,16 +334,8 @@ internal object VoucherPostingEngine {
                             isGstApplicable = voucher.isGstApplicable, referenceVoucherId = voucher.referenceVoucherId,
                             paymentMode = voucher.paymentMode
                         ),
-                        journalLines = reversalItems.map {
-                            SyncJournalLineDto(it.itemId, it.ledgerId, "", it.type.name, it.amountPaise, it.narration, it.lineOrder)
-                        },
-                        gstTransactions = reversalGstTransactions.map {
-                            SyncGstTransactionDto(
-                                it.gstTransactionId, it.voucherType.name, it.partyLedgerId, it.partyGstin, it.placeOfSupply, it.supplyType.name,
-                                it.itemId, it.hsnSacCode, it.quantityRaw, it.taxableAmountPaise, it.gstRatePercent,
-                                it.cgstPaise, it.sgstPaise, it.igstPaise, it.cessPaise, it.direction.name, it.lineOrder
-                            )
-                        }
+                        journalLines = emptyList(),
+                        gstTransactions = emptyList()
                     )
                 ),
                 idempotencyKey = idempotencyKey,
@@ -385,8 +347,9 @@ internal object VoucherPostingEngine {
             )
         )
 
-        // 7. Inventory (Phase 4, additive) - reverses stock movements the same compensating way;
-        // a no-op if this voucher never had any stock lines.
+        // 6. Inventory (Phase 4, additive) - reverses stock movements the same compensating way;
+        // a no-op if this voucher never had any stock lines. Deliberately unchanged (see this
+        // function's own KDoc for why stock reversal keeps its existing, safer path for now).
         InventoryEngine.reverseStockMovements(dao, companyId, voucherId, voucher.date, userId)
     }
 }

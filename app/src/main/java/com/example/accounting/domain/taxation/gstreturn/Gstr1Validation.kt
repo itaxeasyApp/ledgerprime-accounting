@@ -192,6 +192,38 @@ object Gstr1Validator {
                 Gstr1ValidationSeverity.ERROR, "MISSING_INVOICE_NUMBER", "One or more invoices have no invoice number recorded."
             ) }
 
+        // ---- Missing HSN/SAC code - a real GST compliance requirement (mandatory above the
+        // notified turnover threshold), checked only on lines that actually have a voucher (a
+        // GST-only synthetic row has no line-item HSN concept to check). One issue per affected
+        // voucher, matching TAX_RECOMPUTATION_MISMATCH's own per-voucher granularity above -
+        // never one aggregated "N invoices" issue, so the count on a checklist and the individual
+        // rows on an error-detail drill-in always agree. ----
+        val invoiceLikeTypes = setOf(
+            com.example.accounting.domain.accounting.VoucherType.SALES,
+            com.example.accounting.domain.accounting.VoucherType.CREDIT_NOTE,
+            com.example.accounting.domain.accounting.VoucherType.DEBIT_NOTE
+        )
+        transactions.filter { it.voucherId != null && it.voucherType in invoiceLikeTypes && it.hsnSacCode.isBlank() }
+            .distinctBy { it.voucherId }
+            .forEach { gt ->
+                issues += Gstr1ValidationIssue(
+                    Gstr1ValidationSeverity.ERROR, "MISSING_HSN_CODE",
+                    "Voucher ${gt.voucherId} has a line item with no HSN/SAC code recorded.", gt.voucherId
+                )
+            }
+
+        // ---- A negative taxable value on an outward SALES invoice is never legitimate - a
+        // Credit/Debit Note is the real, correct mechanism for a downward adjustment (see
+        // CDNR/CDNUR above), so a negative Sales line means the wrong voucher type was used. ----
+        transactions.filter { it.voucherType == com.example.accounting.domain.accounting.VoucherType.SALES && it.taxableAmount.paise < 0 }
+            .distinctBy { it.voucherId }
+            .forEach { gt ->
+                issues += Gstr1ValidationIssue(
+                    Gstr1ValidationSeverity.ERROR, "NEGATIVE_SALE_VALUE",
+                    "Voucher ${gt.voucherId} (Sales) has a negative taxable value - use a Credit/Debit Note for downward adjustments instead.", gt.voucherId
+                )
+            }
+
         // ---- CDNR/CDNUR notes must resolve a real original invoice ----
         (data.cdnr.flatMap { it.notes } + data.cdnur).forEach { note ->
             if (note.originalInvoiceNumber.isBlank()) {

@@ -67,6 +67,11 @@ class GstReturnManagementService(
     suspend fun markFiled(companyId: String, gstReturnId: String, acknowledgementNumber: String): AccountingResult<GstReturn> =
         repository.markGstReturnFiled(companyId, gstReturnId, acknowledgementNumber)
 
+    /** Online mode, filed manually at gst.gov.in instead of via [submitOnline] - see
+     * [com.example.accounting.data.repository.AccountingRepository.markGstReturnProcessingManually]'s own KDoc. */
+    suspend fun markProcessingManually(companyId: String, gstReturnId: String): AccountingResult<GstReturn> =
+        repository.markGstReturnProcessingManually(companyId, gstReturnId)
+
     /** Phase 8A, Part 2 - see [com.example.accounting.data.repository.AccountingRepository.setGstReturnNilFlag]'s own KDoc. */
     suspend fun setNilReturn(companyId: String, gstReturnId: String, isNil: Boolean): AccountingResult<GstReturn> =
         repository.setGstReturnNilFlag(companyId, gstReturnId, isNil)

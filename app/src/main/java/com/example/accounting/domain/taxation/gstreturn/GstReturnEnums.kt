@@ -17,7 +17,7 @@ enum class GstScheme { REGULAR, COMPOSITION }
  * plumbing is implemented here - none of these compute their actual statutory sections yet (Section
  * 4/23 of the Rule 33 spec: that is explicitly future-rule work, never fabricated here).
  */
-enum class GstReturnType { GSTR1, GSTR3B, GSTR4 }
+enum class GstReturnType { GSTR1, GSTR3B, GSTR4, CMP08 }
 
 /** How a return's period is filed - a whole quarter (QRMP/Composition option) or a single calendar
  * month (Regular's default). For a REGULAR company this mirrors

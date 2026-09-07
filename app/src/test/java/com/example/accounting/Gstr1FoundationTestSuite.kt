@@ -342,14 +342,14 @@ class Gstr1FoundationTestSuite {
 
     private fun freshDao() = GstReturnAwareDao(Phase4TestSuite.InventoryAwareDao(FakeAccountingDao()))
 
-    private suspend fun AccountingDao.seedCompany(scheme: GstScheme = GstScheme.REGULAR, gstEnabled: Boolean = true) {
+    private suspend fun AccountingDao.seedCompany(scheme: GstScheme = GstScheme.REGULAR, gstEnabled: Boolean = true, gstr1ReminderEnabled: Boolean = true) {
         insertCompany(
             CompanyEntity(
                 companyId = companyId, name = "Company $companyId", tradeName = "Company $companyId", gstin = "27AAPFU0939F1ZV",
                 pan = "AAPFU0939F", stateCode = "27", stateName = "Maharashtra", email = "", phone = "", address = "",
                 currency = "INR", financialYearStartMonth = 4, isDefault = true, createdAt = 0L,
                 accountingMode = AccountingMode.ACCOUNT_WITH_INVENTORY, businessType = BusinessType.TRADING,
-                gstScheme = scheme, gstEnabled = gstEnabled
+                gstScheme = scheme, gstEnabled = gstEnabled, gstr1ReminderEnabled = gstr1ReminderEnabled
             )
         )
         insertFinancialYear(FinancialYearEntity(fyId, companyId, "2026-27", "2026-04-01", "2027-03-31", true, false, null, null))
@@ -425,9 +425,9 @@ class Gstr1FoundationTestSuite {
         postResult(dao, voucherId, VoucherType.SALES, result, date)
     }
 
-    private suspend fun setup(scheme: GstScheme = GstScheme.REGULAR, gstEnabled: Boolean = true): Pair<AccountingDao, AccountingRepository> {
+    private suspend fun setup(scheme: GstScheme = GstScheme.REGULAR, gstEnabled: Boolean = true, gstr1ReminderEnabled: Boolean = true): Pair<AccountingDao, AccountingRepository> {
         val dao = freshDao()
-        dao.seedCompany(scheme, gstEnabled)
+        dao.seedCompany(scheme, gstEnabled, gstr1ReminderEnabled)
         dao.seedTradingLedgers()
         dao.insertStockItems(listOf(stockItem("ITEM_A")))
         val repo = AccountingRepository(dao)
@@ -555,6 +555,18 @@ class Gstr1FoundationTestSuite {
         // "Today" = June 20, so the completed MONTHLY period (May) was due June 11 - well overdue.
         val result = checker.checkFilingReminder(companyId, LocalDate.of(2026, 6, 20))
         assertEquals(com.example.accounting.automation.tasks.TaskExecutionStatus.WARNING, result.status)
+    }
+
+    @Test
+    fun t27b_Automation_FilingReminder_RemindersDisabled_Skips() = runBlocking {
+        val (dao, repo) = setup(gstr1ReminderEnabled = false)
+        postSale(dao, "V5b", "2026-04-10")
+        val checker = com.example.accounting.automation.compliance.GstReturnAutomationChecker(dao, repo)
+        // Same overdue period as t27 (Company.gstr1ReminderEnabled = false is the only
+        // difference) - the reminder toggle blocks the notification even though the return is
+        // genuinely overdue; draft preparation/validation (t25/t26) are unaffected by this flag.
+        val result = checker.checkFilingReminder(companyId, LocalDate.of(2026, 6, 20))
+        assertEquals(com.example.accounting.automation.tasks.TaskExecutionStatus.SKIPPED, result.status)
     }
 
     @Test

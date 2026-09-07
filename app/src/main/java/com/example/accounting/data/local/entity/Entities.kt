@@ -68,7 +68,9 @@ data class CompanyEntity(
     /** Rule 33 - see [com.example.accounting.domain.company.Company.gstFilingFrequency]. */
     @ColumnInfo(defaultValue = "'MONTHLY'") val gstFilingFrequency: GstReturnPeriodicity = GstReturnPeriodicity.MONTHLY,
     /** 13-point correctness pass, item 1 - see [com.example.accounting.domain.company.Company.pinCode]. */
-    @ColumnInfo(defaultValue = "''") val pinCode: String = ""
+    @ColumnInfo(defaultValue = "''") val pinCode: String = "",
+    /** Phase 8A, Part 2 - see [com.example.accounting.domain.company.Company.gstr1ReminderEnabled]. */
+    @ColumnInfo(defaultValue = "1") val gstr1ReminderEnabled: Boolean = true
 )
 
 @Entity(

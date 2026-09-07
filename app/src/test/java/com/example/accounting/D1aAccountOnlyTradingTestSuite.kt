@@ -437,7 +437,7 @@ class D1aAccountOnlyTradingTestSuite {
     }
 
     @Test
-    fun t20_CancelVoucher_ReversesGstTransactions_NetsToZero() = runBlocking {
+    fun t20_CancelVoucher_DeletesGstTransactions() = runBlocking {
         val dao = Phase5TestSuite.Phase5AwareDao(freshDao())
         dao.seedCompany(AccountingMode.ACCOUNT_ONLY)
         dao.seedTradingLedgers()
@@ -482,14 +482,11 @@ class D1aAccountOnlyTradingTestSuite {
 
         VoucherPostingEngine.cancel(dao, companyId, fyId, "V20", "IK_V20_CANCEL", "TESTER")
 
+        // Real cancellation (explicit correction): a voucher not yet reported to the government is
+        // genuinely deleted, never left as a same-voucher offsetting entry - so its GST
+        // transactions are gone outright, not netted to zero via a compensating row.
         val afterCancel = dao.getGstTransactionsForVoucher("V20")
-        assertEquals(
-            "Cancellation must append a compensating reversal row, never delete/mutate the original",
-            2, afterCancel.size
-        )
-        assertEquals("Net taxable value across original+reversal must be zero", 0L, afterCancel.sumOf { it.taxableAmountPaise })
-        assertEquals("Net CGST across original+reversal must be zero", 0L, afterCancel.sumOf { it.cgstPaise })
-        assertEquals("Net SGST across original+reversal must be zero", 0L, afterCancel.sumOf { it.sgstPaise })
+        assertEquals("Cancellation must delete the original GST transaction(s) outright", 0, afterCancel.size)
     }
 
     // ==========================================

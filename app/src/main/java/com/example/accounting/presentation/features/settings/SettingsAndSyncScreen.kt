@@ -151,6 +151,29 @@ fun SettingsAndSyncScreen(
             }
         }
 
+        // Data Sync - moved here from the app-wide top bar (per explicit instruction: a sync
+        // status icon has no business being permanently visible on every single screen). Reuses
+        // the exact same [onTriggerSync]/[AccountingUiState.pendingSyncCount]/[AccountingUiState.isSyncing]
+        // this screen's own param already carried (previously unused here) - no new sync mechanism.
+        ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Data Sync", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                Text(
+                    if (uiState.pendingSyncCount > 0) "${uiState.pendingSyncCount} change(s) waiting to sync" else "Everything is synced",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = onTriggerSync, enabled = !uiState.isSyncing, modifier = Modifier.testTag("sync_action_button")) {
+                    Icon(
+                        imageVector = if (uiState.isSyncing) Icons.Default.Sync else Icons.Default.CloudDone,
+                        contentDescription = null, modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (uiState.isSyncing) "Syncing..." else "Sync Now")
+                }
+            }
+        }
+
         // Accounting configuration - Account Only vs Account + Inventory, Trading vs Service.
         // A capability toggle only: switching never deletes or hides underlying vouchers, stock
         // movements, or history (Phase 4.5, Section 1/3).

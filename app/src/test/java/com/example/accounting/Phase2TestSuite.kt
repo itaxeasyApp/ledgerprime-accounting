@@ -203,10 +203,12 @@ class Phase2TestSuite {
     }
 
     // ==========================================
-    // 4. CANCELLATION - COMPENSATING REVERSAL
+    // 4. CANCELLATION - REAL DELETE (explicit correction: real Indian accounting/GST practice
+    // never leaves a same-voucher offsetting entry behind - a voucher not yet reported to the
+    // government is genuinely deleted, not "reversed in place")
     // ==========================================
     @Test
-    fun testCancelVoucherAtomic_CompensatingReversal_RestoresBalanceAndPreservesOriginalItems() = runBlocking {
+    fun testCancelVoucherAtomic_RestoresBalanceAndDeletesVoucherAndItems() = runBlocking {
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_CASH", 500_000L, DrCr.DEBIT))
         dao.insertLedger(ledger("LED_RENT", 0L, DrCr.DEBIT))
@@ -218,7 +220,6 @@ class Phase2TestSuite {
             item(voucherId, "LED_CASH", DrCr.CREDIT, 150_000L, 2)
         )
         VoucherPostingEngine.post(dao, voucher, items, "IK-CANCEL-POST", "TESTER")
-        val originalItemIds = dao.getJournalItemsForVoucherSync(voucherId).map { it.itemId }.toSet()
 
         VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-CANCEL-1", "TESTER")
 
@@ -228,13 +229,12 @@ class Phase2TestSuite {
         assertEquals(DrCr.DEBIT, cash.currentBalanceType)
         assertEquals("Rent balance must be restored to pre-posting value", 0L, rent.currentBalancePaise)
 
-        val cancelledVoucher = dao.getVoucherById(companyId, voucherId)!!
-        assertTrue(cancelledVoucher.isCancelled)
+        // The voucher row itself is genuinely gone, not merely flagged isCancelled.
+        assertEquals(null, dao.getVoucherById(companyId, voucherId))
 
+        // No journal items remain for this voucher at all - neither original nor a reversal.
         val allItems = dao.getJournalItemsForVoucherSync(voucherId)
-        assertEquals("Original 2 lines + 2 reversal lines, nothing deleted", 4, allItems.size)
-        assertTrue("Original journal items must remain untouched (audit immutability)",
-            allItems.map { it.itemId }.toSet().containsAll(originalItemIds))
+        assertEquals("Cancellation must delete the original lines outright, nothing left behind", 0, allItems.size)
 
         val outboxEntry = dao.getOutboxByIdempotencyKey("IK-CANCEL-1")
         assertNotNull(outboxEntry)
@@ -242,7 +242,7 @@ class Phase2TestSuite {
     }
 
     @Test
-    fun testCancelVoucherAtomic_AlreadyCancelled_Rejected() = runBlocking {
+    fun testCancelVoucherAtomic_AlreadyDeleted_Rejected() = runBlocking {
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_CASH", 500_000L, DrCr.DEBIT))
         dao.insertLedger(ledger("LED_RENT", 0L, DrCr.DEBIT))
@@ -256,11 +256,14 @@ class Phase2TestSuite {
         VoucherPostingEngine.post(dao, voucher, items, "IK-DBLCANCEL-POST", "TESTER")
         VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-DBLCANCEL-1", "TESTER")
 
+        // A second cancel attempt (a different idempotency key, so the replay guard doesn't just
+        // silently no-op) now fails because the voucher row itself is genuinely gone - a real
+        // "not found", not a "was already cancelled" business-rule rejection.
         try {
             VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-DBLCANCEL-2", "TESTER")
-            fail("Expected double-cancellation to be rejected")
-        } catch (e: AccountingTransactionException) {
-            assertTrue(e.appError is AppError.BusinessRuleViolation)
+            fail("Expected cancelling an already-deleted voucher to be rejected")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains(voucherId) == true)
         }
     }
 
@@ -328,8 +331,10 @@ class Phase2TestSuite {
         assertEquals(0L, dao.getLedgerById(companyId, "LED_DEBTOR")!!.currentBalancePaise)
         assertEquals(0L, dao.getLedgerById(companyId, "LED_SALES")!!.currentBalancePaise)
         assertEquals(0L, dao.getLedgerById(companyId, "LED_GST")!!.currentBalancePaise)
-        assertTrue(dao.getVoucherById(companyId, voucherId)!!.isCancelled)
-        assertEquals(6, dao.getJournalItemsForVoucherSync(voucherId).size) // 3 original + 3 reversal
+        // Real delete (explicit correction): the voucher row itself is gone, not merely flagged
+        // isCancelled, and no journal items - original or reversal - remain for it.
+        assertEquals(null, dao.getVoucherById(companyId, voucherId))
+        assertEquals(0, dao.getJournalItemsForVoucherSync(voucherId).size)
         assertNotNull(dao.getOutboxByIdempotencyKey("IK-CHAIN-CANCEL"))
     }
 }

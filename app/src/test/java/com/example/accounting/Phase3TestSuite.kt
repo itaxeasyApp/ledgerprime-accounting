@@ -118,6 +118,7 @@ class Phase3TestSuite {
         val directExpense = "LED_DIREXP_$companyId"
         val indirectExpense = "LED_INDIREXP_$companyId"
         val suspense get() = "${StandardSystemGroups.SUSPENSE_LEDGER_ID}_$companyId"
+        val roundOff get() = "${StandardSystemGroups.ROUND_OFF_LEDGER_ID}_$companyId"
     }
 
     private suspend fun GroupAwareDao.seedFullChart(companyId: String, fyId: String): Chart {
@@ -142,7 +143,8 @@ class Phase3TestSuite {
             ledger(c.purchase, companyId, "${g.PURCHASE_GROUP_ID}_$companyId"),
             ledger(c.directExpense, companyId, "${g.DIRECT_EXPENSE_GROUP_ID}_$companyId"),
             ledger(c.indirectExpense, companyId, "${g.INDIRECT_EXPENSE_GROUP_ID}_$companyId"),
-            ledger(c.suspense, companyId, "${g.SUSPENSE_GROUP_ID}_$companyId")
+            ledger(c.suspense, companyId, "${g.SUSPENSE_GROUP_ID}_$companyId"),
+            ledger(c.roundOff, companyId, "${g.ROUND_OFF_GROUP_ID}_$companyId")
         ))
         return c
     }
@@ -266,8 +268,10 @@ class Phase3TestSuite {
         assertEquals(0L, debtorRow.closingDebit.paise)
         assertEquals(0L, debtorRow.closingCredit.paise)
         assertEquals(0L, salesRow.closingCredit.paise)
-        // Original + reversal transaction volume both still counted in period movement.
-        assertEquals(2000_00L, debtorRow.transactionDebit.paise + debtorRow.transactionCredit.paise)
+        // Real delete (explicit correction): the original journal lines are gone outright, never
+        // left behind alongside a same-voucher offsetting entry, so period movement is genuinely
+        // zero - not "1000 posted + 1000 reversed".
+        assertEquals(0L, debtorRow.transactionDebit.paise + debtorRow.transactionCredit.paise)
         assertTrue(tb.isBalanced)
     }
 
@@ -600,6 +604,35 @@ class Phase3TestSuite {
         assertEquals(850_00L, bs.suspenseCredit.paise)
         assertEquals(0L, bs.suspenseDebit.paise)
         assertTrue(bs.isBalanced)
+    }
+
+    @Test
+    fun bs9b_RoundOffCreditPresentation_BalanceSheetStillBalances() = runBlocking {
+        // Real bug fix (live-device audit finding): "Round Off" is PrimaryGroup.SPECIAL_CONTROL,
+        // the same as Suspense - without its own explicit fold (mirroring bs8/bs9 above), its
+        // balance was invisible to both totalLiabilitiesPaise and totalAssetsPaise, so ANY invoice
+        // needing rounding (a non-round-rupee GST total) silently broke bs.isBalanced by exactly
+        // the Round Off amount, even though the Trial Balance itself was already fully balanced.
+        val dao = freshDao()
+        val c = dao.seedFullChart("COMP_BS9B", "FY_BS9B")
+        post(dao, "COMP_BS9B", "FY_BS9B", "V1", "JRN-1", VoucherType.JOURNAL, c.capital, c.roundOff, 16L)
+        val repo = AccountingRepository(dao)
+        val bs = repo.generateBalanceSheet("COMP_BS9B", "FY_BS9B")
+        assertEquals(16L, bs.roundOffCredit.paise)
+        assertEquals(0L, bs.roundOffDebit.paise)
+        assertTrue("Balance Sheet must still balance with a real Round Off credit balance", bs.isBalanced)
+    }
+
+    @Test
+    fun bs9c_RoundOffDebitPresentation_BalanceSheetStillBalances() = runBlocking {
+        val dao = freshDao()
+        val c = dao.seedFullChart("COMP_BS9C", "FY_BS9C")
+        post(dao, "COMP_BS9C", "FY_BS9C", "V1", "JRN-1", VoucherType.JOURNAL, c.roundOff, c.capital, 16L)
+        val repo = AccountingRepository(dao)
+        val bs = repo.generateBalanceSheet("COMP_BS9C", "FY_BS9C")
+        assertEquals(16L, bs.roundOffDebit.paise)
+        assertEquals(0L, bs.roundOffCredit.paise)
+        assertTrue("Balance Sheet must still balance with a real Round Off debit balance", bs.isBalanced)
     }
 
     @Test

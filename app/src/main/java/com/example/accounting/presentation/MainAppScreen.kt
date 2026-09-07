@@ -12,9 +12,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
@@ -96,7 +100,7 @@ data class NavItem(
  * engines): [ItemLookup] keeps the pre-existing standalone Items-tab behavior (a result dialog);
  * [PurchaseVoucher]/[ReceivePayment] instead feed the scan result into the already-open form as a
  * prefill, never a second scan/decode mechanism. */
-private enum class BarcodeScanTarget { ItemLookup, PurchaseVoucher, ReceivePayment }
+private enum class BarcodeScanTarget { ItemLookup, PurchaseVoucher }
 
 /** Audit fix (Company/Profile/Ledger Setup) - reuse the Company's own already-entered
  * name/GSTIN/PAN/address/phone/email as the Business Profile screen's starting point instead of
@@ -300,11 +304,9 @@ fun MainAppScreen(
                     companies = uiState.companies,
                     currentFinancialYear = uiState.currentFinancialYear,
                     financialYears = uiState.financialYears,
-                    pendingSyncCount = uiState.pendingSyncCount,
-                    isSyncing = uiState.isSyncing,
                     onCompanySelected = { viewModel.switchCompany(it) },
                     onFinancialYearSelected = { viewModel.switchFinancialYear(it) },
-                    onSyncClicked = { viewModel.triggerSync() },
+                    onAddPreviousFinancialYear = { viewModel.addPreviousFinancialYear() },
                     onNewCompanyClicked = { isCreateCompanyOpen = true },
                     onSearchClicked = { viewModel.navigateTo(AppRoute.Search()) },
                     onProfileClicked = { viewModel.navigateTo(AppRoute.Profile) },
@@ -322,15 +324,53 @@ fun MainAppScreen(
                         // bottom area reads as one abnormally tall block ("bottom bar too high").
                         // This divider marks where the actual nav bar ends.
                         AppDivider()
-                        NavigationBar {
-                            navItems.forEach { item ->
+                        if (uiState.currentRoute is AppRoute.GstDashboard) {
+                            // The GST Dashboard's own bottom nav (matches the reference image),
+                            // swapped in for the main app's Home/Sales/Purchase/Money/Reports bar
+                            // only while this route is active - see AppRoute.GstDashboard's KDoc.
+                            NavigationBar {
                                 NavigationBarItem(
-                                    selected = uiState.selectedTab == item.tab,
-                                    onClick = { viewModel.selectTab(item.tab) },
-                                    icon = { Icon(item.icon, contentDescription = item.label) },
-                                    label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
-                                    modifier = Modifier.testTag(item.tag)
+                                    selected = uiState.gstActiveBottomTab == "Dashboard",
+                                    onClick = { viewModel.requestGstBottomNav("Dashboard") },
+                                    icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
+                                    label = { Text("Dashboard", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
                                 )
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = { viewModel.viewReport("Sales Register") },
+                                    icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Invoices") },
+                                    label = { Text("Invoices", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = uiState.gstActiveBottomTab == "Returns",
+                                    onClick = { viewModel.requestGstBottomNav("Returns") },
+                                    icon = { Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = "Returns") },
+                                    label = { Text("Returns", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = { viewModel.navigateTo(AppRoute.Reports) },
+                                    icon = { Icon(Icons.Default.Assessment, contentDescription = "Reports") },
+                                    label = { Text("Reports", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = uiState.gstActiveBottomTab == "More",
+                                    onClick = { viewModel.requestGstBottomNav("More") },
+                                    icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
+                                    label = { Text("More", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                            }
+                        } else {
+                            NavigationBar {
+                                navItems.forEach { item ->
+                                    NavigationBarItem(
+                                        selected = uiState.selectedTab == item.tab,
+                                        onClick = { viewModel.selectTab(item.tab) },
+                                        icon = { Icon(item.icon, contentDescription = item.label) },
+                                        label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
+                                        modifier = Modifier.testTag(item.tag)
+                                    )
+                                }
                             }
                         }
                     }
@@ -357,6 +397,106 @@ fun MainAppScreen(
                     }
                 }
 
+                // Hoisted above the route `when` (Phase 8A, Part 2) - the exact same callbacks the
+                // GST Dashboard needs whether it's reached through Reports Center (legacy path,
+                // still reachable via Reports -> GST -> GST Return Dashboard) or its own dedicated
+                // AppRoute.GstDashboard (the primary path now - see that route's own KDoc for why
+                // a separate top-level route exists at all).
+                val gstReturnActions = com.example.accounting.presentation.features.reports.GstReturnDashboardActions(
+                    onSelectPeriod = { quarter, month, returnType, periodicity, filingMode ->
+                        viewModel.selectGstReturnPeriod(quarter, month, viewModel.uiState.value.currentCompany?.gstScheme
+                            ?: com.example.accounting.domain.taxation.gstreturn.GstScheme.REGULAR, returnType, periodicity, filingMode)
+                    },
+                    onOpenReturn = { viewModel.openGstReturn(it) },
+                    onClearSelection = { viewModel.clearSelectedGstReturn() },
+                    onPrepare = { viewModel.prepareSelectedGstReturn() },
+                    onValidate = { viewModel.validateSelectedGstReturn() },
+                    onGenerateJson = { viewModel.generateSelectedGstReturnOfflineJson() },
+                    onShareArtifact = { jsonContent ->
+                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, jsonContent)
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, "Share GST return JSON"))
+                    },
+                    onImportResponseFile = { gstResponseImportLauncher.launch(arrayOf("application/json", "text/*")) },
+                    onMarkFiled = { ack -> viewModel.markSelectedGstReturnFiled(ack) },
+                    onSubmitOnline = { viewModel.submitSelectedGstReturnOnline() },
+                    onUpdateGstEnabled = { viewModel.updateGstEnabled(it) },
+                    onUpdateGstScheme = { viewModel.updateGstScheme(it) },
+                    onUpdateGstFilingFrequency = { viewModel.updateGstFilingFrequency(it) },
+                    onExportCsv = {
+                        coroutineScope.launch {
+                            val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.CSV)
+                            if (intent != null) context.startActivity(intent)
+                        }
+                    },
+                    onExportGstrJson = {
+                        coroutineScope.launch {
+                            val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.GSTR_JSON)
+                            if (intent != null) context.startActivity(intent)
+                        }
+                    },
+                    onSetNilReturn = { isNil -> viewModel.setSelectedGstReturnNil(isNil) },
+                    onExportJson = {
+                        coroutineScope.launch {
+                            val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.JSON)
+                            if (intent != null) context.startActivity(intent)
+                        }
+                    },
+                    onPreviewPdf = {
+                        val file = viewModel.renderGstReturnPdf()
+                        if (file != null) {
+                            try {
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context, com.example.accounting.data.rendering.ShareAdapter.FILE_PROVIDER_AUTHORITY, file
+                                )
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "application/pdf")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Preview GSTR-1 PDF"))
+                            } catch (e: android.content.ActivityNotFoundException) {
+                                // No PDF viewer installed - same silent-no-op convention every
+                                // other export/share callback here already uses.
+                            }
+                        }
+                    },
+                    onDownloadPdf = {
+                        val intent = viewModel.shareGstReturnPdf()
+                        if (intent != null) context.startActivity(Intent.createChooser(intent, "Download GSTR-1 PDF"))
+                    },
+                    onPrintPdf = { viewModel.printGstReturn() },
+                    onSharePdfSummary = {
+                        val text = viewModel.buildGstReturnShareText()
+                        if (text != null) {
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "Share GSTR-1 summary"))
+                        }
+                    },
+                    onUpdateGstReminderEnabled = { viewModel.updateGstReminderEnabled(it) },
+                    onSaveProviderUsername = { viewModel.saveGstProviderUsername(it) },
+                    getProviderUsername = { viewModel.getGstProviderUsername() },
+                    onOpenSalesRegister = { viewModel.viewReport("Sales Register") },
+                    onOpenLedgers = { viewModel.navigateTo(AppRoute.ChartOfAccounts) },
+                    // Fix Now (reference image) - opens the real voucher in the existing
+                    // read-only detail dialog, same mechanism onVoucherClick already uses
+                    // elsewhere. Never a new direct-edit-posted-voucher path (see this param's
+                    // own KDoc on GstReturnDashboardView for why).
+                    onFixNow = { voucherId ->
+                        uiState.vouchers.find { it.voucherId == voucherId }?.let { selectedVoucherDetail = it }
+                    },
+                    onMarkProcessingManually = { viewModel.markSelectedGstReturnProcessingManually() },
+                    onNavigateToProfile = { viewModel.navigateTo(AppRoute.Profile) },
+                    onNavigateToSettings = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
+                    onNavigateToSupport = { viewModel.navigateTo(AppRoute.Support) },
+                    onLogoutCloudSync = { viewModel.logoutCloudSync() },
+                    onActiveBottomTabChanged = { viewModel.setGstActiveBottomTab(it) }
+                )
+
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (val route = uiState.currentRoute) {
                         is AppRoute.Dashboard -> DashboardScreen(
@@ -368,8 +508,9 @@ fun MainAppScreen(
                             onViewPayables = { viewModel.viewReport("Outstanding Payables") },
                             onViewProfitLoss = { viewModel.viewReport("Profit & Loss") },
                             onViewGstSummary = { viewModel.viewReport("GST Summary") },
-                            onOpenCash = { viewModel.selectTab(NavigationTab.MONEY) },
-                            onOpenBank = { viewModel.selectTab(NavigationTab.MONEY) },
+                            onViewGstDashboard = { viewModel.navigateTo(AppRoute.GstDashboard) },
+                            onOpenCash = { viewModel.viewMoney("Cash") },
+                            onOpenBank = { viewModel.viewMoney("Bank") },
                             onOpenSales = { viewModel.selectTab(NavigationTab.SALES) },
                             onOpenPurchases = { viewModel.selectTab(NavigationTab.PURCHASES) },
                             onAddCustomer = { createPartyRole = PartyRole.CUSTOMER },
@@ -432,43 +573,51 @@ fun MainAppScreen(
                                 }
                             },
                             onPrintReport = { reportKey -> viewModel.printReport(reportKey) },
-                            gstReturnActions = com.example.accounting.presentation.features.reports.GstReturnDashboardActions(
-                                onSelectPeriod = { quarter, month, returnType, periodicity, filingMode ->
-                                    viewModel.selectGstReturnPeriod(quarter, month, viewModel.uiState.value.currentCompany?.gstScheme
-                                        ?: com.example.accounting.domain.taxation.gstreturn.GstScheme.REGULAR, returnType, periodicity, filingMode)
-                                },
-                                onOpenReturn = { viewModel.openGstReturn(it) },
-                                onClearSelection = { viewModel.clearSelectedGstReturn() },
-                                onPrepare = { viewModel.prepareSelectedGstReturn() },
-                                onValidate = { viewModel.validateSelectedGstReturn() },
-                                onGenerateJson = { viewModel.generateSelectedGstReturnOfflineJson() },
-                                onShareArtifact = { jsonContent ->
-                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_TEXT, jsonContent)
-                                    }
-                                    context.startActivity(Intent.createChooser(sendIntent, "Share GST return JSON"))
-                                },
-                                onImportResponseFile = { gstResponseImportLauncher.launch(arrayOf("application/json", "text/*")) },
-                                onMarkFiled = { ack -> viewModel.markSelectedGstReturnFiled(ack) },
-                                onSubmitOnline = { viewModel.submitSelectedGstReturnOnline() },
-                                onUpdateGstEnabled = { viewModel.updateGstEnabled(it) },
-                                onUpdateGstScheme = { viewModel.updateGstScheme(it) },
-                                onUpdateGstFilingFrequency = { viewModel.updateGstFilingFrequency(it) },
-                                onExportCsv = {
-                                    coroutineScope.launch {
-                                        val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.CSV)
-                                        if (intent != null) context.startActivity(intent)
-                                    }
-                                },
-                                onExportGstrJson = {
-                                    coroutineScope.launch {
-                                        val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.GSTR_JSON)
-                                        if (intent != null) context.startActivity(intent)
-                                    }
-                                },
-                                onSetNilReturn = { isNil -> viewModel.setSelectedGstReturnNil(isNil) }
-                            )
+                            gstReturnActions = gstReturnActions
+                        )
+
+                        // Dedicated top-level route (see AppRoute.GstDashboard's own KDoc) - calls
+                        // GstReturnDashboardView directly, with only its own step header, instead
+                        // of Reports Center's category header plus GstCategory's own BackRow both
+                        // stacking on top of it (the "three headers eat the screen" problem on a
+                        // phone-sized display). Also wires the GST-specific bottom nav below.
+                        is AppRoute.GstDashboard -> com.example.accounting.presentation.features.reports.GstReturnDashboardView(
+                            uiState = uiState,
+                            onSelectPeriod = gstReturnActions.onSelectPeriod,
+                            onOpenReturn = gstReturnActions.onOpenReturn,
+                            onClearSelection = gstReturnActions.onClearSelection,
+                            onPrepare = gstReturnActions.onPrepare,
+                            onValidate = gstReturnActions.onValidate,
+                            onGenerateJson = gstReturnActions.onGenerateJson,
+                            onShareArtifact = gstReturnActions.onShareArtifact,
+                            onImportResponseFile = gstReturnActions.onImportResponseFile,
+                            onMarkFiled = gstReturnActions.onMarkFiled,
+                            onSubmitOnline = gstReturnActions.onSubmitOnline,
+                            onUpdateGstEnabled = gstReturnActions.onUpdateGstEnabled,
+                            onUpdateGstScheme = gstReturnActions.onUpdateGstScheme,
+                            onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency,
+                            onExportCsv = gstReturnActions.onExportCsv,
+                            onExportGstrJson = gstReturnActions.onExportGstrJson,
+                            onSetNilReturn = gstReturnActions.onSetNilReturn,
+                            onExportJson = gstReturnActions.onExportJson,
+                            onPreviewPdf = gstReturnActions.onPreviewPdf,
+                            onDownloadPdf = gstReturnActions.onDownloadPdf,
+                            onPrintPdf = gstReturnActions.onPrintPdf,
+                            onSharePdfSummary = gstReturnActions.onSharePdfSummary,
+                            onUpdateGstReminderEnabled = gstReturnActions.onUpdateGstReminderEnabled,
+                            onSaveProviderUsername = gstReturnActions.onSaveProviderUsername,
+                            getProviderUsername = gstReturnActions.getProviderUsername,
+                            onOpenSalesRegister = gstReturnActions.onOpenSalesRegister,
+                            onOpenLedgers = gstReturnActions.onOpenLedgers,
+                            gstBottomNavRequest = uiState.gstBottomNavRequest,
+                            onConsumeGstBottomNavRequest = { viewModel.consumeGstBottomNavRequest() },
+                            onFixNow = gstReturnActions.onFixNow,
+                            onMarkProcessingManually = gstReturnActions.onMarkProcessingManually,
+                            onNavigateToProfile = gstReturnActions.onNavigateToProfile,
+                            onNavigateToSettings = gstReturnActions.onNavigateToSettings,
+                            onNavigateToSupport = gstReturnActions.onNavigateToSupport,
+                            onLogoutCloudSync = gstReturnActions.onLogoutCloudSync,
+                            onActiveBottomTabChanged = gstReturnActions.onActiveBottomTabChanged
                         )
 
                         is AppRoute.SettingsAndSync -> SettingsAndSyncScreen(
@@ -521,15 +670,9 @@ fun MainAppScreen(
                                 viewModel.postQuickVoucherWithRoundOff(type, date, debitId, creditId, amount, narration, ref, roundOff)
                             },
                             onAddParty = { role -> createPartyRole = role },
-                            onScanBarcode = {
-                                barcodeScanTarget = BarcodeScanTarget.ReceivePayment
-                                barcodePhotoPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            scannedBarcodeValue = if (barcodeScanTarget == BarcodeScanTarget.ReceivePayment) uiState.lastBarcodeScan?.rawValue else null,
-                            onScannedValueConsumed = { viewModel.clearBarcodeState() },
-                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true }
+                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true },
+                            moneyDeepLink = uiState.moneyDeepLink,
+                            onMoneyDeepLinkConsumed = { viewModel.consumeMoneyDeepLink() }
                         )
 
                         is AppRoute.Parties -> PartiesScreen(

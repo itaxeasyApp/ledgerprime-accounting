@@ -95,6 +95,7 @@ class Phase5TestSuite {
         override suspend fun getGstTransactionsByGroupId(companyId: String, groupId: String) =
             gstTransactions.filter { it.companyId == companyId && it.transactionGroupId == groupId }.sortedBy { it.lineOrder }
         override suspend fun insertGstTransactions(transactions: List<GstTransactionEntity>) { gstTransactions += transactions }
+        override suspend fun deleteGstTransactionsByVoucher(voucherId: String) { gstTransactions.removeAll { it.voucherId == voucherId } }
 
         override suspend fun getAllocationsForInvoice(invoiceVoucherId: String) = allocations.filter { it.invoiceVoucherId == invoiceVoucherId }
         override suspend fun getAllocationsForSettlement(settlementVoucherId: String) = allocations.filter { it.settlementVoucherId == settlementVoucherId }

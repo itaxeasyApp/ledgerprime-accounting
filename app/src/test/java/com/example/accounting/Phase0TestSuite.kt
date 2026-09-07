@@ -213,7 +213,7 @@ class Phase0TestSuite {
         // transactionGroupId/transactionDate/partyGstRegistrationStatus columns), backed by exactly
         // eighteen explicit, non-destructive migrations - see testMigrationInfrastructure_ExplicitRegistry.
         assertNotNull(AppDatabase::class.java)
-        assertEquals(23, AppDatabase.ALL_MIGRATIONS.size)
+        assertEquals(24, AppDatabase.ALL_MIGRATIONS.size)
     }
 
     // ==========================================
@@ -223,7 +223,7 @@ class Phase0TestSuite {
     fun testMigrationInfrastructure_ExplicitRegistry() {
         val migrations = AppDatabase.ALL_MIGRATIONS
         assertNotNull("Explicit migrations array must be defined", migrations)
-        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), and 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column) are the only migrations registered so far", 23, migrations.size)
+        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column), and 24->25 (Phase 8A, Part 2: companies.gstr1ReminderEnabled column) are the only migrations registered so far", 24, migrations.size)
         assertEquals(1, migrations[0].startVersion)
         assertEquals(2, migrations[0].endVersion)
         assertEquals(2, migrations[1].startVersion)
@@ -270,6 +270,8 @@ class Phase0TestSuite {
         assertEquals(23, migrations[21].endVersion)
         assertEquals(23, migrations[22].startVersion)
         assertEquals(24, migrations[22].endVersion)
+        assertEquals(24, migrations[23].startVersion)
+        assertEquals(25, migrations[23].endVersion)
     }
 
     // ==========================================
@@ -569,6 +571,7 @@ class FakeAccountingDao : AccountingDao {
     override suspend fun getGstTransactionsForCompanyFY(companyId: String, fyId: String): List<com.example.accounting.data.local.entity.GstTransactionEntity> = emptyList()
     override suspend fun getGstTransactionsByGroupId(companyId: String, groupId: String): List<com.example.accounting.data.local.entity.GstTransactionEntity> = emptyList()
     override suspend fun insertGstTransactions(transactions: List<com.example.accounting.data.local.entity.GstTransactionEntity>) {}
+    override suspend fun deleteGstTransactionsByVoucher(voucherId: String) {}
     override suspend fun getAllocationsForInvoice(invoiceVoucherId: String): List<com.example.accounting.data.local.entity.SettlementAllocationEntity> = emptyList()
     override suspend fun getAllocationsForSettlement(settlementVoucherId: String): List<com.example.accounting.data.local.entity.SettlementAllocationEntity> = emptyList()
     override suspend fun insertSettlementAllocations(allocations: List<com.example.accounting.data.local.entity.SettlementAllocationEntity>) {}
