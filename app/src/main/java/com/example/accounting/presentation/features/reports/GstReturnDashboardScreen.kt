@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
@@ -38,6 +43,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
@@ -86,6 +93,8 @@ import com.example.accounting.domain.taxation.gstreturn.GstReturnSectionStatus
 import com.example.accounting.domain.taxation.gstreturn.GstReturnStatus
 import com.example.accounting.domain.taxation.gstreturn.GstReturnType
 import com.example.accounting.domain.taxation.gstreturn.GstScheme
+import com.example.accounting.domain.financialyear.FinancialYear
+import com.example.accounting.domain.rendering.Gstin
 import kotlinx.coroutines.launch
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -115,6 +124,8 @@ fun GstReturnDashboardView(
     onUpdateGstEnabled: (Boolean) -> Unit,
     onUpdateGstScheme: (GstScheme) -> Unit,
     onUpdateGstFilingFrequency: (GstReturnPeriodicity) -> Unit,
+    onUpdateGstReturnPeriod: (Int?, GstQuarter?) -> Unit = { _, _ -> },
+    onFinancialYearSelected: (com.example.accounting.domain.financialyear.FinancialYear) -> Unit = {},
     onExportCsv: () -> Unit = {},
     onExportGstrJson: () -> Unit = {},
     onSetNilReturn: (Boolean) -> Unit = {},
@@ -196,7 +207,9 @@ fun GstReturnDashboardView(
             onUpdateGstEnabled = onUpdateGstEnabled,
             onUpdateGstScheme = onUpdateGstScheme,
             onUpdateGstFilingFrequency = onUpdateGstFilingFrequency,
-            onUpdateGstReminderEnabled = onUpdateGstReminderEnabled
+            onUpdateGstReminderEnabled = onUpdateGstReminderEnabled,
+            onUpdateGstReturnPeriod = onUpdateGstReturnPeriod,
+            onFinancialYearSelected = onFinancialYearSelected
         )
         GstWizardStep.SelectReturn -> GstSelectReturnStep(
             uiState = uiState,
@@ -299,9 +312,11 @@ private sealed class GstWizardStep {
     object Authenticate : GstWizardStep()
     object FilingProgress : GstWizardStep()
     object History : GstWizardStep()
-    /** GSTR-1 Settings - registration/scheme/filing-frequency (previously on the Dashboard, moved
-     * here so the Dashboard matches the reference exactly) plus Automation (explicitly relocated
-     * here, out of the Dashboard, per instruction). */
+    /** GST Settings (GST Settings refactor - renamed from "GSTR-1 Settings", which was never
+     * accurate since this screen already governed the company's whole GST configuration, not just
+     * GSTR-1) - registration/taxpayer type/filing-frequency/return-period (previously on the
+     * Dashboard, moved here so the Dashboard matches the reference exactly) plus Automation
+     * (explicitly relocated here, out of the Dashboard, per instruction). */
     object Settings : GstWizardStep()
     /** Screen 7 (reference: 8-screen WhatsApp image) - reached from History by opening a return
      * that has actually reached SUBMITTED/FILED; shows only real [GstReturn] fields (ARN, filed
@@ -428,7 +443,7 @@ private fun GstDashboardStep(
         // Quick Actions removed (per instruction) - redundant now that the GST Dashboard's own
         // bottom nav (Dashboard/Invoices/Returns/Reports) already covers the same destinations.
         item {
-            SectionCard(onClick = onOpenSettings, title = "GSTR-1 Settings", subtitle = "Registration, scheme, filing frequency, automation & reminders", trailing = {
+            SectionCard(onClick = onOpenSettings, title = "GST Settings", subtitle = "Registration, taxpayer type, filing frequency, return period, automation & reminders", trailing = {
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
             }) {}
         }
@@ -450,11 +465,128 @@ private fun GstDashboardStep(
     }
 }
 
-/** GSTR-1 Settings - registration/scheme/filing-frequency (moved off the Dashboard so it matches
- * the reference exactly) and Automation (moved here per explicit instruction: "keep Automation
- * only inside GSTR-1 Settings"). Not one of the reference's 9 named screens - it's this app's own
- * real settings surface for the controls the reference doesn't model at all (GST registration
- * on/off, scheme, reminders), reached only via the Dashboard's own "GSTR-1 Settings" row. */
+/** A single labeled dropdown field - the shared shape behind all 3 Top GST Period Row selectors.
+ * Same Surface+clickable+DropdownMenu pattern [AppTopBar]'s own FY/company selectors already use,
+ * not a new design primitive. */
+@Composable
+private fun <T> GstDropdownField(
+    label: String,
+    displayValue: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = modifier.widthIn(min = 128.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 1f else 0.5f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled && options.isNotEmpty()) { expanded = true }
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        displayValue, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                }
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(text = { Text(optionLabel(option)) }, onClick = { onSelect(option); expanded = false })
+                }
+            }
+        }
+    }
+}
+
+/** Apr-first calendar order (Indian FY), not Jan-Dec - matches the spec's own "Apr, May, Jun, ...,
+ * Jan, Feb, Mar" ordering for the Monthly Return Period dropdown. */
+private val FY_MONTH_ORDER = listOf(4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3)
+
+/** User correction - the quarter's own real 3 calendar months spelled out ("Jul, Aug, Sep"), not
+ * an en-dash first-last range ("Jul-Sep"). Still exactly one of the 4 real fixed GST quarters
+ * ([GstQuarter] itself never changes) - only the display text changes. */
+private fun quarterRangeLabel(quarter: GstQuarter): String =
+    quarter.months.joinToString(", ") { monthLabel(it) }
+
+/** Top GST Period Row - Financial Year / Return Period / Filing Frequency, exactly 3 dropdowns,
+ * one row where space allows and wrapping on narrow screens ([FlowRow], not a fixed [Row]).
+ * Return Period's own option set and displayed value depend on Filing Frequency (months when
+ * Monthly, quarters when Quarterly) - selecting a new Filing Frequency clears the persisted Return
+ * Period selection back to "no explicit choice" so a stale month can never survive into Quarterly
+ * mode or vice versa. Financial Year reuses the exact same app-wide FY switch every other screen's
+ * FY dropdown already calls - never a second, independent "which FY" concept. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GstPeriodRow(
+    uiState: AccountingUiState,
+    onFinancialYearSelected: (FinancialYear) -> Unit,
+    onFilingFrequencyChanged: (GstReturnPeriodicity) -> Unit,
+    onReturnPeriodChanged: (Int?, GstQuarter?) -> Unit
+) {
+    val company = uiState.currentCompany
+    val frequency = company?.gstFilingFrequency ?: GstReturnPeriodicity.MONTHLY
+    val today = remember { LocalDate.now() }
+    // No explicit selection yet (both null) falls back to today's real calendar period - never a
+    // fabricated fixed date - same default this screen used before either column existed.
+    val selectedMonth = company?.gstReturnPeriodMonth ?: today.monthValue
+    val selectedQuarter = company?.gstReturnPeriodQuarter ?: GstQuarter.ofMonth(today.monthValue)
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        GstDropdownField(
+            label = "Financial Year",
+            displayValue = uiState.currentFinancialYear?.fyCode ?: "Not set",
+            options = uiState.financialYears,
+            optionLabel = { it.fyCode },
+            onSelect = onFinancialYearSelected,
+            modifier = Modifier.weight(1f)
+        )
+        GstDropdownField(
+            label = "Return Period",
+            displayValue = if (frequency == GstReturnPeriodicity.MONTHLY) monthLabel(selectedMonth) else quarterRangeLabel(selectedQuarter),
+            options = if (frequency == GstReturnPeriodicity.MONTHLY) FY_MONTH_ORDER else GstQuarter.entries,
+            optionLabel = { if (frequency == GstReturnPeriodicity.MONTHLY) monthLabel(it as Int) else quarterRangeLabel(it as GstQuarter) },
+            onSelect = { chosen ->
+                if (frequency == GstReturnPeriodicity.MONTHLY) onReturnPeriodChanged(chosen as Int, null)
+                else onReturnPeriodChanged(null, chosen as GstQuarter)
+            },
+            modifier = Modifier.weight(1f)
+        )
+        GstDropdownField(
+            label = "Filing Frequency",
+            displayValue = if (frequency == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly",
+            options = GstReturnPeriodicity.entries,
+            optionLabel = { if (it == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly" },
+            // Only stages the change - the caller (GstSettingsStep) confirms it behind the existing
+            // "no live gst.gov.in connection" warning dialog before actually applying it, so this
+            // must never itself touch gstFilingFrequency or gstReturnPeriod* yet.
+            onSelect = { newFreq -> onFilingFrequencyChanged(newFreq) },
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/** GST Settings - registration/taxpayer type/filing-frequency/return-period and Automation
+ * (relocated here, out of the Dashboard, per instruction: "keep Automation only inside GST
+ * Settings"). This app's own real settings surface for controls not modeled anywhere else
+ * (GST registration on/off, taxpayer type, reminders), reached only via the Dashboard's own
+ * "GST Settings" row. Business Profile/GSTIN are read-only here (edited on the Company itself,
+ * via Settings & Sync's Edit Company - never duplicated onto a second edit surface). */
 @Composable
 private fun GstSettingsStep(
     uiState: AccountingUiState,
@@ -462,34 +594,72 @@ private fun GstSettingsStep(
     onUpdateGstEnabled: (Boolean) -> Unit,
     onUpdateGstScheme: (GstScheme) -> Unit,
     onUpdateGstFilingFrequency: (GstReturnPeriodicity) -> Unit,
-    onUpdateGstReminderEnabled: (Boolean) -> Unit
+    onUpdateGstReminderEnabled: (Boolean) -> Unit,
+    onUpdateGstReturnPeriod: (Int?, GstQuarter?) -> Unit = { _, _ -> },
+    onFinancialYearSelected: (FinancialYear) -> Unit = {}
 ) {
     val company = uiState.currentCompany
     val scheme = company?.gstScheme
     val registered = company?.gstEnabled ?: false
+    val gstinValid = company?.gstin?.let { Gstin.isValid(it) } ?: false
     // Real toggles this app can never verify against gst.gov.in itself (no portal connection
     // exists) - a mismatched frequency here would misfile the Dashboard's own Returns Status/File
     // buttons against what's actually due, so a change is confirmed with an explicit warning
     // rather than applied silently.
     var pendingFrequency by remember { mutableStateOf<GstReturnPeriodicity?>(null) }
     Column(modifier = Modifier.fillMaxSize()) {
-        GstDetailBackHeader("GSTR-1 Settings", onBack)
+        GstDetailBackHeader("GST Settings", onBack)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 80.dp)) {
             item {
+                GstPeriodRow(
+                    uiState = uiState,
+                    onFinancialYearSelected = onFinancialYearSelected,
+                    onFilingFrequencyChanged = { newFreq -> if (newFreq != company?.gstFilingFrequency) pendingFrequency = newFreq },
+                    onReturnPeriodChanged = onUpdateGstReturnPeriod
+                )
+            }
+            item {
+                // Business Profile - loads the existing Company/GSTIN, never a second copy of
+                // either. Registration Status/Taxpayer Type are the only NEW controls here.
                 SectionCard(
-                    title = uiState.currentFinancialYear?.fyCode?.let { "FY $it" } ?: "No Financial Year",
+                    title = "Business Profile",
                     trailing = { GstIconBadge() }
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("GST Settings", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        ChoiceRow(listOf(true, false), registered, { if (it) "Registered" else "Unregistered" }) { onUpdateGstEnabled(it) }
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                Text("GSTIN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(company?.gstin?.takeIf { it.isNotBlank() } ?: "Not set", style = MaterialTheme.typography.bodyLarge)
+                            }
+                            if (company?.gstin?.isNotBlank() == true) {
+                                StatusBadge(
+                                    text = if (gstinValid) "Valid" else "Invalid format",
+                                    containerColor = if (gstinValid) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = if (gstinValid) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Registration Status", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ChoiceRow(listOf(true, false), registered, { if (it) "Registered" else "Unregistered" }) { onUpdateGstEnabled(it) }
+                            if (!registered) {
+                                Text(
+                                    "Unregistered companies cannot finalize GST returns that require a GSTIN.",
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else if (!gstinValid) {
+                                Text(
+                                    "This company's GSTIN is missing or invalid - update it (Settings > Company > Edit) before returns can be finalized.",
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
                         if (registered) {
-                            ChoiceRow(GstScheme.entries, scheme, { if (it == GstScheme.COMPOSITION) "Composition" else "Regular" }) { onUpdateGstScheme(it) }
-                            if (scheme == GstScheme.REGULAR) {
-                                ChoiceRow(
-                                    GstReturnPeriodicity.entries, company?.gstFilingFrequency,
-                                    { if (it == GstReturnPeriodicity.QUARTERLY) "QRMP" else "Monthly" }
-                                ) { newFreq -> if (newFreq != company?.gstFilingFrequency) pendingFrequency = newFreq }
+                            HorizontalDivider()
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Taxpayer Type", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                ChoiceRow(GstScheme.entries, scheme, { if (it == GstScheme.COMPOSITION) "Composition" else "Regular" }) { onUpdateGstScheme(it) }
                             }
                         }
                     }
@@ -520,7 +690,16 @@ private fun GstSettingsStep(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { onUpdateGstFilingFrequency(newFreq); pendingFrequency = null }) { Text("Change in App") }
+                TextButton(onClick = {
+                    onUpdateGstFilingFrequency(newFreq)
+                    // Keep Financial Year/Filing Frequency/Period synchronized - a month selected
+                    // under Monthly is meaningless under Quarterly and vice versa, so the stale
+                    // half of the Return Period pair is cleared the moment the frequency change is
+                    // actually confirmed (never on dropdown selection alone, before this dialog is
+                    // even resolved).
+                    onUpdateGstReturnPeriod(null, null)
+                    pendingFrequency = null
+                }) { Text("Change in App") }
             },
             dismissButton = { TextButton(onClick = { pendingFrequency = null }) { Text("Cancel") } }
         )
@@ -532,21 +711,28 @@ private fun GstSettingsStep(
  * the rest (GSTR-9/9C/CMP-08, and GSTR-1/3B/4 when the scheme doesn't apply) render as disabled
  * "Coming soon"/"Not applicable" rows, matching this codebase's own established precedent (Phase
  * 7J's Fund Flow/CMA tiles) for a real gap rather than a fabricated implementation. */
+/** Label/description for every [GstReturnType] - display metadata only, never eligibility (that
+ * is [GstReturnApplicability]'s job alone, per "centralize eligibility rules in one layer"). */
+private fun gstReturnTypeDisplay(type: GstReturnType): Pair<String, String> = when (type) {
+    GstReturnType.GSTR1 -> "GSTR-1" to "Details of Outward Supplies"
+    GstReturnType.GSTR3B -> "GSTR-3B" to "Monthly Summary Return"
+    GstReturnType.GSTR9 -> "GSTR-9" to "Annual Return"
+    GstReturnType.GSTR9C -> "GSTR-9C" to "Reconciliation Statement"
+    GstReturnType.CMP08 -> "CMP-08" to "Composition Tax Payment"
+    GstReturnType.GSTR4 -> "GSTR-4" to "Annual Return (Composition)"
+}
+
 @Composable
 private fun GstSelectReturnStep(uiState: AccountingUiState, onBack: () -> Unit, onSelect: (GstReturnType) -> Unit) {
     val company = uiState.currentCompany
     val scheme = company?.gstScheme ?: GstScheme.REGULAR
     val frequency = company?.gstFilingFrequency ?: GstReturnPeriodicity.MONTHLY
+    // GST Settings refactor - Taxpayer Type is the single source of truth for which rows even
+    // appear (GstReturnApplicability.visibleReturns), never a hardcoded per-screen list mixing
+    // both schemes' return types. Whether an appearing row is actually tappable is the separate,
+    // narrower availableReturns set (real preparation/filing logic exists for it today).
+    val visibleTypes = GstReturnApplicability.visibleReturns(scheme)
     val applicableTypes = GstReturnApplicability.availableReturns(scheme, frequency).map { it.returnType }.toSet()
-    data class ReturnMenuItem(val type: GstReturnType?, val label: String, val description: String)
-    val items = listOf(
-        ReturnMenuItem(GstReturnType.GSTR1, "GSTR-1", "Details of Outward Supplies"),
-        ReturnMenuItem(GstReturnType.GSTR3B, "GSTR-3B", "Monthly Summary Return"),
-        ReturnMenuItem(null, "GSTR-9", "Annual Return"),
-        ReturnMenuItem(null, "GSTR-9C", "Reconciliation Statement"),
-        ReturnMenuItem(GstReturnType.CMP08, "CMP-08", "Composition Tax Payment"),
-        ReturnMenuItem(GstReturnType.GSTR4, "GSTR-4", "Annual Return (Composition)")
-    )
     Column(modifier = Modifier.fillMaxSize()) {
         GstDetailBackHeader("Select Return Type", onBack)
         Text(
@@ -554,14 +740,15 @@ private fun GstSelectReturnStep(uiState: AccountingUiState, onBack: () -> Unit, 
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp)
         )
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 80.dp)) {
-            items(items) { item ->
+            items(visibleTypes, key = { it }) { type ->
                 // Strict reference match - the row itself carries no "Coming soon" label the
                 // screenshot doesn't show; a type this company can't actually file (no backing
                 // GstReturnApplicability rule) is simply not clickable, same visual row either way.
-                val available = item.type != null && item.type in applicableTypes
+                val (label, description) = gstReturnTypeDisplay(type)
+                val available = type in applicableTypes
                 SectionCard(
-                    title = item.label, subtitle = item.description,
-                    onClick = if (available) ({ onSelect(item.type!!) }) else null,
+                    title = label, subtitle = description,
+                    onClick = if (available) ({ onSelect(type) }) else null,
                     trailing = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = if (available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline) }
                 ) {}
             }
@@ -974,7 +1161,10 @@ private fun GstReturnHistoryStep(uiState: AccountingUiState, onBack: () -> Unit,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
             ActionButton(text = "All", style = if (filterType == null) ActionButtonStyle.PRIMARY else ActionButtonStyle.SECONDARY, onClick = { filterType = null }, modifier = Modifier.weight(1f))
-            GstReturnType.entries.forEach { type ->
+            // GST Settings refactor - only real, actually-filable return types (never the
+            // visibility-only GSTR-9/GSTR-9C, which can never appear in real return history since
+            // nothing can create a GstReturn with those types).
+            GstReturnApplicability.allActionableTypes.toList().forEach { type ->
                 ActionButton(text = type.name, style = if (filterType == type) ActionButtonStyle.PRIMARY else ActionButtonStyle.SECONDARY, onClick = { filterType = type }, modifier = Modifier.weight(1f))
             }
         }
@@ -1702,15 +1892,17 @@ private fun cellText(row: Map<String, Any?>, key: String): String {
     }
 }
 
-private const val TABLE_COLUMN_WIDTH_DP = 118
-private val ZOOM_STEPS = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f)
+// Zoom feature - shared (not private) so ReportsCenterScreen.kt's own wide tables (Trial
+// Balance's 8 columns) reuse this exact zoom control/step scale instead of a second one.
+const val TABLE_COLUMN_WIDTH_DP = 118
+val ZOOM_STEPS = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f)
 
 /** A small +/- row (Phase 8A, Part 2 follow-up) - a real, low-space mobile screen has no room to
  * show a wide statutory table at full column width AND stay readable, so zoom is a genuine
  * control here (unlike the PDF preview, which hands zoom to whatever external viewer opens it -
  * that already has its own pinch-zoom, no need to duplicate it). [zoomIndex] indexes [ZOOM_STEPS]. */
 @Composable
-private fun ZoomControlRow(zoomIndex: Int, onZoomIndexChange: (Int) -> Unit) {
+fun ZoomControlRow(zoomIndex: Int, onZoomIndexChange: (Int) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(bottom = 4.dp)) {
         IconButton(onClick = { if (zoomIndex > 0) onZoomIndexChange(zoomIndex - 1) }, enabled = zoomIndex > 0) {
             Icon(Icons.Default.ZoomOut, contentDescription = "Zoom out")

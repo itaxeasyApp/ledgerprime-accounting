@@ -70,7 +70,17 @@ data class CompanyEntity(
     /** 13-point correctness pass, item 1 - see [com.example.accounting.domain.company.Company.pinCode]. */
     @ColumnInfo(defaultValue = "''") val pinCode: String = "",
     /** Phase 8A, Part 2 - see [com.example.accounting.domain.company.Company.gstr1ReminderEnabled]. */
-    @ColumnInfo(defaultValue = "1") val gstr1ReminderEnabled: Boolean = true
+    @ColumnInfo(defaultValue = "1") val gstr1ReminderEnabled: Boolean = true,
+    /** GST Settings refactor - the GST Dashboard's "Top GST Period Row" Return Period selection,
+     * persisted so it survives navigating away/reopening the app instead of resetting to today's
+     * date every time. Exactly one of [gstReturnPeriodMonth] (1-12, when [gstFilingFrequency] is
+     * MONTHLY) / [gstReturnPeriodQuarter] ([com.example.accounting.domain.taxation.gstreturn.GstQuarter]
+     * name, when QUARTERLY) is meaningful at a time - both null means "no explicit selection yet,
+     * fall back to today's real calendar period" (same default this app already used before this
+     * field existed). Never a new source of truth for filing itself - [GstReturnDetailsStep] still
+     * carries its own transient in-flight selection when actually preparing one specific return. */
+    @ColumnInfo(defaultValue = "NULL") val gstReturnPeriodMonth: Int? = null,
+    @ColumnInfo(defaultValue = "NULL") val gstReturnPeriodQuarter: String? = null
 )
 
 @Entity(
@@ -357,7 +367,9 @@ data class VoucherStockLineEntity(
     val quantityRaw: Long, // thousandths, see Quantity
     val ratePaise: Long,   // transaction rate (purchase cost or selling price) as entered on the voucher
     val amountPaise: Long,
-    val lineOrder: Int
+    val lineOrder: Int,
+    /** See [com.example.accounting.domain.inventory.VoucherStockLine.discount]. */
+    @ColumnInfo(defaultValue = "0") val discountPaise: Long = 0L
 )
 
 /**
@@ -377,6 +389,12 @@ data class VoucherStockLineEntity(
             parentColumns = ["itemId"],
             childColumns = ["itemId"],
             onDelete = ForeignKey.RESTRICT
+        ),
+        ForeignKey(
+            entity = CompanyEntity::class,
+            parentColumns = ["companyId"],
+            childColumns = ["companyId"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
     indices = [Index("companyId"), Index("financialYearId"), Index("itemId"), Index("voucherId"), Index("date")]
@@ -560,6 +578,14 @@ data class SettlementAllocationEntity(
  */
 @Entity(
     tableName = "gst_filing_periods",
+    foreignKeys = [
+        ForeignKey(
+            entity = CompanyEntity::class,
+            parentColumns = ["companyId"],
+            childColumns = ["companyId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [Index("companyId")]
 )
 data class GstFilingPeriodEntity(

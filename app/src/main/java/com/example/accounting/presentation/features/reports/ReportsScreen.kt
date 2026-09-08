@@ -121,6 +121,16 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
         }
         return
     }
+    // Zoom feature - scales only the dense row text (never the summary strip/title), same
+    // ZOOM_STEPS scale the GST tables already use. Real reflow (font size, not a paint-only
+    // transform) - LazyColumn accommodates the resulting taller rows natively, same as any other
+    // variable-height item. Self-contained (own remembered state) so every existing caller of
+    // this composable keeps compiling and rendering unchanged by default.
+    var zoomIndex by remember { mutableIntStateOf(1) }
+    val textScale = ZOOM_STEPS[zoomIndex]
+    val rowNamePaint = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
+    val rowGroupPaint = MaterialTheme.typography.labelSmall.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize * textScale)
+    val rowAmountPaint = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -134,6 +144,8 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
 
         TrialBalanceStatusStrip(report)
         Spacer(modifier = Modifier.height(10.dp))
+
+        ZoomControlRow(zoomIndex) { zoomIndex = it }
 
         // Table Header
         Row(
@@ -163,17 +175,17 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1.5f)) {
-                        Text(row.ledgerName, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold))
-                        Text(row.groupName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(row.ledgerName, style = rowNamePaint)
+                        Text(row.groupName, style = rowGroupPaint, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(
                         text = if (row.closingDebit.isPositive) row.closingDebit.formatPlain() else "--",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        style = rowAmountPaint,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
                         text = if (row.closingCredit.isPositive) row.closingCredit.formatPlain() else "--",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        style = rowAmountPaint,
                         modifier = Modifier.weight(1f)
                     )
                 }

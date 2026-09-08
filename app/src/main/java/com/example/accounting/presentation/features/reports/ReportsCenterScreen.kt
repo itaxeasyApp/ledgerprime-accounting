@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,6 +83,11 @@ fun ReportsCenterScreen(
     onExportReport: (reportKey: String) -> Unit = {},
     onShareReport: (reportKey: String) -> Unit = {},
     onPrintReport: (reportKey: String) -> Unit = {},
+    /** Refresh feature - re-runs the same [com.example.accounting.presentation.viewmodel.AccountingViewModel.refreshFinancialReports]
+     * every ledger/voucher change already triggers reactively; this just gives the user their own
+     * direct way to force it (e.g. right before Print/Download, for confidence the figures are
+     * current) rather than only firing on data changes. */
+    onRefreshReport: () -> Unit = {},
     gstReturnActions: GstReturnDashboardActions,
     /** Dashboard-card-to-Report-Center deep link fix - [AccountingUiState.reportsDeepLink], a
      * report-menu key to jump straight into (e.g. "Outstanding Receivables") instead of leaving
@@ -131,7 +137,7 @@ fun ReportsCenterScreen(
         val initialReportKey = remember(category) { pendingReportKey.also { pendingReportKey = null } }
 
         when (category) {
-            ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport, initialReportKey)
+            ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport, onRefreshReport, initialReportKey)
             ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, initialReportKey)
             ReportCategory.ACCOUNTS -> AccountsCategory(uiState, onOpenDayBook, onOpenAllLedgers)
             ReportCategory.GST -> GstCategory(uiState, gstReturnActions, initialReportKey)
@@ -142,7 +148,7 @@ fun ReportsCenterScreen(
 }
 
 @Composable
-private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (String) -> Unit, onShareReport: (String) -> Unit, onPrintReport: (String) -> Unit, initialReportKey: String? = null) {
+private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (String) -> Unit, onShareReport: (String) -> Unit, onPrintReport: (String) -> Unit, onRefreshReport: () -> Unit, initialReportKey: String? = null) {
     var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(
@@ -166,6 +172,9 @@ private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (Strin
             reportKey!!,
             onBack = { reportKey = null },
             actions = {
+                IconButton(onClick = onRefreshReport) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                }
                 if (supportsPrint) {
                     IconButton(onClick = { onPrintReport(reportKey!!) }) {
                         Icon(Icons.Default.Print, contentDescription = "Print")
@@ -309,6 +318,8 @@ private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnD
                 onUpdateGstEnabled = gstReturnActions.onUpdateGstEnabled,
                 onUpdateGstScheme = gstReturnActions.onUpdateGstScheme,
                 onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency,
+                onUpdateGstReturnPeriod = gstReturnActions.onUpdateGstReturnPeriod,
+                onFinancialYearSelected = gstReturnActions.onFinancialYearSelected,
                 onExportCsv = gstReturnActions.onExportCsv,
                 onExportGstrJson = gstReturnActions.onExportGstrJson,
                 onSetNilReturn = gstReturnActions.onSetNilReturn,
@@ -351,6 +362,13 @@ data class GstReturnDashboardActions(
     val onUpdateGstEnabled: (Boolean) -> Unit,
     val onUpdateGstScheme: (com.example.accounting.domain.taxation.gstreturn.GstScheme) -> Unit,
     val onUpdateGstFilingFrequency: (com.example.accounting.domain.taxation.gstreturn.GstReturnPeriodicity) -> Unit,
+    /** GST Settings refactor - Top GST Period Row. See
+     * [com.example.accounting.presentation.viewmodel.AccountingViewModel.updateGstReturnPeriod]. */
+    val onUpdateGstReturnPeriod: (Int?, com.example.accounting.domain.taxation.gstreturn.GstQuarter?) -> Unit = { _, _ -> },
+    /** GST Settings refactor - the same app-wide Financial Year switch the top bar's own FY
+     * dropdown already uses ([com.example.accounting.presentation.viewmodel.AccountingViewModel.switchFinancialYear]) -
+     * never a second, independent "which FY is GST Settings looking at" concept. */
+    val onFinancialYearSelected: (com.example.accounting.domain.financialyear.FinancialYear) -> Unit = {},
     /** Phase 8A, Part 2 - CSV/GST JSON export+share, alongside the existing plain-JSON
      * onGenerateJson/onShareArtifact pair. Both build and share a file the same way
      * [AccountingViewModel.exportReportAndShare] already does for Trial Balance/P&L/Balance Sheet. */

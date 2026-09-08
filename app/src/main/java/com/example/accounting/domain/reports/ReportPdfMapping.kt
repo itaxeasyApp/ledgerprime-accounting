@@ -81,6 +81,30 @@ fun BalanceSheetReport.toPdfData(): TabularReportData = TabularReportData(
     totalsRow = listOf("Total Liabilities", totalLiabilities.formatPlain(), "Total Assets", totalAssets.formatPlain())
 )
 
+/** Print/Download fix - Ledger Statement had no PDF mapping at all before this; same pure
+ * display-formatting pattern as every other report here, reusing the exact rows/opening/closing
+ * figures the on-screen [com.example.accounting.presentation.features.ledgers.LedgerStatementDetailView]
+ * already shows. Empty (zero-transaction) ledgers produce a valid rows-less [TabularReportData] -
+ * [TabularPdfRenderer] already renders "No data for this period." for that case, same as every
+ * other report. */
+fun LedgerStatementReport.toPdfData(): TabularReportData = TabularReportData(
+    title = "Ledger Statement",
+    subtitle = "$ledgerName - Opening: ${openingBalance.formatPlain()} ${openingType.code}",
+    columnHeaders = listOf("Date", "Voucher No.", "Particulars", "Debit", "Credit", "Balance"),
+    rows = rows.map {
+        listOf(
+            it.date.toString(), it.voucherNumber, it.particulars,
+            it.debitAmount.formatPlain(), it.creditAmount.formatPlain(),
+            "${it.runningBalance.formatPlain()} ${it.balanceType.code}"
+        )
+    },
+    totalsRow = listOf(
+        "", "", "Closing Balance",
+        totalDebit.formatPlain(), totalCredit.formatPlain(),
+        "${closingBalance.formatPlain()} ${closingType.code}"
+    )
+)
+
 fun DayBookReport.toPdfData(): TabularReportData = TabularReportData(
     title = "Day Book",
     subtitle = dateRangeLabel,

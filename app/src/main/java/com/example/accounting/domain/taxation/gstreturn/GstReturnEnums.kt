@@ -16,8 +16,14 @@ enum class GstScheme { REGULAR, COMPOSITION }
  * Extensible set of return types this foundation can carry (Rule 33). Only the identity/lifecycle
  * plumbing is implemented here - none of these compute their actual statutory sections yet (Section
  * 4/23 of the Rule 33 spec: that is explicitly future-rule work, never fabricated here).
+ *
+ * GSTR9/GSTR9C (GST Settings refactor) are visibility-only additions - [GstReturnApplicability]
+ * lists them under Regular so the Dashboard's return list is a complete, correct set for that
+ * taxpayer type, but neither has a real [GstReturnApplicabilityRule]/preparation flow behind it
+ * yet, so they stay non-actionable ("coming soon") in the UI exactly like before this change,
+ * never a fabricated filing capability.
  */
-enum class GstReturnType { GSTR1, GSTR3B, GSTR4, CMP08 }
+enum class GstReturnType { GSTR1, GSTR3B, GSTR4, CMP08, GSTR9, GSTR9C }
 
 /** How a return's period is filed - a whole quarter (QRMP/Composition option) or a single calendar
  * month (Regular's default). For a REGULAR company this mirrors

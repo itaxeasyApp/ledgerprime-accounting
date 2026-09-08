@@ -25,10 +25,12 @@ import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -77,6 +79,11 @@ fun SettingsAndSyncScreen(
      * GSTIN/PAN/address/phone/email after creation, so the app-bar/Dashboard's "GSTIN:
      * Unregistered" could never be corrected even after the real GSTIN was known. */
     onEditCompany: (Company) -> Unit = {},
+    /** Full Company CRUD - Delete. Real, irreversible, cascades all of that company's data
+     * (see [com.example.accounting.data.repository.AccountingRepository.deleteCompany]) - gated
+     * behind an in-screen confirmation dialog below since there was previously no UI path to
+     * remove a company at all. */
+    onDeleteCompany: (Company) -> Unit = {},
     onTogglePeriodLock: (AccountingPeriod) -> Unit,
     onTriggerSync: () -> Unit,
     onUpdateAccountingConfiguration: (AccountingMode?, BusinessType?) -> Unit = { _, _ -> },
@@ -86,6 +93,38 @@ fun SettingsAndSyncScreen(
     modifier: Modifier = Modifier
 ) {
     val currentCompany = uiState.currentCompany
+    var companyPendingDelete by remember { mutableStateOf<Company?>(null) }
+
+    companyPendingDelete?.let { target ->
+        // Product decision - a user may delete any company they have, including their only one;
+        // this is a warn-then-confirm gate, never a hard block. The wording gets explicitly
+        // stronger when it's the last company, since that specific case also empties the app
+        // (MainAppScreen shows its own "create a company to continue" screen for that state).
+        val isLastCompany = uiState.companies.size <= 1
+        AlertDialog(
+            onDismissRequest = { companyPendingDelete = null },
+            title = { Text("Delete '${target.name}'?") },
+            text = {
+                Text(
+                    "This permanently deletes this company and everything under it - ledgers, " +
+                        "vouchers, stock, parties, invoices, and GST records. You may lose your data. " +
+                        (if (isLastCompany) "This is your only company - deleting it leaves nothing to open until you create a new one. " else "") +
+                        "This cannot be undone. Confirm you want to delete it."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteCompany(target)
+                    companyPendingDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { companyPendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -139,6 +178,20 @@ fun SettingsAndSyncScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(onClick = { onEditCompany(comp) }, modifier = Modifier.size(32.dp)) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit ${comp.name}", modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(
+                                    // CRUD fix - always tappable now; the "only company" case gets
+                                    // its own explanatory dialog above instead of a silently
+                                    // disabled icon that looked like a hardcoded/broken feature.
+                                    onClick = { companyPendingDelete = comp },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete ${comp.name}",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
                                 }
                                 if (isSelected) {
                                     Spacer(modifier = Modifier.width(4.dp))

@@ -585,6 +585,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(currentCompany = company, isLoading = true) }
         observeCompanyData(company.companyId)
         emitMessage("Switched active company context to: ${company.name}")
+        // Persist so app cold-start reopens this company instead of falling back to alphabetical
+        // order (see AccountingRepository.setDefaultCompany) - fire-and-forget, never blocks the
+        // UI switch above and never worth surfacing a failure toast for.
+        viewModelScope.launch { repository.setDefaultCompany(company.companyId) }
     }
 
     fun switchFinancialYear(fy: FinancialYear) {
@@ -736,6 +740,23 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 emitMessage("Updated company '${updated.name}'")
             } else {
                 emitMessage("Error updating company: ${result.errorOrNull()?.message}")
+            }
+        }
+    }
+
+    /** Full Company CRUD - Delete. See [AccountingRepository.deleteCompany] for the cascade
+     * mechanics. `companies`/`currentCompany` self-heal via `loadCompaniesAndInitialData`'s live
+     * Flow collector once this returns: it already falls back to another company whenever the
+     * previously-current `companyId` no longer appears in the fresh list, so no manual
+     * `switchCompany` call is needed here even when deleting the currently active company. */
+    fun deleteCompany(companyId: String) {
+        viewModelScope.launch {
+            val target = _uiState.value.companies.find { it.companyId == companyId } ?: return@launch
+            val result = repository.deleteCompany(companyId)
+            if (result is AccountingResult.Success) {
+                emitMessage("Deleted company '${target.name}' and all its data")
+            } else {
+                emitMessage("Error deleting company: ${result.errorOrNull()?.message}")
             }
         }
     }
@@ -1714,6 +1735,36 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         router.navigate(AppRoute.ChartOfAccounts)
     }
 
+    /** Refresh feature - Ledger Statement's own Flow collectors (ledgers/vouchers) already keep
+     * the underlying data current, but [selectedLedgerStatement] itself is a one-shot snapshot
+     * ([loadLedgerStatement]) that never re-fetches on its own; there was no user-facing way to
+     * force a re-read of the same ledger. Re-runs the exact same repository call
+     * [loadLedgerStatement] does, keyed off the already-selected statement's own ledgerId -
+     * never a second statement-generation path. */
+    fun refreshLedgerStatement() {
+        viewModelScope.launch {
+            val compId = _uiState.value.currentCompany?.companyId ?: return@launch
+            val ledgerId = _uiState.value.selectedLedgerStatement?.ledgerId ?: return@launch
+            val statement = repository.generateLedgerStatement(compId, ledgerId)
+            _uiState.update { it.copy(selectedLedgerStatement = statement) }
+        }
+    }
+
+    /** Print/Download fix - Ledger Statement had no PDF path at all before this (see
+     * [com.example.accounting.domain.reports.LedgerStatementReport.toPdfData]'s own KDoc). Same
+     * "format the already-loaded state, never recompute" pattern as [renderReportPdf] - null only
+     * when nothing is currently selected, never for a genuinely empty (zero-transaction) ledger,
+     * which still renders a valid PDF ("No data for this period.", same as every other report). */
+    fun renderLedgerStatementPdf(): java.io.File? {
+        val statement = _uiState.value.selectedLedgerStatement ?: return null
+        return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), statement.toPdfData())
+    }
+
+    fun shareLedgerStatementPdf(): android.content.Intent? {
+        val file = renderLedgerStatementPdf() ?: return null
+        return documentPreviewService.buildShareIntent(getApplication(), file, "application/pdf")
+    }
+
     /** Runs [block], returning its result - or `null` (and appending a short label to [failures])
      * if it throws [com.example.accounting.core.database.AccountingTransactionException]. Used by
      * [refreshFinancialReports] so one report's real accounting-integrity failure (e.g. an
@@ -1808,6 +1859,13 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             _snackbarEvents.emit(msg)
         }
     }
+
+    /** Print & Download crash fix - a public door into the same snackbar channel [emitMessage]
+     * already uses, for the handful of Print/Share call sites that must run from a Composable
+     * (they need the real Activity Context [PrintManager] requires, which the ViewModel itself
+     * never has) rather than from inside a ViewModel coroutine. "On failure, show a controlled
+     * error; never crash" only holds if that error can actually reach the user. */
+    fun showMessage(msg: String) = emitMessage(msg)
 
     // ==================== Phase 7J UI additions ====================
 
@@ -2351,7 +2409,15 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     fun updateGstEnabled(enabled: Boolean) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
-            repository.updateAccountingConfiguration(comp.companyId, gstEnabled = enabled)
+            // GST Settings refactor - "Registered requires and validates GSTIN": unlike the other
+            // GST config toggles, this one can genuinely fail (see
+            // AccountingRepository.updateAccountingConfiguration's GSTIN guard), so the result must
+            // actually be checked - the company otherwise silently stays Unregistered with no
+            // feedback as to why the toggle didn't take.
+            val result = repository.updateAccountingConfiguration(comp.companyId, gstEnabled = enabled)
+            if (result is AccountingResult.Failure) {
+                emitMessage(result.error.message)
+            }
         }
     }
 
@@ -2366,6 +2432,19 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
             repository.updateAccountingConfiguration(comp.companyId, gstFilingFrequency = frequency)
+        }
+    }
+
+    /** GST Settings refactor - Top GST Period Row's Return Period dropdown. Pass exactly one of
+     * [month]/[quarter] (matching the company's current [Company.gstFilingFrequency]); the other
+     * is always cleared, never left stale from a previous frequency. */
+    fun updateGstReturnPeriod(month: Int?, quarter: GstQuarter?) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val result = repository.updateGstReturnPeriod(comp.companyId, month, quarter)
+            if (result is AccountingResult.Failure) {
+                emitMessage("Error updating return period: ${result.error.message}")
+            }
         }
     }
 
@@ -2806,10 +2885,16 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), data)
     }
 
-    fun printReport(reportKey: String) {
-        val file = renderReportPdf(reportKey) ?: run { emitMessage("$reportKey is not loaded yet."); return }
-        documentPreviewService.print(getApplication(), file, reportKey)
-    }
+    // Print & Download crash fix (Financial Reports) - "printReport"/"printDayBook" were removed
+    // here. Both called `documentPreviewService.print(getApplication(), ...)` ->
+    // `PrintAdapter.print(Application context, ...)`, and Android's PrintManager throws
+    // `IllegalStateException: Can print only from an activity` for anything but a real Activity
+    // Context - exactly the same root cause already fixed once for Invoice print
+    // (MainAppScreen's onPrint there calls PrintAdapter.print directly with LocalContext.current).
+    // MainAppScreen's onPrintReport/DayBookScreen's onPrint now do the same: fetch the PDF File
+    // via renderReportPdf()/renderDayBookPdf() (unchanged below), then call PrintAdapter.print
+    // with the Composable's own real Activity Context, wrapped in try/catch so a missing print
+    // service (or any other print-time failure) shows a controlled message instead of crashing.
 
     fun shareReportPdf(reportKey: String): android.content.Intent? {
         val file = renderReportPdf(reportKey) ?: return null
@@ -2818,19 +2903,17 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     /** Day Book Print/PDF - unlike [renderReportPdf] (which formats an already-loaded
      * [AccountingUiState] report), Day Book's on-screen view is a live voucher-list filter, not a
-     * stored [com.example.accounting.domain.reports.DayBookReport]. Printing therefore fetches the
-     * SAME, already-existing, unmodified [ReportManagementService.dayBook] used everywhere else
-     * Day Book data is needed - the full current-FY Day Book (never a second calculation, and
-     * never re-derived from the UI's own search/type filter, which is a browsing convenience, not
-     * an accounting boundary). */
-    fun printDayBook() {
-        viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("No company selected."); return@launch }
-            val fy = _uiState.value.currentFinancialYear ?: run { emitMessage("No financial year selected."); return@launch }
-            val report = reportService.dayBook(comp.companyId, fy.startDate..fy.endDate)
-            val file = com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), report.toPdfData())
-            documentPreviewService.print(getApplication(), file, "Day Book")
-        }
+     * stored [com.example.accounting.domain.reports.DayBookReport]. Rendering therefore fetches
+     * the SAME, already-existing, unmodified [ReportManagementService.dayBook] used everywhere
+     * else Day Book data is needed - the full current-FY Day Book (never a second calculation,
+     * and never re-derived from the UI's own search/type filter, which is a browsing convenience,
+     * not an accounting boundary). Returns null (with a controlled message) rather than throwing
+     * when no company/financial year is active - never a fabricated report. */
+    suspend fun renderDayBookPdf(): java.io.File? {
+        val comp = _uiState.value.currentCompany ?: run { emitMessage("No company selected."); return null }
+        val fy = _uiState.value.currentFinancialYear ?: run { emitMessage("No financial year selected."); return null }
+        val report = reportService.dayBook(comp.companyId, fy.startDate..fy.endDate)
+        return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), report.toPdfData())
     }
 
     // ---- GSTR-1 PDF Preview/Download/Print/Share (Phase 8A, Part 2) ----

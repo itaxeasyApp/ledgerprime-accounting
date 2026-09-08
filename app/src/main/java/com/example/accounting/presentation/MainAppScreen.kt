@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -22,6 +25,7 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
@@ -38,7 +42,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -275,6 +282,14 @@ fun MainAppScreen(
         NavItem(NavigationTab.REPORTS, AppRoute.Reports, "Reports", Icons.Default.Assessment, "nav_reports")
     )
 
+    // Product decision - a company-less user must still see the Dashboard and every bottom-nav
+    // function, not a forced "create a company first" gate. This is safe because the app was
+    // already built for it: AppTopBar already renders "Select Company" / "GSTIN: --" plus a
+    // "+ Add New Company" entry (wired to the same isCreateCompanyOpen/CreateCompanyDialog used
+    // everywhere else) when currentCompany is null, uiState's lists (vouchers/parties/ledgers/...)
+    // simply stay empty since nothing was ever loaded for a null company, and every single
+    // AccountingViewModel action already guards on `_uiState.value.currentCompany ?: return` -
+    // none of them can crash on a null company, they just no-op or show "Select a company first."
     val adaptiveNavType = getAdaptiveNavigationType(widthSizeClass)
     val useRail = adaptiveNavType == AdaptiveNavigationType.NAVIGATION_RAIL || adaptiveNavType == AdaptiveNavigationType.PERMANENT_NAVIGATION_DRAWER
 
@@ -425,6 +440,8 @@ fun MainAppScreen(
                     onUpdateGstEnabled = { viewModel.updateGstEnabled(it) },
                     onUpdateGstScheme = { viewModel.updateGstScheme(it) },
                     onUpdateGstFilingFrequency = { viewModel.updateGstFilingFrequency(it) },
+                    onUpdateGstReturnPeriod = { month, quarter -> viewModel.updateGstReturnPeriod(month, quarter) },
+                    onFinancialYearSelected = { viewModel.switchFinancialYear(it) },
                     onExportCsv = {
                         coroutineScope.launch {
                             val intent = viewModel.exportSelectedGstReturnAndShare(com.example.accounting.domain.export.ExportFormat.CSV)
@@ -524,7 +541,22 @@ fun MainAppScreen(
                             onOpenCreateVoucher = { type -> createVoucherType = type; isCreateVoucherTypeLocked = false; isCreateVoucherOpen = true },
                             onFilterTypeSelected = { viewModel.setVoucherTypeFilter(it) },
                             onSearchQueryChanged = { viewModel.setSearchQuery(it) },
-                            onPrint = { viewModel.printDayBook() }
+                            onPrint = {
+                                // Print & Download crash fix - same Activity-Context requirement
+                                // as every other Print call site here; renderDayBookPdf is a
+                                // suspend fetch (real repository call), so this needs the
+                                // Composable's own coroutineScope, not a bare synchronous call.
+                                coroutineScope.launch {
+                                    val file = viewModel.renderDayBookPdf()
+                                    if (file != null) {
+                                        try {
+                                            com.example.accounting.data.rendering.PrintAdapter.print(context, file, "Day Book")
+                                        } catch (e: Exception) {
+                                            viewModel.showMessage("Could not print Day Book: ${e.message ?: "no print service available"}")
+                                        }
+                                    }
+                                }
+                            }
                         )
 
                         is AppRoute.ChartOfAccounts, is AppRoute.LedgerStatement -> ChartOfAccountsScreen(
@@ -547,7 +579,35 @@ fun MainAppScreen(
                             onOpenAccountingSetup = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
                             onVoucherClick = { voucherId ->
                                 uiState.vouchers.find { it.voucherId == voucherId }?.let { selectedVoucherDetail = it }
-                            }
+                            },
+                            onPrintLedgerStatement = {
+                                // Print & Download crash fix - Ledger Statement had no Print path
+                                // at all before this; same real-Activity-Context requirement as
+                                // every other Print call site here.
+                                val file = viewModel.renderLedgerStatementPdf()
+                                if (file == null) {
+                                    viewModel.showMessage("No ledger statement is open.")
+                                } else {
+                                    try {
+                                        com.example.accounting.data.rendering.PrintAdapter.print(context, file, "Ledger Statement")
+                                    } catch (e: Exception) {
+                                        viewModel.showMessage("Could not print ledger statement: ${e.message ?: "no print service available"}")
+                                    }
+                                }
+                            },
+                            onShareLedgerStatement = {
+                                val intent = viewModel.shareLedgerStatementPdf()
+                                if (intent == null) {
+                                    viewModel.showMessage("No ledger statement is open.")
+                                } else {
+                                    try {
+                                        context.startActivity(Intent.createChooser(intent, "Share Ledger Statement"))
+                                    } catch (e: Exception) {
+                                        viewModel.showMessage("Could not share ledger statement: no app available.")
+                                    }
+                                }
+                            },
+                            onRefreshLedgerStatement = { viewModel.refreshLedgerStatement() }
                         )
 
                         is AppRoute.Reports -> ReportsCenterScreen(
@@ -558,21 +618,56 @@ fun MainAppScreen(
                             onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() },
                             onExportReport = { reportKey ->
                                 coroutineScope.launch {
+                                    // Print & Download crash fix - exportReportAndShare already
+                                    // emits its own message on export failure (null); the crash
+                                    // risk this closes is startActivity itself throwing
+                                    // ActivityNotFoundException when nothing on-device can handle
+                                    // a raw (non-chooser) ACTION_SEND for this mime type.
                                     val intent = viewModel.exportReportAndShare(reportKey)
-                                    if (intent != null) context.startActivity(intent)
+                                    if (intent != null) {
+                                        try {
+                                            context.startActivity(Intent.createChooser(intent, "Share $reportKey export"))
+                                        } catch (e: Exception) {
+                                            viewModel.showMessage("Could not share $reportKey export: no app available.")
+                                        }
+                                    }
                                 }
                             },
                             onShareReport = { reportKey ->
                                 val text = viewModel.buildReportShareText(reportKey)
-                                if (text != null) {
+                                if (text == null) {
+                                    viewModel.showMessage("$reportKey is not loaded yet.")
+                                } else {
                                     val sendIntent = Intent(Intent.ACTION_SEND).apply {
                                         type = "text/plain"
                                         putExtra(Intent.EXTRA_TEXT, text)
                                     }
-                                    context.startActivity(Intent.createChooser(sendIntent, "Share report"))
+                                    try {
+                                        context.startActivity(Intent.createChooser(sendIntent, "Share report"))
+                                    } catch (e: Exception) {
+                                        viewModel.showMessage("Could not share $reportKey: no app available.")
+                                    }
                                 }
                             },
-                            onPrintReport = { reportKey -> viewModel.printReport(reportKey) },
+                            onPrintReport = { reportKey ->
+                                // Print & Download crash fix - PrintManager requires a real
+                                // Activity Context (throws otherwise); `context` here is this
+                                // Composable's own LocalContext, never the ViewModel's
+                                // Application-only getApplication(). renderReportPdf already
+                                // renders a valid PDF for an empty (zero-row) report - null only
+                                // means the report genuinely hasn't loaded yet.
+                                val file = viewModel.renderReportPdf(reportKey)
+                                if (file == null) {
+                                    viewModel.showMessage("$reportKey is not loaded yet.")
+                                } else {
+                                    try {
+                                        com.example.accounting.data.rendering.PrintAdapter.print(context, file, reportKey)
+                                    } catch (e: Exception) {
+                                        viewModel.showMessage("Could not print $reportKey: ${e.message ?: "no print service available"}")
+                                    }
+                                }
+                            },
+                            onRefreshReport = { viewModel.refreshFinancialReports() },
                             gstReturnActions = gstReturnActions
                         )
 
@@ -596,6 +691,8 @@ fun MainAppScreen(
                             onUpdateGstEnabled = gstReturnActions.onUpdateGstEnabled,
                             onUpdateGstScheme = gstReturnActions.onUpdateGstScheme,
                             onUpdateGstFilingFrequency = gstReturnActions.onUpdateGstFilingFrequency,
+                            onUpdateGstReturnPeriod = gstReturnActions.onUpdateGstReturnPeriod,
+                            onFinancialYearSelected = gstReturnActions.onFinancialYearSelected,
                             onExportCsv = gstReturnActions.onExportCsv,
                             onExportGstrJson = gstReturnActions.onExportGstrJson,
                             onSetNilReturn = gstReturnActions.onSetNilReturn,
@@ -625,6 +722,7 @@ fun MainAppScreen(
                             onCompanySwitch = { viewModel.switchCompany(it) },
                             onOpenCreateCompany = { isCreateCompanyOpen = true },
                             onEditCompany = { company -> editingCompany = company; isCreateCompanyOpen = true },
+                            onDeleteCompany = { company -> viewModel.deleteCompany(company.companyId) },
                             onTogglePeriodLock = { viewModel.togglePeriodLock(it) },
                             onTriggerSync = { viewModel.triggerSync() },
                             onUpdateAccountingConfiguration = { mode, businessType -> viewModel.updateAccountingConfiguration(mode, businessType) },

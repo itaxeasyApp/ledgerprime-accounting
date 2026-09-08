@@ -84,7 +84,12 @@ data class Company(
      * this only gates the reminder notification, never the underlying prepare/validate checks).
      * Defaults to `true` so every existing company keeps its current (always-on) behavior
      * unchanged. */
-    val gstr1ReminderEnabled: Boolean = true
+    val gstr1ReminderEnabled: Boolean = true,
+    /** GST Settings refactor - see [com.example.accounting.data.local.entity.CompanyEntity.gstReturnPeriodMonth]/
+     * [.gstReturnPeriodQuarter]. `null` for both means no explicit Return Period has been chosen
+     * yet - callers fall back to today's real calendar period, same as before this field existed. */
+    val gstReturnPeriodMonth: Int? = null,
+    val gstReturnPeriodQuarter: com.example.accounting.domain.taxation.gstreturn.GstQuarter? = null
 ) {
     init {
         require(companyId.isNotBlank()) { "Company ID must not be blank" }

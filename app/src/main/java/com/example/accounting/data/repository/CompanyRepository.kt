@@ -18,6 +18,7 @@ interface ICompanyRepository {
     suspend fun getCompany(companyId: String): AccountingResult<Company>
     suspend fun createCompany(company: Company): AccountingResult<Company>
     suspend fun updateCompany(companyId: String, company: Company): AccountingResult<Company>
+    suspend fun deleteCompany(companyId: String): AccountingResult<Unit>
 }
 
 class CompanyRepository(
@@ -61,6 +62,29 @@ class CompanyRepository(
             AccountingResult.Success(company)
         } catch (e: Throwable) {
             AccountingResult.Failure(AppError.DatabaseError("Failed to update company", e))
+        }
+    }
+
+    override suspend fun deleteCompany(companyId: String): AccountingResult<Unit> {
+        if (companyId.isBlank()) {
+            return AccountingResult.Failure(AppError.ValidationError("companyId must not be blank"))
+        }
+        return try {
+            val existing = dao.getCompanyById(companyId)
+                ?: return AccountingResult.Failure(AppError.ValidationError("Company '$companyId' not found"))
+            // Deleting the last remaining company is explicitly allowed (product decision) - the
+            // UI is responsible for warning the user first, not this layer.
+            dao.deleteCompany(companyId)
+            // If the deleted company held isDefault, promote another remaining company so a
+            // default always exists for getDefaultCompany()/app-launch company resolution.
+            if (existing.isDefault) {
+                dao.getAllCompaniesSnapshot().firstOrNull()?.let { replacement ->
+                    dao.updateCompany(replacement.copy(isDefault = true))
+                }
+            }
+            AccountingResult.Success(Unit)
+        } catch (e: Throwable) {
+            AccountingResult.Failure(AppError.DatabaseError("Failed to delete company", e))
         }
     }
 

@@ -87,11 +87,29 @@ interface AccountingDao {
     @Query("SELECT * FROM companies WHERE isDefault = 1 LIMIT 1")
     suspend fun getDefaultCompany(): CompanyEntity?
 
+    @Query("SELECT COUNT(*) FROM companies")
+    suspend fun getCompanyCount(): Int
+
+    @Query("SELECT * FROM companies ORDER BY name ASC")
+    suspend fun getAllCompaniesSnapshot(): List<CompanyEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCompany(company: CompanyEntity)
 
     @Update
     suspend fun updateCompany(company: CompanyEntity)
+
+    // Single atomic statement so exactly one company is ever isDefault=1 at a time - no
+    // read-then-write race between clearing the old default and setting the new one.
+    @Query("UPDATE companies SET isDefault = CASE WHEN companyId = :companyId THEN 1 ELSE 0 END")
+    suspend fun setDefaultCompany(companyId: String)
+
+    // Every company-scoped entity's foreign key to `companies` is declared CASCADE (see
+    // Entities.kt), and Room enables SQLite foreign-key enforcement (AppDatabase.kt), so this
+    // single delete cascades through branches/ledgers/vouchers/stock/parties/invoices/etc. -
+    // no manual per-table cleanup needed.
+    @Query("DELETE FROM companies WHERE companyId = :companyId")
+    suspend fun deleteCompany(companyId: String)
 
     // ==================== BRANCHES ====================
     @Query("SELECT * FROM branches WHERE companyId = :companyId ORDER BY isHeadOffice DESC, name ASC")

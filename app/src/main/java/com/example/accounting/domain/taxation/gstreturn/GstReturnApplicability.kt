@@ -30,4 +30,28 @@ object GstReturnApplicability {
                 GstReturnApplicabilityRule(GstReturnType.GSTR4, GstReturnPeriodicity.QUARTERLY)
             )
         }
+
+    /**
+     * GST Settings refactor - "Taxpayer Type is the single source of truth" for which return
+     * types are ever shown at all (Dashboard, Select Return). Deliberately a SEPARATE list from
+     * [availableReturns]: GSTR-9/GSTR-9C are real Regular-scheme returns and must be visible for a
+     * Regular taxpayer, but this codebase has no preparation logic for either yet (see
+     * [GstReturnType]'s own KDoc), so they are listed here (visible) but intentionally absent from
+     * [availableReturns] (the actionable/periodicity-bearing set the Dashboard's "File" buttons and
+     * Select Return's tappability both key off) - same "real gap, never a fabricated
+     * implementation" precedent this codebase already established for CMP-08's tax-liability figure.
+     *
+     * Never mixed across schemes: a Composition taxpayer never sees GSTR-1/3B/9/9C, and a Regular
+     * taxpayer never sees CMP-08/GSTR-4, by construction of this single `when`.
+     */
+    fun visibleReturns(scheme: GstScheme): List<GstReturnType> = when (scheme) {
+        GstScheme.REGULAR -> listOf(GstReturnType.GSTR1, GstReturnType.GSTR3B, GstReturnType.GSTR9, GstReturnType.GSTR9C)
+        GstScheme.COMPOSITION -> listOf(GstReturnType.CMP08, GstReturnType.GSTR4)
+    }
+
+    /** Every [GstReturnType] this app can ever actually create/prepare a [GstReturn] for, across
+     * both schemes - used where a UI needs to enumerate real, possibly-already-filed return types
+     * (e.g. Return History's filter chips) rather than the current company's own visible set. */
+    val allActionableTypes: Set<GstReturnType> =
+        (availableReturns(GstScheme.REGULAR).map { it.returnType } + availableReturns(GstScheme.COMPOSITION).map { it.returnType }).toSet()
 }

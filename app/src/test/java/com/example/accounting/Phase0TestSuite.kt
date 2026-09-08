@@ -405,12 +405,24 @@ class FakeAccountingDao : AccountingDao {
 
     override suspend fun getDefaultCompany(): CompanyEntity? = companies.values.firstOrNull { it.isDefault }
 
+    override suspend fun getCompanyCount(): Int = companies.size
+
+    override suspend fun getAllCompaniesSnapshot(): List<CompanyEntity> = companies.values.sortedBy { it.name }
+
     override suspend fun insertCompany(company: CompanyEntity) {
         companies[company.companyId] = company
     }
 
     override suspend fun updateCompany(company: CompanyEntity) {
         companies[company.companyId] = company
+    }
+
+    override suspend fun setDefaultCompany(companyId: String) {
+        companies.replaceAll { id, entity -> entity.copy(isDefault = id == companyId) }
+    }
+
+    override suspend fun deleteCompany(companyId: String) {
+        companies.remove(companyId)
     }
 
     override fun getBranchesByCompany(companyId: String) = flowOf(emptyList<com.example.accounting.data.local.entity.BranchEntity>())

@@ -92,7 +92,7 @@ import com.example.accounting.data.local.entity.VoucherStockLineEntity
         GstReturnSectionEntity::class,
         GstReturnSubmissionEntity::class
     ],
-    version = 25,
+    version = 28,
     exportSchema = false
 )
 @TypeConverters(RoomConverters::class)
@@ -1204,6 +1204,118 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
+        /** "5 Invoice PDF Templates" task - stores the exact discount amount subtracted per stock
+         * line (previously computed in-memory and discarded) so an invoice PDF/preview can display
+         * it without recalculating. Purely additive; every historical row defaults to 0. */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE voucher_stock_lines ADD COLUMN discountPaise INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** GST Settings refactor - see [com.example.accounting.data.local.entity.CompanyEntity.gstReturnPeriodMonth]/
+         * [com.example.accounting.data.local.entity.CompanyEntity.gstReturnPeriodQuarter]. Both
+         * columns default NULL for every existing company - "no explicit selection yet", the exact
+         * same as the in-memory default this screen already fell back to before either column
+         * existed. */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE companies ADD COLUMN gstReturnPeriodMonth INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE companies ADD COLUMN gstReturnPeriodQuarter TEXT DEFAULT NULL")
+            }
+        }
+
+        /** Root-cause fix for company deletion failing with SQLITE_CONSTRAINT_FOREIGNKEY on any
+         * company with stock activity: `stock_movements` had a `companyId` column but NO foreign
+         * key to `companies`, so deleting a company cascaded away its `stock_items` while the
+         * (never-deleted, append-only) `stock_movements` rows referencing those items were left
+         * behind, tripping the `itemId -> stock_items` RESTRICT constraint at commit. This adds
+         * the missing `companies` CASCADE so a company delete now takes its stock movement history
+         * with it, exactly like every other company-scoped table already does. SQLite has no
+         * `ALTER TABLE ... ADD CONSTRAINT`, so this uses the same rebuild procedure as
+         * MIGRATION_10_11 (new table, copy every row unchanged, drop, rename, recreate indices) -
+         * `stock_movements` is a leaf table (nothing has a foreign key pointing to it), so nothing
+         * else is affected. No data is deleted, dropped, or reinterpreted for any company that
+         * still exists. */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("PRAGMA foreign_keys=OFF")
+                db.execSQL(
+                    """
+                    CREATE TABLE stock_movements_new (
+                        movementId TEXT NOT NULL PRIMARY KEY,
+                        companyId TEXT NOT NULL,
+                        financialYearId TEXT NOT NULL,
+                        itemId TEXT NOT NULL,
+                        voucherId TEXT,
+                        date TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        movementType TEXT NOT NULL,
+                        quantityRaw INTEGER NOT NULL,
+                        ratePaise INTEGER NOT NULL,
+                        amountPaise INTEGER NOT NULL,
+                        runningAvgCostAfterPaise INTEGER NOT NULL,
+                        reference TEXT NOT NULL,
+                        narration TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        createdBy TEXT NOT NULL,
+                        FOREIGN KEY(itemId) REFERENCES stock_items(itemId) ON DELETE RESTRICT,
+                        FOREIGN KEY(companyId) REFERENCES companies(companyId) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO stock_movements_new
+                    SELECT movementId, companyId, financialYearId, itemId, voucherId, date,
+                           direction, movementType, quantityRaw, ratePaise, amountPaise,
+                           runningAvgCostAfterPaise, reference, narration, createdAt, createdBy
+                    FROM stock_movements
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE stock_movements")
+                db.execSQL("ALTER TABLE stock_movements_new RENAME TO stock_movements")
+
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_stock_movements_companyId ON stock_movements(companyId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_stock_movements_financialYearId ON stock_movements(financialYearId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_stock_movements_itemId ON stock_movements(itemId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_stock_movements_voucherId ON stock_movements(voucherId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_stock_movements_date ON stock_movements(date)")
+
+                // Same gap, same fix: gst_filing_periods also had a companyId column with no
+                // foreign key at all, so its rows were silently orphaned (not blocking deletion,
+                // since nothing references it - but violating the "everything under it" promise
+                // the company-delete confirmation makes to the user).
+                db.execSQL(
+                    """
+                    CREATE TABLE gst_filing_periods_new (
+                        filingPeriodId TEXT NOT NULL PRIMARY KEY,
+                        companyId TEXT NOT NULL,
+                        periodLabel TEXT NOT NULL,
+                        startDate TEXT NOT NULL,
+                        endDate TEXT NOT NULL,
+                        isLocked INTEGER NOT NULL,
+                        lockedAt INTEGER,
+                        lockedBy TEXT,
+                        FOREIGN KEY(companyId) REFERENCES companies(companyId) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO gst_filing_periods_new
+                    SELECT filingPeriodId, companyId, periodLabel, startDate, endDate, isLocked, lockedAt, lockedBy
+                    FROM gst_filing_periods
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE gst_filing_periods")
+                db.execSQL("ALTER TABLE gst_filing_periods_new RENAME TO gst_filing_periods")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_gst_filing_periods_companyId ON gst_filing_periods(companyId)")
+
+                db.execSQL("PRAGMA foreign_keys=ON")
+            }
+        }
+
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28)
     }
 }

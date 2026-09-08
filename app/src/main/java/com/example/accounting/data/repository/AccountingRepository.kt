@@ -1,5 +1,6 @@
 package com.example.accounting.data.repository
 
+import androidx.room.withTransaction
 import com.example.accounting.core.common.AccountingResult
 import com.example.accounting.core.common.AppError
 import com.example.accounting.core.common.Constants
@@ -55,6 +56,7 @@ import com.example.accounting.domain.inventory.StockItem
 import com.example.accounting.domain.inventory.StockMovementType
 import com.example.accounting.domain.inventory.VoucherStockLine
 import com.example.accounting.domain.inventory.engine.CogsEngine
+import com.example.accounting.domain.inventory.engine.StockValuationEngine
 import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.domain.party.PaymentTerms
@@ -532,7 +534,11 @@ class AccountingRepository(
                 isDefault = it.isDefault,
                 createdAt = it.createdAt,
                 pinCode = it.pinCode,
-                gstr1ReminderEnabled = it.gstr1ReminderEnabled
+                gstr1ReminderEnabled = it.gstr1ReminderEnabled,
+                gstReturnPeriodMonth = it.gstReturnPeriodMonth,
+                gstReturnPeriodQuarter = it.gstReturnPeriodQuarter?.let { q ->
+                    runCatching { com.example.accounting.domain.taxation.gstreturn.GstQuarter.valueOf(q) }.getOrNull()
+                }
             )
         }
     }
@@ -563,6 +569,12 @@ class AccountingRepository(
             gstr1ReminderEnabled = company.gstr1ReminderEnabled
         )
         dao.insertCompany(entity)
+        // A freshly created company is what the user is about to work in - make it the one
+        // durably remembered across app restarts (see setDefaultCompany/switchCompany's DB
+        // persistence - previously createCompany always passed isDefault=false and nothing
+        // ever set it true in real usage, so app cold-start fell back to alphabetical order
+        // instead of the last company the user actually used).
+        dao.setDefaultCompany(company.companyId)
 
         // Audit fix - Create initial Financial Year for new company, derived from the real
         // current date and the company's own financialYearStartMonth (was previously always the
@@ -710,6 +722,99 @@ class AccountingRepository(
     }
 
     /**
+     * Persists which company the user last switched to, so app cold-start reopens that company
+     * instead of falling back to alphabetical order. Previously `switchCompany` in the ViewModel
+     * only updated in-memory UI state and nothing ever wrote `isDefault` back to the database in
+     * real usage - a real, if minor, production gap ("the app forgets which company I was in").
+     */
+    suspend fun setDefaultCompany(companyId: String): AccountingResult<Unit> {
+        dao.getCompanyById(companyId)
+            ?: return AccountingResult.Failure(AppError.ValidationError("Company '$companyId' not found"))
+        dao.setDefaultCompany(companyId)
+        return AccountingResult.Success(Unit)
+    }
+
+    /**
+     * GST Settings refactor - persists the Top GST Period Row's Return Period selection
+     * (Financial Year and Filing Frequency already persist via [updateAccountingConfiguration]/
+     * [com.example.accounting.presentation.viewmodel.AccountingViewModel.switchFinancialYear] - this
+     * is only the piece neither of those covered). Unconditionally sets both columns to exactly
+     * what's passed (never merged against the existing row) since a period selection is either a
+     * specific month, a specific quarter, or cleared back to "no explicit selection" - there is no
+     * partial-update case for this pair, unlike [updateAccountingConfiguration]'s independent flags.
+     */
+    suspend fun updateGstReturnPeriod(
+        companyId: String,
+        month: Int?,
+        quarter: com.example.accounting.domain.taxation.gstreturn.GstQuarter?
+    ): AccountingResult<Unit> {
+        val existing = dao.getCompanyById(companyId)
+            ?: return AccountingResult.Failure(AppError.ValidationError("Company not found"))
+        dao.updateCompany(existing.copy(gstReturnPeriodMonth = month, gstReturnPeriodQuarter = quarter?.name))
+        return AccountingResult.Success(Unit)
+    }
+
+    /**
+     * Deletes a company and every row scoped to it (branches, financial years, groups, ledgers,
+     * vouchers, journal items, stock items/movements, parties, invoices, trade documents, GST
+     * records, audit logs, ...). Safe by construction, not by manual cleanup: every one of those
+     * tables declares its `companyId` foreign key `onDelete = ForeignKey.CASCADE` against
+     * `companies` (see Entities.kt), and Room has SQLite foreign-key enforcement turned on
+     * (AppDatabase.kt), so a single row delete here cascades through all of them atomically.
+     *
+     * Deleting the LAST remaining company is explicitly allowed (product decision) - the user may
+     * delete any company they have, including their only one; the app's own UI is responsible for
+     * warning them first ("you may lose your data, confirm?") since this repository layer never
+     * shows dialogs. If the deleted company held `isDefault`, promotes another remaining company
+     * (if any are left) so a default still exists for whichever company opens next.
+     *
+     * Root-cause fix (real-device finding) - a plain `dao.deleteCompany` reliably failed with
+     * `SQLiteConstraintException: FOREIGN KEY constraint failed` for any company with real data.
+     * Cause: SQLite enforces each foreign key immediately as it processes a cascade, and this
+     * schema has TWO independent CASCADE paths hanging off `companies` that both bottom out at
+     * `ledgers` - `ledgers.companyId` directly, and `vouchers.companyId` -> `journal_items.voucherId`
+     * indirectly - while `journal_items.ledgerId -> ledgers.ledgerId` is RESTRICT. Whichever path
+     * SQLite processes first, if the direct `ledgers` cascade fires before the `journal_items` rows
+     * referencing those same ledgers have been cascade-deleted via the voucher path, the RESTRICT
+     * trigger fires and aborts the entire statement - this is a genuine ordering conflict between
+     * two correct CASCADE declarations, not a missing one. `PRAGMA defer_foreign_keys = ON` tells
+     * SQLite to defer all FK enforcement to transaction commit instead of per-statement, which is
+     * the standard fix for exactly this class of multi-path-cascade ordering conflict. Scoped to
+     * this one transaction only - the pragma resets automatically on commit/rollback, so every
+     * other write in the app keeps its normal immediate FK enforcement.
+     */
+    suspend fun deleteCompany(companyId: String): AccountingResult<Unit> {
+        if (companyId.isBlank()) {
+            return AccountingResult.Failure(AppError.ValidationError("companyId must not be blank"))
+        }
+        val existing = dao.getCompanyById(companyId)
+            ?: return AccountingResult.Failure(AppError.ValidationError("Company '$companyId' not found"))
+        return try {
+            if (db != null) {
+                db.withTransaction {
+                    db.openHelper.writableDatabase.execSQL("PRAGMA defer_foreign_keys = ON")
+                    dao.deleteCompany(companyId)
+                    if (existing.isDefault) {
+                        dao.getAllCompaniesSnapshot().firstOrNull { it.companyId != companyId }?.let { replacement ->
+                            dao.setDefaultCompany(replacement.companyId)
+                        }
+                    }
+                }
+            } else {
+                dao.deleteCompany(companyId)
+                if (existing.isDefault) {
+                    dao.getAllCompaniesSnapshot().firstOrNull { it.companyId != companyId }?.let { replacement ->
+                        dao.setDefaultCompany(replacement.companyId)
+                    }
+                }
+            }
+            AccountingResult.Success(Unit)
+        } catch (e: Throwable) {
+            AccountingResult.Failure(AppError.DatabaseError("Failed to delete company", e))
+        }
+    }
+
+    /**
      * Switches a company's [AccountingMode]/[BusinessType]. This is a CAPABILITY toggle only
      * (Phase 4 spec: "switching modes must never delete or hide underlying history") - it flips
      * two columns on the company row and nothing else. Existing vouchers, ledgers, stock
@@ -744,6 +849,15 @@ class AccountingRepository(
     ): AccountingResult<Unit> {
         val existing = dao.getCompanyById(companyId)
             ?: return AccountingResult.Failure(AppError.ValidationError("Company not found"))
+
+        // GST Settings refactor - "Registered requires and validates GSTIN": a company cannot be
+        // switched to (or left as) Registered without a real, well-formed GSTIN already on file.
+        // Checked against the GSTIN this update leaves in place (existing.gstin - this function has
+        // no GSTIN parameter of its own; that value only ever changes via updateCompany).
+        val willBeEnabled = gstEnabled ?: existing.gstEnabled
+        if (willBeEnabled && !com.example.accounting.domain.rendering.Gstin.isValid(existing.gstin)) {
+            return AccountingResult.Failure(AppError.ValidationError("A valid GSTIN is required to mark this company as Registered. Update the company's GSTIN first."))
+        }
 
         dao.updateCompany(
             existing.copy(
@@ -1562,7 +1676,30 @@ class AccountingRepository(
             )
         }
 
-        dao.deleteLedger(companyId, ledgerId)
+        // CRUD fix - `parties.ledgerId` is also a RESTRICT foreign key onto this table (a
+        // Customer/Supplier always points at exactly one ledger), a second real constraint the
+        // entryCount check above never covered. A ledger for a party that simply has zero
+        // transactions yet (real, common case) used to pass that check, then crash the whole app
+        // with an unhandled SQLiteConstraintException from the raw DELETE below instead of being
+        // rejected cleanly like every other real constraint here.
+        val linkedParty = dao.getPartyByLedgerId(companyId, ledgerId)
+        if (linkedParty != null) {
+            return AccountingResult.Failure(
+                AppError.BusinessRuleViolation(
+                    "DELETE REJECTED: Ledger '${ledger.name}' is linked to ${if (linkedParty.role == PartyRole.CUSTOMER) "customer" else "supplier"} '${linkedParty.displayName}'. Delete that customer/supplier record first."
+                )
+            )
+        }
+
+        // Defense-in-depth: never let any OTHER unforeseen foreign-key relationship crash the
+        // whole app - a clean rejection is always safe, an unhandled crash never is.
+        try {
+            dao.deleteLedger(companyId, ledgerId)
+        } catch (e: android.database.sqlite.SQLiteConstraintException) {
+            return AccountingResult.Failure(
+                AppError.BusinessRuleViolation("DELETE REJECTED: Ledger '${ledger.name}' is still referenced elsewhere and cannot be deleted.")
+            )
+        }
 
         // Queue deletion in outbox - complete versioned SyncEvent (Phase 6).
         val deleteIdempotencyKey = UUID.randomUUID().toString()
@@ -2930,7 +3067,27 @@ class AccountingRepository(
         }
 
         val suspenseNode = GroupAggregationEngine.findNode(hierarchy, "${StandardSystemGroups.SUSPENSE_GROUP_ID}_$companyId")
-        val suspenseNetSigned = (suspenseNode?.totalDebitPaise ?: 0L) - (suspenseNode?.totalCreditPaise ?: 0L)
+        val suspenseLedgerNetSigned = (suspenseNode?.totalDebitPaise ?: 0L) - (suspenseNode?.totalCreditPaise ?: 0L)
+
+        // Balance Sheet imbalance fix (real-device finding, ₹5,000 diff on a company with stock
+        // items carrying a nonzero Opening Quantity/Opening Rate) - createStockItem() persists that
+        // opening value onto StockItemEntity directly, with no offsetting journal entry anywhere
+        // (unlike an ordinary ledger's opening balance, which is just as real a debit/credit as any
+        // transaction and is naturally covered by this same Suspense safety net when unbalanced).
+        // CogsEngine always replays from item.openingQuantity/openingRatePaise regardless of period
+        // (see computeCogsIfInventoryAware), so this phantom value is a fixed, date-range-independent
+        // amount that flows into stockInHandPaise on the Assets side with nothing backing it on the
+        // Liabilities+Equity side. Folding its total into the same net Suspense figure that already
+        // absorbs any ordinary opening-balance mismatch - as a credit, since an asset that exists
+        // with no capital/liability entry behind it needs a credit-side counterweight - makes the
+        // Balance Sheet identity hold by construction instead of throwing BalanceSheetNotBalanced.
+        val openingStockReservePaise = if (pnl.isInventoryAware) {
+            dao.getStockItemsByCompany(companyId).first()
+                .sumOf { StockValuationEngine.amountFor(it.openingQuantity, it.openingRatePaise) }
+        } else {
+            0L
+        }
+        val suspenseNetSigned = suspenseLedgerNetSigned - openingStockReservePaise
         val suspenseDebitPaise = if (suspenseNetSigned > 0) suspenseNetSigned else 0L
         val suspenseCreditPaise = if (suspenseNetSigned < 0) -suspenseNetSigned else 0L
 
@@ -3376,6 +3533,14 @@ class AccountingRepository(
             // turnover total (same [bucketTotals] real transactions GSTR-4 uses) - never an invented
             // composition-tax number.
             GstReturnType.CMP08 -> linkedMapOf("TURNOVER_SUMMARY" to bucketTotals(transactions))
+            // GST Settings refactor - GSTR9/GSTR9C are visibility-only additions to GstReturnType
+            // (see its own KDoc); GstReturnApplicability.availableReturns (the only source that can
+            // ever get a GstReturn actually created) never includes either, so this branch is
+            // unreachable today - kept honest rather than fabricating annual-return/reconciliation
+            // figures this codebase doesn't compute anywhere.
+            GstReturnType.GSTR9, GstReturnType.GSTR9C -> throw IllegalStateException(
+                "${entity.returnType} preparation is not implemented - this return type is visibility-only."
+            )
         }
     }
 
@@ -3586,6 +3751,15 @@ class AccountingRepository(
             ?: return AccountingResult.Failure(AppError.ResourceNotFound("GstReturn", gstReturnId))
         if (!GstReturnStatusTransitions.isAllowed(entity.status, GstReturnStatus.FILED)) {
             return AccountingResult.Failure(AppError.BusinessRuleViolation("Cannot mark ${entity.status} as FILED."))
+        }
+        // GST Settings refactor - every real GST return (GSTR-1/3B/4, CMP-08) is filed against the
+        // company's own GSTIN; an Unregistered company (or one with a malformed GSTIN) can never
+        // actually finalize one at gst.gov.in, so this app must not let it be marked FILED here
+        // either - the single choke point every "mark filed" path (Offline/Online/manual) goes
+        // through.
+        val company = dao.getCompanyById(companyId)
+        if (company?.gstEnabled != true || !com.example.accounting.domain.rendering.Gstin.isValid(company.gstin)) {
+            return AccountingResult.Failure(AppError.ValidationError("Cannot finalize a GST return: company is Unregistered or has no valid GSTIN. Set Registration Status to Registered with a valid GSTIN in GST Settings first."))
         }
         if (acknowledgementNumber.isBlank()) {
             return AccountingResult.Failure(AppError.ValidationError("An acknowledgement number is required to mark a return as Filed."))

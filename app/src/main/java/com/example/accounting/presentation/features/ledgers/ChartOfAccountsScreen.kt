@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -63,6 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.AccountGroup
@@ -116,6 +120,10 @@ fun ChartOfAccountsScreen(
      * never a full [com.example.accounting.domain.accounting.Voucher], so resolution against
      * `uiState.vouchers` happens at the call site, same as every other `onVoucherClick` site. */
     onVoucherClick: (String) -> Unit = {},
+    /** Print/Download fix - see [LedgerStatementDetailView]'s own onPrint/onShare KDoc. */
+    onPrintLedgerStatement: (() -> Unit)? = null,
+    onShareLedgerStatement: (() -> Unit)? = null,
+    onRefreshLedgerStatement: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val visibleTabs = remember(showItemsTab) { CoaTab.entries.filter { it != CoaTab.ITEMS || showItemsTab } }
@@ -125,6 +133,34 @@ fun ChartOfAccountsScreen(
     // Zero-balance, no-entry ledgers are hidden by default (Phase 4.5, Section E.1) - "hidden" is
     // never "deleted"; this is a UI default only, the underlying master data is untouched.
     var showZeroBalanceLedgers by remember { mutableStateOf(false) }
+    // CRUD fix - a single (possibly accidental) tap on a ledger row's delete icon previously
+    // called onDeleteLedger immediately, no confirmation at all - the same tap-through-a-shifting-
+    // list mistake that deleted a real ledger during on-device QA. Every other destructive delete
+    // in this app (Company, Voucher) already gates behind a confirmation dialog; this one didn't.
+    var ledgerPendingDelete by remember { mutableStateOf<Ledger?>(null) }
+
+    ledgerPendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { ledgerPendingDelete = null },
+            title = { Text("Delete '${target.name}'?") },
+            text = {
+                Text(
+                    "This is only allowed when the ledger has zero accounting entries - " +
+                        "historical accounting audit integrity is otherwise preserved automatically. " +
+                        "This cannot be undone."
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    onDeleteLedger?.invoke(target)
+                    ledgerPendingDelete = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { ledgerPendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     val statement = uiState.selectedLedgerStatement
 
@@ -134,6 +170,9 @@ fun ChartOfAccountsScreen(
             statement = statement,
             onBack = onBackFromStatement,
             onVoucherClick = onVoucherClick,
+            onPrint = onPrintLedgerStatement,
+            onShare = onShareLedgerStatement,
+            onRefresh = onRefreshLedgerStatement,
             modifier = modifier
         )
     } else {
@@ -273,7 +312,7 @@ fun ChartOfAccountsScreen(
                                         onClick = { onLedgerClick(ledger) },
                                         onEdit = onEditLedger?.let { edit -> { edit(ledger) } },
                                         onDelete = if (!ledger.isSystem && onDeleteLedger != null) {
-                                            { onDeleteLedger(ledger) }
+                                            { ledgerPendingDelete = ledger }
                                         } else null
                                     )
                                 }
@@ -609,6 +648,14 @@ fun LedgerRowCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // Reports feature - Opening Balance alongside Current Balance in the ledger list
+                // itself (previously only visible after drilling into the full Ledger Statement).
+                // Real, already-computed field on Ledger - never a new balance calculation.
+                Text(
+                    text = "Opening: ${ledger.openingBalance.formatPlain()} ${ledger.openingBalanceType.code}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -670,6 +717,17 @@ fun LedgerStatementDetailView(
     statement: LedgerStatementReport,
     onBack: () -> Unit,
     onVoucherClick: (String) -> Unit = {},
+    /** Print/Download fix - Ledger Statement previously had no Print/Share affordance at all.
+     * Both null by default so every existing caller keeps compiling unchanged; the real
+     * PDF/Activity-Context work happens at the call site (MainAppScreen), same as every other
+     * Print button in this app - this view only renders the icons when wired. */
+    onPrint: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
+    /** Refresh feature - re-fetches this same ledger's statement (real repository call, never a
+     * fabricated reload) so a user who suspects the view is stale has a direct way to force one,
+     * rather than navigating away and back. Null by default, same additive convention as
+     * onPrint/onShare. */
+    onRefresh: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -685,7 +743,7 @@ fun LedgerStatementDetailView(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Spacer(modifier = Modifier.width(6.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = statement.ledgerName,
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
@@ -695,6 +753,21 @@ fun LedgerStatementDetailView(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            if (onRefresh != null) {
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                }
+            }
+            if (onPrint != null) {
+                IconButton(onClick = onPrint) {
+                    Icon(Icons.Default.Print, contentDescription = "Print")
+                }
+            }
+            if (onShare != null) {
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, contentDescription = "Share")
+                }
             }
         }
 
@@ -730,6 +803,16 @@ fun LedgerStatementDetailView(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+
+        // Zoom feature - scales only the dense transaction-row text, same ZOOM_STEPS scale the
+        // GST tables/Trial Balance already use. Real reflow (font size, not a paint-only
+        // transform) - the LazyColumn below accommodates the resulting taller rows natively.
+        var zoomIndex by remember { mutableIntStateOf(1) }
+        val textScale = com.example.accounting.presentation.features.reports.ZOOM_STEPS[zoomIndex]
+        com.example.accounting.presentation.features.reports.ZoomControlRow(zoomIndex) { zoomIndex = it }
+        val rowPrimaryPaint = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
+        val rowSecondaryPaint = MaterialTheme.typography.labelSmall.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize * textScale)
+        val rowAmountPaint = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
 
         // Statement Table Header
         Row(
@@ -767,24 +850,23 @@ fun LedgerStatementDetailView(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1.2f)) {
-                            Text(row.voucherNumber, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
-                            Text("${row.date} • ${row.voucherType}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(row.voucherNumber, style = rowPrimaryPaint)
+                            Text("${row.date} • ${row.voucherType}", style = rowSecondaryPaint, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Text(
                             text = if (row.debitAmount.isPositive) row.debitAmount.formatPlain() else "--",
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            style = rowAmountPaint,
                             modifier = Modifier.weight(0.8f)
                         )
                         Text(
                             text = if (row.creditAmount.isPositive) row.creditAmount.formatPlain() else "--",
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            style = rowAmountPaint,
                             modifier = Modifier.weight(0.8f)
                         )
                         Text(
                             text = "${row.runningBalance.formatPlain()} ${row.balanceType.code}",
-                            style = MaterialTheme.typography.bodySmall.copy(
+                            style = rowAmountPaint.copy(
                                 fontWeight = FontWeight.SemiBold,
-                                fontFamily = FontFamily.Monospace,
                                 color = if (row.balanceType == DrCr.DEBIT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                             ),
                             modifier = Modifier.weight(1f)
