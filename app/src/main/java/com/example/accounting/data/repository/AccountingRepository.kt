@@ -853,11 +853,15 @@ class AccountingRepository(
             ?: return AccountingResult.Failure(AppError.ValidationError("Company not found"))
 
         // GST Settings refactor - "Registered requires and validates GSTIN": a company cannot be
-        // switched to (or left as) Registered without a real, well-formed GSTIN already on file.
-        // Checked against the GSTIN this update leaves in place (existing.gstin - this function has
-        // no GSTIN parameter of its own; that value only ever changes via updateCompany).
-        val willBeEnabled = gstEnabled ?: existing.gstEnabled
-        if (willBeEnabled && !com.example.accounting.domain.rendering.Gstin.isValid(existing.gstin)) {
+        // explicitly (re)marked Registered through THIS call without a real, well-formed GSTIN
+        // already on file. Checked only when this call's own gstEnabled argument is true - not
+        // existing.gstEnabled (D1a fix) - because every company defaults to gstEnabled = true with
+        // no GSTIN (Company.kt's own default), so gating on the pre-existing value blocked every
+        // other parameter on this function (accountingMode, businessType, gstOperatingMode,
+        // gstScheme, gstFilingFrequency, gstr1ReminderEnabled - five of the six call sites in
+        // AccountingViewModel never pass gstEnabled at all) for any such company, forever, with no
+        // way to fix it since none of those fields are the GSTIN itself.
+        if (gstEnabled == true && !com.example.accounting.domain.rendering.Gstin.isValid(existing.gstin)) {
             return AccountingResult.Failure(AppError.ValidationError("A valid GSTIN is required to mark this company as Registered. Update the company's GSTIN first."))
         }
 
