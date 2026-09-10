@@ -30,6 +30,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # debug.keystore is gitignored (app/build.gradle.kts' debugConfig expects it at repo root)
+      # - this is Android's standard debug keystore with fixed, non-secret credentials
+      # (androiddebugkey/android), the same one Android Studio auto-generates locally when missing.
+      - name: Generate debug keystore
+        run: |
+          keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey \
+            -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Unit tests + assembleDebug
         run: ./gradlew testDebugUnitTest assembleDebug --console=plain
 
