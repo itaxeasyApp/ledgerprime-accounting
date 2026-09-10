@@ -194,20 +194,70 @@ class SuspenseControlArchitectureTest {
         assertEquals("Suspense must not affect P&L net profit", 0L, pnl.netProfit.paise)
     }
 
+    /** JDK 21/Robolectric fix follow-up - this test's original single-method form set up its
+     * fixture via a raw `updateLedgerBalance` DAO column write, which [generateBalanceSheet]'s
+     * suspense figures never read (they're computed from real posted journal items via
+     * [com.example.accounting.domain.reports.GroupAggregationEngine], same as every other report -
+     * see test10's own real-voucher posting for the established pattern). That call was previously
+     * dead code (masked entirely by the pre-fix Robolectric class-level sandbox failure); now that
+     * it actually runs, split into two independent tests (fresh `db`/`repository` per [Before]) each
+     * posting one real, balanced Journal voucher to Suspense - avoids reasoning about a running net
+     * balance across two postings sharing one method, and keeps the original 450000/850000 amounts. */
     @Test
-    fun test11_BalanceSheetDynamicPresentation() = runBlocking {
+    fun test11a_BalanceSheetDynamicPresentation_SuspenseDebit() = runBlocking {
         val fyList = repository.getFinancialYears(companyA).first()
         val currentFY = fyList.first { it.isCurrent }
         val suspenseLedgerId = "${StandardSystemGroups.SUSPENSE_LEDGER_ID}_$companyA"
 
-        // Debit test
-        db.accountingDao().updateLedgerBalance(companyA, suspenseLedgerId, 450000L, DrCr.DEBIT)
+        val vchId = "VCH_BS_SUSPENSE_DEBIT"
+        db.accountingDao().insertVoucher(
+            VoucherEntity(
+                voucherId = vchId, companyId = companyA, financialYearId = currentFY.financialYearId,
+                voucherNumber = "JRN-BS-DR", voucherType = VoucherType.JOURNAL, date = "2026-04-15",
+                referenceNumber = "REF-BS-DR", narration = "Suspense debit for Balance Sheet test",
+                totalAmountPaise = 450000L, isPosted = true, isCancelled = false,
+                syncState = com.example.accounting.domain.accounting.SyncState.SYNCED,
+                createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(),
+                createdBy = "ADMIN", partyGstin = "", isGstApplicable = false
+            )
+        )
+        db.accountingDao().insertJournalItems(
+            listOf(
+                JournalItemEntity("ITEM_BS_DR_1", vchId, companyA, currentFY.financialYearId, suspenseLedgerId, DrCr.DEBIT, 450000L, "Suspense A/c", 1),
+                JournalItemEntity("ITEM_BS_DR_2", vchId, companyA, currentFY.financialYearId, "LED_CAPITAL_$companyA", DrCr.CREDIT, 450000L, "Capital A/c", 2)
+            )
+        )
+
         val bsDebit = repository.generateBalanceSheet(companyA, currentFY.financialYearId)
         assertEquals(450000L, bsDebit.suspenseDebit.paise)
         assertEquals(0L, bsDebit.suspenseCredit.paise)
+    }
 
-        // Credit test
-        db.accountingDao().updateLedgerBalance(companyA, suspenseLedgerId, 850000L, DrCr.CREDIT)
+    @Test
+    fun test11b_BalanceSheetDynamicPresentation_SuspenseCredit() = runBlocking {
+        val fyList = repository.getFinancialYears(companyA).first()
+        val currentFY = fyList.first { it.isCurrent }
+        val suspenseLedgerId = "${StandardSystemGroups.SUSPENSE_LEDGER_ID}_$companyA"
+
+        val vchId = "VCH_BS_SUSPENSE_CREDIT"
+        db.accountingDao().insertVoucher(
+            VoucherEntity(
+                voucherId = vchId, companyId = companyA, financialYearId = currentFY.financialYearId,
+                voucherNumber = "JRN-BS-CR", voucherType = VoucherType.JOURNAL, date = "2026-04-15",
+                referenceNumber = "REF-BS-CR", narration = "Suspense credit for Balance Sheet test",
+                totalAmountPaise = 850000L, isPosted = true, isCancelled = false,
+                syncState = com.example.accounting.domain.accounting.SyncState.SYNCED,
+                createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(),
+                createdBy = "ADMIN", partyGstin = "", isGstApplicable = false
+            )
+        )
+        db.accountingDao().insertJournalItems(
+            listOf(
+                JournalItemEntity("ITEM_BS_CR_1", vchId, companyA, currentFY.financialYearId, "LED_CAPITAL_$companyA", DrCr.DEBIT, 850000L, "Capital A/c", 1),
+                JournalItemEntity("ITEM_BS_CR_2", vchId, companyA, currentFY.financialYearId, suspenseLedgerId, DrCr.CREDIT, 850000L, "Suspense A/c", 2)
+            )
+        )
+
         val bsCredit = repository.generateBalanceSheet(companyA, currentFY.financialYearId)
         assertEquals(0L, bsCredit.suspenseDebit.paise)
         assertEquals(850000L, bsCredit.suspenseCredit.paise)

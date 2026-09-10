@@ -18,11 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # JDK 21, not 17: Robolectric's SDK 36 shadow requires it ("Failed to create a Robolectric
+      # sandbox: Android SDK 36 requires Java 21") - this was the actual root cause of the
+      # ExampleRobolectricTest/GreetingScreenshotTest/Phase7FRecurringVoucherPostingTest/
+      # Phase7JBVoucherPostingTest/SuspenseControlArchitectureTest classMethod failures, not a real
+      # test defect. AGP 9.1.1/compileOptions still target Java 11 bytecode regardless - this only
+      # changes which JDK runs the Gradle/test JVM itself.
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3

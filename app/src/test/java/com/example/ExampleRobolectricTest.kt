@@ -49,7 +49,7 @@ class ExampleRobolectricTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repository = AccountingRepository(db.accountingDao())
+        repository = AccountingRepository(db.accountingDao(), db)
     }
 
     @After

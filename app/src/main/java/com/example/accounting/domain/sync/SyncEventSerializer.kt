@@ -24,7 +24,12 @@ fun VoucherType.toPostOperation(): SyncOperation = when (this) {
  * and the wire format the server eventually deserializes agree byte-for-byte. */
 object SyncEventSerializer {
     private val moshi: Moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
-    private val adapter = moshi.adapter(SyncEvent::class.java)
+    // .serializeNulls() - same rationale as GstrJsonSerializer/ExportJsonSerializer: a
+    // GST-only posting's `voucher = null` (also `ledger`/`party`/`invoice`/`tradeDocument`) must
+    // appear on the wire as an explicit null, never silently omitted - the class doc comment above
+    // requires this payload to agree with the server's expected wire format byte-for-byte, and a
+    // server reading a missing key can't distinguish "explicitly absent" from "field not sent."
+    private val adapter = moshi.adapter(SyncEvent::class.java).serializeNulls()
 
     fun toJson(event: SyncEvent): String = adapter.toJson(event)
 }
