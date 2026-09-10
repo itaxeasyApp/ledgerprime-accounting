@@ -87,7 +87,10 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.material3.windowsizeclass)
+  // implementation(libs.androidx.compose.material3.windowsizeclass) - was only used to switch
+  // MainAppScreen's bottom nav to a NavigationRail on tablet width; removed per explicit product
+  // decision (docs/58_SINGLE_NAVIGATION_LAYOUT.md) to use one consistent bottom-bar layout on
+  // every screen size.
   implementation(libs.androidx.security.crypto)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
@@ -122,6 +125,10 @@ dependencies {
   implementation(libs.retrofit)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.zxing.core)
+  // OCR (Document/Image Scan feature) - Play Services-backed on-device text recognition, no
+  // Firebase project/API key/billing needed (unlike Firebase AI/Gemini, which does) - see
+  // data/ocr/MlKitOcrAdapter.kt.
+  implementation(libs.mlkit.text.recognition)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

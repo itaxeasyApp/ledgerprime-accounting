@@ -4,32 +4,25 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,28 +35,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.Voucher
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.dataimport.ImportFileFormat
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyRole
 import androidx.activity.compose.BackHandler
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import com.example.accounting.presentation.navigation.AdaptiveNavigationType
 import com.example.accounting.presentation.navigation.AppRoute
-import com.example.accounting.presentation.navigation.getAdaptiveNavigationType
-import com.example.accounting.presentation.theme.Breakpoints
 import com.example.accounting.presentation.components.AppDivider
 import com.example.accounting.presentation.components.AppTopBar
 import com.example.accounting.presentation.components.CreateBankUpiProfileDialog
@@ -73,15 +59,24 @@ import com.example.accounting.presentation.components.CreateLedgerDialog
 import com.example.accounting.presentation.components.CreatePartyDialog
 import com.example.accounting.presentation.components.CreateStockItemDialog
 import com.example.accounting.presentation.components.CreateVoucherDialog
+import com.example.accounting.presentation.components.OcrReviewDialog
 import com.example.accounting.presentation.components.VoucherDetailDialog
 import com.example.accounting.presentation.features.dashboard.DashboardScreen
 import com.example.accounting.presentation.features.datatools.DataToolsScreen
 import com.example.accounting.presentation.features.daybook.DayBookScreen
+import com.example.accounting.presentation.features.invoice.InvoicePreviewScreen
+import com.example.accounting.presentation.features.invoice.QuickInvoiceEntryScreen
 import com.example.accounting.presentation.features.ledgers.ChartOfAccountsScreen
+import com.example.accounting.presentation.features.legal.AboutScreen
+import com.example.accounting.presentation.features.legal.PrivacyPolicyScreen
+import com.example.accounting.presentation.features.legal.SupportScreen
+import com.example.accounting.presentation.features.legal.TermsAndConditionsScreen
 import com.example.accounting.presentation.features.money.MoneyTabContent
 import com.example.accounting.presentation.features.party.PartiesScreen
 import com.example.accounting.presentation.features.profile.ProfileScreen
+import com.example.accounting.presentation.features.profile.ProfileWizardScreen
 import com.example.accounting.presentation.features.purchases.PurchasesScreen
+import com.example.accounting.presentation.features.reports.GstReturnDashboardView
 import com.example.accounting.presentation.features.reports.ReportsCenterScreen
 import com.example.accounting.presentation.features.sales.SalesScreen
 import com.example.accounting.presentation.features.search.SearchScreen
@@ -102,11 +97,11 @@ data class NavItem(
     val tag: String
 )
 
-/** Bug #3 fix - which form a pending QR/Barcode scan result should be routed into once the photo
- * picker returns. Purely a presentation-layer routing concern (never touches domain/frozen
- * engines): [ItemLookup] keeps the pre-existing standalone Items-tab behavior (a result dialog);
- * [PurchaseVoucher]/[ReceivePayment] instead feed the scan result into the already-open form as a
- * prefill, never a second scan/decode mechanism. */
+/** Bug #3 fix - which open form a pending QR/Barcode scan result should be routed into once the
+ * photo picker returns. Purely a presentation-layer routing concern (never touches domain/frozen
+ * engines): [BarcodeScanTarget.ItemLookup] keeps the pre-existing standalone Items-tab behavior (a
+ * result dialog); [BarcodeScanTarget.PurchaseVoucher] instead feeds the scan result into the
+ * already-open form as a prefill, never a second scan/decode mechanism. */
 private enum class BarcodeScanTarget { ItemLookup, PurchaseVoucher }
 
 /** Audit fix (Company/Profile/Ledger Setup) - reuse the Company's own already-entered
@@ -140,7 +135,6 @@ private fun businessProfileSeed(uiState: com.example.accounting.presentation.vie
  */
 @Composable
 fun MainAppScreen(
-    widthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
     viewModel: AccountingViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -178,10 +172,8 @@ fun MainAppScreen(
     var isCreateGroupOpen by remember { mutableStateOf(false) }
     var isCreateStockItemOpen by remember { mutableStateOf(false) }
     var isCreateCompanyOpen by remember { mutableStateOf(false) }
-    // Edit-Company fix - non-null switches CreateCompanyDialog into edit mode for this company,
-    // same isCreateCompanyOpen dialog instance as "+ Add Company" (see editingLedger above).
-    var editingCompany by remember { mutableStateOf<com.example.accounting.domain.company.Company?>(null) }
     var selectedVoucherDetail by remember { mutableStateOf<Voucher?>(null) }
+    var showInvoicePreview by remember { mutableStateOf(false) }
     var createPartyRole by remember { mutableStateOf<PartyRole?>(null) }
     var isCreateBankUpiOpen by remember { mutableStateOf(false) }
     var pendingImportFormat by remember { mutableStateOf(ImportFileFormat.CSV) }
@@ -218,14 +210,26 @@ fun MainAppScreen(
         }
     }
 
-    // Android Photo Picker for OCR receipt scans - no runtime permission required.
-    val receiptPhotoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    // Android Photo Picker for the Document/Image Scan feature - no runtime permission required.
+    // pendingScanDocumentType carries the type the user picked in one of the contextual
+    // ScanTypePickerDialogs (Sales/Purchases/Profile/Money - docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md)
+    // through to the moment a photo actually comes back, since the launcher's own callback can't
+    // take extra parameters.
+    var pendingScanDocumentType by remember { mutableStateOf(OcrDocumentType.UNKNOWN) }
+    val documentPhotoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             coroutineScope.launch {
-                val file = copyUriToCacheFile(context, uri, "receipt_${System.currentTimeMillis()}.jpg")
-                if (file != null) viewModel.scanReceiptForVoucherDraft(file)
+                val file = copyUriToCacheFile(context, uri, "scan_${System.currentTimeMillis()}.jpg")
+                if (file != null) viewModel.scanDocument(file, pendingScanDocumentType)
             }
         }
+    }
+    // Shared trigger every contextual scan entry point (Sales/Purchases/Profile/Money -
+    // docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) calls with its own already-
+    // known [OcrDocumentType] - avoids repeating the same two-line launch at each call site.
+    val launchDocumentScan: (OcrDocumentType) -> Unit = { type ->
+        pendingScanDocumentType = type
+        documentPhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
 
     // Phase 7J UI fix: Android Photo Picker for barcode/QR scans - `scanBarcodeImage` already
@@ -238,6 +242,36 @@ fun MainAppScreen(
                 if (file != null) viewModel.scanBarcodeImage(file)
             }
         }
+    }
+
+    // Contacts + Favorites correction (docs/CORRECTIONS_LOG.md) - "Import from Contacts" on Add
+    // Customer/Supplier. Unlike the Photo Picker above, there is NO permission-free equivalent for
+    // reading a picked contact's phone number (docs/52_MANAGEMENT_ARCHITECTURE.md's own prior
+    // research) - READ_CONTACTS is a real, user-accepted Play Console Restricted Permission here.
+    // pendingContactImport carries the resolved (name, phone) into CreatePartyDialog the same way
+    // pendingScanDocumentType carries the OCR hint above - the launcher callback can't return
+    // values directly into a Composable's own state.
+    var pendingContactImport by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showContactsPermissionRationale by remember { mutableStateOf(false) }
+    val contactPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri ->
+        if (uri != null) {
+            val resolved = resolveContactNameAndPhone(context, uri)
+            if (resolved != null) {
+                pendingContactImport = resolved
+            } else {
+                coroutineScope.launch { snackbarHostState.showSnackbar("Could not read that contact's details") }
+            }
+        }
+    }
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) contactPickerLauncher.launch(null)
+        else coroutineScope.launch { snackbarHostState.showSnackbar("Contacts permission is needed to import a contact") }
+    }
+    val onRequestContactImport: () -> Unit = {
+        val alreadyGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.READ_CONTACTS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (alreadyGranted) contactPickerLauncher.launch(null) else showContactsPermissionRationale = true
     }
 
     // Profile Wizard branding (Part 2) - same Photo Picker + cache-file pattern as the receipt/
@@ -282,17 +316,15 @@ fun MainAppScreen(
         NavItem(NavigationTab.REPORTS, AppRoute.Reports, "Reports", Icons.Default.Assessment, "nav_reports")
     )
 
-    // Product decision - a company-less user must still see the Dashboard and every bottom-nav
-    // function, not a forced "create a company first" gate. This is safe because the app was
-    // already built for it: AppTopBar already renders "Select Company" / "GSTIN: --" plus a
-    // "+ Add New Company" entry (wired to the same isCreateCompanyOpen/CreateCompanyDialog used
-    // everywhere else) when currentCompany is null, uiState's lists (vouchers/parties/ledgers/...)
-    // simply stay empty since nothing was ever loaded for a null company, and every single
-    // AccountingViewModel action already guards on `_uiState.value.currentCompany ?: return` -
-    // none of them can crash on a null company, they just no-op or show "Select a company first."
-    val adaptiveNavType = getAdaptiveNavigationType(widthSizeClass)
-    val useRail = adaptiveNavType == AdaptiveNavigationType.NAVIGATION_RAIL || adaptiveNavType == AdaptiveNavigationType.PERMANENT_NAVIGATION_DRAWER
-
+    // Product decision - single-business app: a business-less user must still see the Dashboard
+    // and every bottom-nav function, not a forced "set up your business first" gate. AppTopBar
+    // renders "My Business" / "GSTIN: --" as a static header (no switcher - there is only ever
+    // one business); "Set Up My Business" lives in Profile > Company & Sync, reached via the
+    // profile icon, the same isCreateCompanyOpen/CreateCompanyDialog every edit already uses.
+    // uiState's lists (vouchers/parties/ledgers/...) simply stay empty since nothing was ever
+    // loaded for a null company, and every single AccountingViewModel action already guards on
+    // `_uiState.value.currentCompany ?: return` - none of them can crash on a null company, they
+    // just no-op or show "Select a company first."
     // Play Store readiness pass - Legal + Support drawer, additive over the existing bottom-nav/
     // rail navigation (never replaces it, per the chosen "Legal + support only" scope).
     val drawerState = androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
@@ -301,96 +333,107 @@ fun MainAppScreen(
         drawerContent = {
             com.example.accounting.presentation.components.AppDrawerContent(
                 currentCompany = uiState.currentCompany,
+                businessProfile = uiState.businessProfile,
                 currentRoute = uiState.currentRoute,
                 onNavigate = { route ->
                     viewModel.navigateTo(route)
                     coroutineScope.launch { drawerState.close() }
-                }
+                },
+                onOpenPlayStore = {
+                    val packageName = context.packageName
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=$packageName")))
+                    } catch (e: android.content.ActivityNotFoundException) {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=$packageName")))
+                    }
+                },
+                isCloudSyncLoggedIn = uiState.isCloudSyncLoggedIn,
+                onLogout = { viewModel.logoutCloudSync() }
             )
         }
     ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isExpanded = useRail || maxWidth >= Breakpoints.tablet
-
         Scaffold(
             topBar = {
                 AppTopBar(
-                    currentCompany = uiState.currentCompany,
-                    companies = uiState.companies,
                     currentFinancialYear = uiState.currentFinancialYear,
                     financialYears = uiState.financialYears,
-                    onCompanySelected = { viewModel.switchCompany(it) },
                     onFinancialYearSelected = { viewModel.switchFinancialYear(it) },
                     onAddPreviousFinancialYear = { viewModel.addPreviousFinancialYear() },
-                    onNewCompanyClicked = { isCreateCompanyOpen = true },
                     onSearchClicked = { viewModel.navigateTo(AppRoute.Search()) },
                     onProfileClicked = { viewModel.navigateTo(AppRoute.Profile) },
                     onMenuClicked = { coroutineScope.launch { drawerState.open() } },
                     canGoBack = canGoBack,
-                    onBack = { viewModel.navigateBack() }
+                    onBack = { viewModel.navigateBack() },
+                    showSearchBar = uiState.currentRoute !is AppRoute.Search
                 )
             },
             bottomBar = {
-                if (!isExpanded) {
-                    Column {
-                        // NavigationBar reserves its own bottom system-nav-bar inset (correct,
-                        // needed on gesture-nav devices) - on a 3-button-nav device that reserved
-                        // strip has no visual boundary from the tappable row above it, so the whole
-                        // bottom area reads as one abnormally tall block ("bottom bar too high").
-                        // This divider marks where the actual nav bar ends.
-                        AppDivider()
-                        if (uiState.currentRoute is AppRoute.GstDashboard) {
-                            // The GST Dashboard's own bottom nav (matches the reference image),
-                            // swapped in for the main app's Home/Sales/Purchase/Money/Reports bar
-                            // only while this route is active - see AppRoute.GstDashboard's KDoc.
-                            NavigationBar {
+                // Product decision: this is a mobile app, and it uses the SAME bottom navigation
+                // bar on every device/screen size - phone or tablet - never a NavigationRail. A
+                // width-based rail switch was tried and explicitly rejected by the user (it read
+                // as "the bottom bar moved to the side" on a tablet, not as good tablet support).
+                Column {
+                    // NavigationBar reserves its own bottom system-nav-bar inset (correct,
+                    // needed on gesture-nav devices) - on a 3-button-nav device that reserved
+                    // strip has no visual boundary from the tappable row above it, so the whole
+                    // bottom area reads as one abnormally tall block ("bottom bar too high").
+                    // This divider marks where the actual nav bar ends.
+                    AppDivider()
+                    if (uiState.currentRoute is AppRoute.GstDashboard) {
+                        // The GST Dashboard's own bottom nav (matches the reference image),
+                        // swapped in for the main app's Home/Sales/Purchase/Money/Reports bar
+                        // only while this route is active - see AppRoute.GstDashboard's KDoc.
+                        NavigationBar {
+                            NavigationBarItem(
+                                selected = uiState.gstActiveBottomTab == "Dashboard",
+                                onClick = { viewModel.requestGstBottomNav("Dashboard") },
+                                icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
+                                label = { Text("Dashboard", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                            )
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { viewModel.viewReport("Sales Register") },
+                                icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Invoices") },
+                                label = { Text("Invoices", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                            )
+                            NavigationBarItem(
+                                selected = uiState.gstActiveBottomTab == "Returns",
+                                onClick = { viewModel.requestGstBottomNav("Returns") },
+                                icon = { Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = "Returns") },
+                                label = { Text("Returns", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                            )
+                            NavigationBarItem(
+                                selected = false,
+                                onClick = { viewModel.navigateTo(AppRoute.Reports) },
+                                icon = { Icon(Icons.Default.Assessment, contentDescription = "Reports") },
+                                label = { Text("Reports", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                            )
+                            NavigationBarItem(
+                                selected = uiState.gstActiveBottomTab == "More",
+                                onClick = { viewModel.requestGstBottomNav("More") },
+                                icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
+                                label = { Text("More", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                            )
+                        }
+                    } else {
+                        NavigationBar {
+                            navItems.forEach { item ->
                                 NavigationBarItem(
-                                    selected = uiState.gstActiveBottomTab == "Dashboard",
-                                    onClick = { viewModel.requestGstBottomNav("Dashboard") },
-                                    icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
-                                    label = { Text("Dashboard", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                    selected = uiState.selectedTab == item.tab,
+                                    onClick = { viewModel.selectTab(item.tab) },
+                                    icon = { Icon(item.icon, contentDescription = item.label) },
+                                    label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
+                                    modifier = Modifier.testTag(item.tag)
                                 )
-                                NavigationBarItem(
-                                    selected = false,
-                                    onClick = { viewModel.viewReport("Sales Register") },
-                                    icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Invoices") },
-                                    label = { Text("Invoices", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                                )
-                                NavigationBarItem(
-                                    selected = uiState.gstActiveBottomTab == "Returns",
-                                    onClick = { viewModel.requestGstBottomNav("Returns") },
-                                    icon = { Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = "Returns") },
-                                    label = { Text("Returns", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                                )
-                                NavigationBarItem(
-                                    selected = false,
-                                    onClick = { viewModel.navigateTo(AppRoute.Reports) },
-                                    icon = { Icon(Icons.Default.Assessment, contentDescription = "Reports") },
-                                    label = { Text("Reports", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                                )
-                                NavigationBarItem(
-                                    selected = uiState.gstActiveBottomTab == "More",
-                                    onClick = { viewModel.requestGstBottomNav("More") },
-                                    icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
-                                    label = { Text("More", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                                )
-                            }
-                        } else {
-                            NavigationBar {
-                                navItems.forEach { item ->
-                                    NavigationBarItem(
-                                        selected = uiState.selectedTab == item.tab,
-                                        onClick = { viewModel.selectTab(item.tab) },
-                                        icon = { Icon(item.icon, contentDescription = item.label) },
-                                        label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
-                                        modifier = Modifier.testTag(item.tag)
-                                    )
-                                }
                             }
                         }
                     }
                 }
             },
+            // The generic center-bottom-bar scan FAB was retired entirely
+            // (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) - every scan type
+            // now has a contextual entry point on the screen it belongs to (Sales/Purchases/
+            // Profile/Money), so there is nothing left for a generic popup to offer.
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { paddingValues ->
             Row(
@@ -398,20 +441,6 @@ fun MainAppScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
             ) {
-                if (isExpanded) {
-                    NavigationRail(modifier = Modifier.fillMaxHeight()) {
-                        navItems.forEach { item ->
-                            NavigationRailItem(
-                                selected = uiState.selectedTab == item.tab,
-                                onClick = { viewModel.selectTab(item.tab) },
-                                icon = { Icon(item.icon, contentDescription = item.label) },
-                                label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
-                                modifier = Modifier.testTag(item.tag)
-                            )
-                        }
-                    }
-                }
-
                 // Hoisted above the route `when` (Phase 8A, Part 2) - the exact same callbacks the
                 // GST Dashboard needs whether it's reached through Reports Center (legacy path,
                 // still reachable via Reports -> GST -> GST Return Dashboard) or its own dedicated
@@ -499,26 +528,20 @@ fun MainAppScreen(
                     getProviderUsername = { viewModel.getGstProviderUsername() },
                     onOpenSalesRegister = { viewModel.viewReport("Sales Register") },
                     onOpenLedgers = { viewModel.navigateTo(AppRoute.ChartOfAccounts) },
-                    // Fix Now (reference image) - opens the real voucher in the existing
-                    // read-only detail dialog, same mechanism onVoucherClick already uses
-                    // elsewhere. Never a new direct-edit-posted-voucher path (see this param's
-                    // own KDoc on GstReturnDashboardView for why).
                     onFixNow = { voucherId ->
                         uiState.vouchers.find { it.voucherId == voucherId }?.let { selectedVoucherDetail = it }
-                    },
-                    onMarkProcessingManually = { viewModel.markSelectedGstReturnProcessingManually() },
-                    onNavigateToProfile = { viewModel.navigateTo(AppRoute.Profile) },
-                    onNavigateToSettings = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
-                    onNavigateToSupport = { viewModel.navigateTo(AppRoute.Support) },
-                    onLogoutCloudSync = { viewModel.logoutCloudSync() },
-                    onActiveBottomTabChanged = { viewModel.setGstActiveBottomTab(it) }
+                    }
                 )
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (val route = uiState.currentRoute) {
                         is AppRoute.Dashboard -> DashboardScreen(
                             uiState = uiState,
-                            onOpenCreateVoucher = { type -> createVoucherType = type; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
+                            onOpenCreateVoucher = { type ->
+                                createVoucherType = type
+                                isCreateVoucherTypeLocked = false
+                                isCreateVoucherOpen = true
+                            },
                             onVoucherClick = { selectedVoucherDetail = it },
                             onViewAllDayBook = { viewModel.navigateTo(AppRoute.DayBook) },
                             onViewReceivables = { viewModel.viewReport("Outstanding Receivables") },
@@ -526,10 +549,13 @@ fun MainAppScreen(
                             onViewProfitLoss = { viewModel.viewReport("Profit & Loss") },
                             onViewGstSummary = { viewModel.viewReport("GST Summary") },
                             onViewGstDashboard = { viewModel.navigateTo(AppRoute.GstDashboard) },
-                            onOpenCash = { viewModel.viewMoney("Cash") },
-                            onOpenBank = { viewModel.viewMoney("Bank") },
-                            onOpenSales = { viewModel.selectTab(NavigationTab.SALES) },
-                            onOpenPurchases = { viewModel.selectTab(NavigationTab.PURCHASES) },
+                            onViewTrialBalance = { viewModel.viewReport("Trial Balance") },
+                            onViewBalanceSheet = { viewModel.viewReport("Balance Sheet") },
+                            onViewCashFlow = { viewModel.viewReport("Cash Flow") },
+                            onOpenCash = { viewModel.navigateTo(AppRoute.Money) },
+                            onOpenBank = { viewModel.navigateTo(AppRoute.Money) },
+                            onOpenSales = { viewModel.navigateTo(AppRoute.Sales) },
+                            onOpenPurchases = { viewModel.navigateTo(AppRoute.Purchases) },
                             onAddCustomer = { createPartyRole = PartyRole.CUSTOMER },
                             onAddSupplier = { createPartyRole = PartyRole.SUPPLIER },
                             onAddItem = { isCreateStockItemOpen = true }
@@ -538,21 +564,22 @@ fun MainAppScreen(
                         is AppRoute.DayBook -> DayBookScreen(
                             uiState = uiState,
                             onVoucherClick = { selectedVoucherDetail = it },
-                            onOpenCreateVoucher = { type -> createVoucherType = type; isCreateVoucherTypeLocked = false; isCreateVoucherOpen = true },
+                            onOpenCreateVoucher = { type ->
+                                createVoucherType = type
+                                isCreateVoucherTypeLocked = false
+                                isCreateVoucherOpen = true
+                            },
                             onFilterTypeSelected = { viewModel.setVoucherTypeFilter(it) },
                             onSearchQueryChanged = { viewModel.setSearchQuery(it) },
                             onPrint = {
-                                // Print & Download crash fix - same Activity-Context requirement
-                                // as every other Print call site here; renderDayBookPdf is a
-                                // suspend fetch (real repository call), so this needs the
-                                // Composable's own coroutineScope, not a bare synchronous call.
                                 coroutineScope.launch {
                                     val file = viewModel.renderDayBookPdf()
                                     if (file != null) {
                                         try {
                                             com.example.accounting.data.rendering.PrintAdapter.print(context, file, "Day Book")
                                         } catch (e: Exception) {
-                                            viewModel.showMessage("Could not print Day Book: ${e.message ?: "no print service available"}")
+                                            // No print service configured - same silent no-op every
+                                            // other export/share callback here already uses.
                                         }
                                     }
                                 }
@@ -561,51 +588,31 @@ fun MainAppScreen(
 
                         is AppRoute.ChartOfAccounts, is AppRoute.LedgerStatement -> ChartOfAccountsScreen(
                             uiState = uiState,
-                            onLedgerClick = { ledger -> viewModel.loadLedgerStatement(ledger) },
+                            onLedgerClick = { viewModel.loadLedgerStatement(it) },
                             onBackFromStatement = { viewModel.clearLedgerStatement() },
-                            onOpenCreateLedger = { isCreateLedgerOpen = true },
+                            onOpenCreateLedger = { editingLedger = null; quickAddLedgerGroupId = null; isCreateLedgerOpen = true },
                             onOpenCreateStockItem = { isCreateStockItemOpen = true },
-                            onDeleteLedger = { ledger -> viewModel.deleteLedgerSafely(ledger.ledgerId) },
-                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true },
+                            onDeleteLedger = { viewModel.deleteLedgerSafely(it.ledgerId) },
+                            onEditLedger = { editingLedger = it; isCreateLedgerOpen = true },
                             onOpenCreateGroup = { isCreateGroupOpen = true },
                             showItemsTab = isInventoryEnabled(uiState),
-                            onGenerateBarcode = { itemId -> viewModel.generateBarcodeForItem(itemId) },
-                            onScanBarcode = {
-                                barcodeScanTarget = BarcodeScanTarget.ItemLookup
-                                barcodePhotoPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
+                            onGenerateBarcode = { viewModel.generateBarcodeForItem(it) },
+                            onScanBarcode = { barcodeScanTarget = BarcodeScanTarget.ItemLookup; barcodePhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onOpenAccountingSetup = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
-                            onVoucherClick = { voucherId ->
-                                uiState.vouchers.find { it.voucherId == voucherId }?.let { selectedVoucherDetail = it }
-                            },
+                            onVoucherClick = { voucherId -> uiState.vouchers.find { it.voucherId == voucherId }?.let { selectedVoucherDetail = it } },
                             onPrintLedgerStatement = {
-                                // Print & Download crash fix - Ledger Statement had no Print path
-                                // at all before this; same real-Activity-Context requirement as
-                                // every other Print call site here.
                                 val file = viewModel.renderLedgerStatementPdf()
-                                if (file == null) {
-                                    viewModel.showMessage("No ledger statement is open.")
-                                } else {
+                                if (file != null) {
                                     try {
                                         com.example.accounting.data.rendering.PrintAdapter.print(context, file, "Ledger Statement")
                                     } catch (e: Exception) {
-                                        viewModel.showMessage("Could not print ledger statement: ${e.message ?: "no print service available"}")
+                                        // No print service configured.
                                     }
                                 }
                             },
                             onShareLedgerStatement = {
                                 val intent = viewModel.shareLedgerStatementPdf()
-                                if (intent == null) {
-                                    viewModel.showMessage("No ledger statement is open.")
-                                } else {
-                                    try {
-                                        context.startActivity(Intent.createChooser(intent, "Share Ledger Statement"))
-                                    } catch (e: Exception) {
-                                        viewModel.showMessage("Could not share ledger statement: no app available.")
-                                    }
-                                }
+                                if (intent != null) context.startActivity(Intent.createChooser(intent, "Share Ledger Statement"))
                             },
                             onRefreshLedgerStatement = { viewModel.refreshLedgerStatement() }
                         )
@@ -614,69 +621,39 @@ fun MainAppScreen(
                             uiState = uiState,
                             onOpenDayBook = { viewModel.navigateTo(AppRoute.DayBook) },
                             onOpenAllLedgers = { viewModel.navigateTo(AppRoute.ChartOfAccounts) },
-                            deepLinkReportKey = uiState.reportsDeepLink,
-                            onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() },
                             onExportReport = { reportKey ->
                                 coroutineScope.launch {
-                                    // Print & Download crash fix - exportReportAndShare already
-                                    // emits its own message on export failure (null); the crash
-                                    // risk this closes is startActivity itself throwing
-                                    // ActivityNotFoundException when nothing on-device can handle
-                                    // a raw (non-chooser) ACTION_SEND for this mime type.
                                     val intent = viewModel.exportReportAndShare(reportKey)
-                                    if (intent != null) {
-                                        try {
-                                            context.startActivity(Intent.createChooser(intent, "Share $reportKey export"))
-                                        } catch (e: Exception) {
-                                            viewModel.showMessage("Could not share $reportKey export: no app available.")
-                                        }
-                                    }
+                                    if (intent != null) context.startActivity(intent)
                                 }
                             },
                             onShareReport = { reportKey ->
                                 val text = viewModel.buildReportShareText(reportKey)
-                                if (text == null) {
-                                    viewModel.showMessage("$reportKey is not loaded yet.")
-                                } else {
+                                if (text != null) {
                                     val sendIntent = Intent(Intent.ACTION_SEND).apply {
                                         type = "text/plain"
                                         putExtra(Intent.EXTRA_TEXT, text)
                                     }
-                                    try {
-                                        context.startActivity(Intent.createChooser(sendIntent, "Share report"))
-                                    } catch (e: Exception) {
-                                        viewModel.showMessage("Could not share $reportKey: no app available.")
-                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Share $reportKey"))
                                 }
                             },
                             onPrintReport = { reportKey ->
-                                // Print & Download crash fix - PrintManager requires a real
-                                // Activity Context (throws otherwise); `context` here is this
-                                // Composable's own LocalContext, never the ViewModel's
-                                // Application-only getApplication(). renderReportPdf already
-                                // renders a valid PDF for an empty (zero-row) report - null only
-                                // means the report genuinely hasn't loaded yet.
                                 val file = viewModel.renderReportPdf(reportKey)
-                                if (file == null) {
-                                    viewModel.showMessage("$reportKey is not loaded yet.")
-                                } else {
+                                if (file != null) {
                                     try {
                                         com.example.accounting.data.rendering.PrintAdapter.print(context, file, reportKey)
                                     } catch (e: Exception) {
-                                        viewModel.showMessage("Could not print $reportKey: ${e.message ?: "no print service available"}")
+                                        // No print service configured.
                                     }
                                 }
                             },
                             onRefreshReport = { viewModel.refreshFinancialReports() },
-                            gstReturnActions = gstReturnActions
+                            gstReturnActions = gstReturnActions,
+                            deepLinkReportKey = uiState.reportsDeepLink,
+                            onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() }
                         )
 
-                        // Dedicated top-level route (see AppRoute.GstDashboard's own KDoc) - calls
-                        // GstReturnDashboardView directly, with only its own step header, instead
-                        // of Reports Center's category header plus GstCategory's own BackRow both
-                        // stacking on top of it (the "three headers eat the screen" problem on a
-                        // phone-sized display). Also wires the GST-specific bottom nav below.
-                        is AppRoute.GstDashboard -> com.example.accounting.presentation.features.reports.GstReturnDashboardView(
+                        is AppRoute.GstDashboard -> GstReturnDashboardView(
                             uiState = uiState,
                             onSelectPeriod = gstReturnActions.onSelectPeriod,
                             onOpenReturn = gstReturnActions.onOpenReturn,
@@ -706,80 +683,109 @@ fun MainAppScreen(
                             getProviderUsername = gstReturnActions.getProviderUsername,
                             onOpenSalesRegister = gstReturnActions.onOpenSalesRegister,
                             onOpenLedgers = gstReturnActions.onOpenLedgers,
-                            gstBottomNavRequest = uiState.gstBottomNavRequest,
-                            onConsumeGstBottomNavRequest = { viewModel.consumeGstBottomNavRequest() },
+                            gstBottomNavRequest = uiState.gstActiveBottomTab,
+                            onConsumeGstBottomNavRequest = {},
                             onFixNow = gstReturnActions.onFixNow,
-                            onMarkProcessingManually = gstReturnActions.onMarkProcessingManually,
-                            onNavigateToProfile = gstReturnActions.onNavigateToProfile,
-                            onNavigateToSettings = gstReturnActions.onNavigateToSettings,
-                            onNavigateToSupport = gstReturnActions.onNavigateToSupport,
-                            onLogoutCloudSync = gstReturnActions.onLogoutCloudSync,
-                            onActiveBottomTabChanged = gstReturnActions.onActiveBottomTabChanged
+                            onMarkProcessingManually = { viewModel.markSelectedGstReturnProcessingManually() },
+                            onNavigateToProfile = { viewModel.navigateTo(AppRoute.Profile) },
+                            onNavigateToSettings = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
+                            onNavigateToSupport = { viewModel.navigateTo(AppRoute.Support) },
+                            onLogoutCloudSync = { viewModel.logoutCloudSync() },
+                            onActiveBottomTabChanged = { viewModel.requestGstBottomNav(it) }
                         )
 
                         is AppRoute.SettingsAndSync -> SettingsAndSyncScreen(
                             uiState = uiState,
-                            onCompanySwitch = { viewModel.switchCompany(it) },
                             onOpenCreateCompany = { isCreateCompanyOpen = true },
-                            onEditCompany = { company -> editingCompany = company; isCreateCompanyOpen = true },
-                            onDeleteCompany = { company -> viewModel.deleteCompany(company.companyId) },
+                            onSaveCompany = { company ->
+                                viewModel.updateCompany(
+                                    company.companyId, company.name, company.tradeName, company.gstin, company.pan,
+                                    company.stateCode, company.address, company.email, company.phone, company.pinCode
+                                )
+                            },
+                            onDeleteCompany = { viewModel.deleteCompany(it.companyId) },
                             onTogglePeriodLock = { viewModel.togglePeriodLock(it) },
+                            onAddPreviousFinancialYear = { viewModel.addPreviousFinancialYear() },
                             onTriggerSync = { viewModel.triggerSync() },
-                            onUpdateAccountingConfiguration = { mode, businessType -> viewModel.updateAccountingConfiguration(mode, businessType) },
+                            onUpdateAccountingConfiguration = { mode, type -> viewModel.updateAccountingConfiguration(mode, type) },
                             isCloudSyncLoggedIn = uiState.isCloudSyncLoggedIn,
                             onCloudSyncLogin = { email, password -> viewModel.loginCloudSync(email, password) },
                             onCloudSyncLogout = { viewModel.logoutCloudSync() }
                         )
 
                         is AppRoute.Sales -> SalesScreen(
-                            vouchers = uiState.vouchers,
-                            parties = uiState.parties,
+                            vouchers = uiState.vouchers.filter { it.voucherType == VoucherType.SALES || it.voucherType == VoucherType.CREDIT_NOTE },
+                            parties = uiState.parties.filter { it.role == PartyRole.CUSTOMER },
                             ledgers = uiState.ledgers,
-                            salesRevenue = uiState.profitAndLoss?.salesRevenue ?: com.example.accounting.core.common.Money.ZERO,
-                            receivables = uiState.receivablesReport?.totalOutstanding ?: (uiState.balanceSheet?.sundryDebtors ?: com.example.accounting.core.common.Money.ZERO),
+                            salesRevenue = uiState.vouchers.filter { it.voucherType == VoucherType.SALES && !it.isCancelled }
+                                .fold(com.example.accounting.core.common.Money.ZERO) { acc, v -> acc + v.totalDebits },
+                            receivables = uiState.outstandingByVoucherId.values.fold(0L) { acc, v -> acc + v }
+                                .let { com.example.accounting.core.common.Money.fromPaise(it) },
                             onNewSale = { createVoucherType = VoucherType.SALES; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onNewCreditNote = { createVoucherType = VoucherType.CREDIT_NOTE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onVoucherClick = { selectedVoucherDetail = it },
                             onAddCustomer = { createPartyRole = PartyRole.CUSTOMER },
-                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) }
+                            onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
+                            onToggleFavoriteParty = { viewModel.toggleFavoriteParty(it.partyId) },
+                            outstandingByVoucherId = uiState.outstandingByVoucherId,
+                            onScanDocument = launchDocumentScan
                         )
 
                         is AppRoute.Purchases -> PurchasesScreen(
-                            vouchers = uiState.vouchers,
-                            parties = uiState.parties,
+                            vouchers = uiState.vouchers.filter { it.voucherType == VoucherType.PURCHASE || it.voucherType == VoucherType.DEBIT_NOTE },
+                            parties = uiState.parties.filter { it.role == PartyRole.SUPPLIER },
                             ledgers = uiState.ledgers,
                             onNewPurchase = { createVoucherType = VoucherType.PURCHASE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onNewDebitNote = { createVoucherType = VoucherType.DEBIT_NOTE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onVoucherClick = { selectedVoucherDetail = it },
                             onAddSupplier = { createPartyRole = PartyRole.SUPPLIER },
-                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) }
+                            onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
+                            onToggleFavoriteParty = { viewModel.toggleFavoriteParty(it.partyId) },
+                            onScanDocument = launchDocumentScan,
+                            outstandingByVoucherId = uiState.outstandingByVoucherId
                         )
 
                         is AppRoute.Money -> MoneyTabContent(
                             uiState = uiState,
-                            onOpenCreateVoucher = { type -> createVoucherType = type; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
-                            onLedgerClick = { ledger -> viewModel.loadLedgerStatement(ledger); viewModel.navigateTo(AppRoute.ChartOfAccounts) },
+                            onOpenCreateVoucher = { type ->
+                                createVoucherType = type
+                                isCreateVoucherTypeLocked = false
+                                isCreateVoucherOpen = true
+                            },
+                            onLedgerClick = { viewModel.loadLedgerStatement(it) },
                             onAddBankUpiProfile = { isCreateBankUpiOpen = true },
                             onDeleteBankUpiProfile = { viewModel.deleteBankUpiProfile(it) },
                             onSaveDraftLines = { draft, lines -> viewModel.editVoucherDraftLines(draft, lines) },
                             onPostDraft = { viewModel.postVoucherDraft(it) },
                             onDiscardDraft = { viewModel.discardVoucherDraft(it) },
-                            onSubmitMoneyVoucher = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
-                                viewModel.postQuickVoucherWithRoundOff(type, date, debitId, creditId, amount, narration, ref, roundOff)
+                            // Step 2 (Sales/Purchase/Money) audit fix - this lambda's params were
+                            // misnamed against MoneyVoucherEntryScreen's real call order
+                            // (narration, refNumber, applyRoundOff, paymentMode), causing three
+                            // confirmed defects: narration/reference number swapped on every
+                            // posted Receive/Pay/Transfer, the real Round Off toggle silently
+                            // never applied (postQuickVoucher has no round-off step at all), and
+                            // the real derived CASH/BANK/UPI payment mode discarded in favor of a
+                            // guess from the misread round-off boolean. postQuickVoucherWithRoundOff
+                            // is the existing, already-correct function for this exact call shape.
+                            onSubmitMoneyVoucher = { type, date, debit, credit, amount, narration, refNumber, applyRoundOff, paymentMode ->
+                                viewModel.postQuickVoucherWithRoundOff(type, date, debit, credit, amount, narration, refNumber, applyRoundOff, paymentMode)
                             },
                             onAddParty = { role -> createPartyRole = role },
-                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true },
+                            onEditLedger = { editingLedger = it; isCreateLedgerOpen = true },
                             moneyDeepLink = uiState.moneyDeepLink,
-                            onMoneyDeepLinkConsumed = { viewModel.consumeMoneyDeepLink() }
+                            onMoneyDeepLinkConsumed = { viewModel.consumeMoneyDeepLink() },
+                            onScanBankStatement = { launchDocumentScan(OcrDocumentType.BANK_STATEMENT) },
+                            onScanDocument = launchDocumentScan
                         )
 
                         is AppRoute.Parties -> PartiesScreen(
-                            role = if (route.role == "SUPPLIER") PartyRole.SUPPLIER else PartyRole.CUSTOMER,
-                            parties = uiState.parties,
+                            role = PartyRole.valueOf(route.role),
+                            parties = uiState.parties.filter { it.role.name == route.role },
                             ledgers = uiState.ledgers,
-                            onAddParty = { createPartyRole = if (route.role == "SUPPLIER") PartyRole.SUPPLIER else PartyRole.CUSTOMER },
-                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) },
-                            onEditLedger = { ledger -> editingLedger = ledger; isCreateLedgerOpen = true }
+                            onAddParty = { createPartyRole = PartyRole.valueOf(route.role) },
+                            onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
+                            onEditLedger = { editingLedger = it; isCreateLedgerOpen = true },
+                            onToggleFavorite = { viewModel.toggleFavoriteParty(it.partyId) }
                         )
 
                         is AppRoute.Profile -> ProfileScreen(
@@ -797,35 +803,32 @@ fun MainAppScreen(
                             onOpenImportData = { viewModel.navigateTo(AppRoute.DataTools) },
                             onOpenSubscription = { viewModel.navigateTo(AppRoute.Subscription) },
                             onOpenCompanyAndSync = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
-                            onOpenBusinessSetupWizard = { viewModel.navigateTo(AppRoute.ProfileWizard) }
+                            onOpenBusinessSetupWizard = { viewModel.navigateTo(AppRoute.ProfileWizard) },
+                            onScanProfileDocument = launchDocumentScan
                         )
 
-                        is AppRoute.ProfileWizard -> com.example.accounting.presentation.features.profile.ProfileWizardScreen(
+                        is AppRoute.ProfileWizard -> ProfileWizardScreen(
                             businessProfile = businessProfileSeed(uiState),
-                            logoAssetLabel = uiState.businessProfile?.logoAssetId?.let { "Uploaded" },
-                            signatureAssetLabel = uiState.businessProfile?.signatureAssetId?.let { "Uploaded" },
+                            logoAssetLabel = uiState.businessProfile?.logoAssetId,
+                            signatureAssetLabel = uiState.businessProfile?.signatureAssetId,
                             isPinCodeLookupInProgress = uiState.isPinCodeLookupInProgress,
                             pinCodeLookupResult = uiState.pinCodeLookupResult,
                             onLookupPinCode = { viewModel.lookupPinCode(it) },
-                            onSave = { bn, ln, ct, addr, pin, city, state, country, ph, em, web, gst, pan, tan, udy, bank, acct, ifsc, branch, upi, terms ->
-                                viewModel.updateBusinessProfileFull(bn, ln, ct, addr, pin, city, state, country, ph, em, web, gst, pan, tan, udy, bank, acct, ifsc, branch, upi, terms)
-                            },
-                            onPickLogo = {
-                                logoPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            onSave = { businessName, legalName, constitutionType, address, pinCode, city, state, country,
+                                phone, email, website, gstin, pan, tan, udyam, bankName, bankAccountNumber, bankIfsc, bankBranch, upiId, terms ->
+                                viewModel.updateBusinessProfileFull(
+                                    businessName, legalName, constitutionType, address, pinCode, city, state, country,
+                                    phone, email, website, gstin, pan, tan, udyam, bankName, bankAccountNumber, bankIfsc, bankBranch, upiId, terms
                                 )
                             },
-                            onPickSignature = {
-                                signaturePickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            onFinish = { viewModel.navigateBack() }
+                            onPickLogo = { logoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onPickSignature = { signaturePickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onFinish = { viewModel.navigateTo(AppRoute.Profile) }
                         )
 
                         is AppRoute.Subscription -> SubscriptionScreen(
                             subscription = uiState.currentSubscription,
-                            onUpgradeOrRenew = { plan, name, entitlements -> viewModel.upgradeOrRenewSubscription(plan, name, entitlements) }
+                            onUpgradeOrRenew = { planType, planName, entitlements -> viewModel.upgradeOrRenewSubscription(planType, planName, entitlements) }
                         )
 
                         is AppRoute.DataTools -> DataToolsScreen(
@@ -833,13 +836,8 @@ fun MainAppScreen(
                             lastImportRowOutcomes = uiState.lastImportRowOutcomes,
                             groups = uiState.groups,
                             onPickCsvFile = { pendingImportFormat = ImportFileFormat.CSV; openDocumentLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "*/*")) },
-                            onPickJsonFile = { pendingImportFormat = ImportFileFormat.JSON; openDocumentLauncher.launch(arrayOf("application/json", "*/*")) },
-                            onReviewAndCreateRow = { suggestion, type, groupIdOverride -> viewModel.reviewAndCreateImportRow(suggestion, type, groupIdOverride) },
-                            onPickReceiptPhoto = {
-                                receiptPhotoPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
+                            onPickJsonFile = { pendingImportFormat = ImportFileFormat.JSON; openDocumentLauncher.launch(arrayOf("application/json", "text/*")) },
+                            onReviewAndCreateRow = { suggestion, type, groupId -> viewModel.reviewAndCreateImportRow(suggestion, type, groupId) }
                         )
 
                         is AppRoute.Search -> SearchScreen(
@@ -849,92 +847,112 @@ fun MainAppScreen(
                             vouchers = uiState.vouchers,
                             stockItems = uiState.stockItems,
                             onBack = { viewModel.navigateBack() },
-                            onPartyClick = { party -> onPartySelected(party, uiState.ledgers, viewModel) },
-                            onLedgerClick = { ledger -> viewModel.loadLedgerStatement(ledger); viewModel.navigateTo(AppRoute.ChartOfAccounts) },
+                            onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
+                            onLedgerClick = { viewModel.loadLedgerStatement(it) },
                             onVoucherClick = { selectedVoucherDetail = it }
                         )
 
-                        is AppRoute.About -> com.example.accounting.presentation.features.legal.AboutScreen()
-                        is AppRoute.PrivacyPolicy -> com.example.accounting.presentation.features.legal.PrivacyPolicyScreen()
-                        is AppRoute.TermsAndConditions -> com.example.accounting.presentation.features.legal.TermsAndConditionsScreen()
-                        is AppRoute.Support -> com.example.accounting.presentation.features.legal.SupportScreen()
+                        is AppRoute.About -> AboutScreen()
+                        is AppRoute.PrivacyPolicy -> PrivacyPolicyScreen()
+                        is AppRoute.TermsAndConditions -> TermsAndConditionsScreen()
+                        is AppRoute.Support -> SupportScreen()
                     }
                 }
             }
         }
     }
-    }
 
-    // Modal Dialogs
-    if (isCreateVoucherOpen) {
+    // "Build a real invoice UI, easiest to use by anyone" - a fresh Sale/Purchase creation
+    // reroutes to the dedicated full-screen QuickInvoiceEntryScreen instead of the generic 8-way
+    // CreateVoucherDialog. isCreateVoucherTypeLocked is also true for SalesScreen/PurchasesScreen's
+    // own "+ New Sale"/"+ New Purchase" FABs (not only Correct-Voucher), so the real "still needs
+    // the dialog's prefill support" signal is pendingVoucherCorrection specifically - every other
+    // voucher type (Receipt/Payment/Contra/Journal/Notes) and any Correct-Voucher re-post keep
+    // using CreateVoucherDialog completely unchanged below.
+    val isNewInvoiceEntry = isCreateVoucherOpen && uiState.pendingVoucherCorrection == null &&
+        (createVoucherType == VoucherType.SALES || createVoucherType == VoucherType.PURCHASE)
+
+    if (isNewInvoiceEntry) {
+        QuickInvoiceEntryScreen(
+            isSale = createVoucherType == VoucherType.SALES,
+            ledgers = uiState.ledgers,
+            groups = uiState.groups,
+            stockItems = uiState.stockItems,
+            companyStateCode = uiState.currentCompany?.stateCode.orEmpty(),
+            isInventoryEnabled = isInventoryEnabled(uiState),
+            gstApplicable = uiState.currentCompany?.gstOperatingMode != com.example.accounting.domain.company.GstOperatingMode.ACCOUNT_ONLY,
+            isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
+            onDismiss = { isCreateVoucherOpen = false },
+            onAddNewParty = { role -> createPartyRole = role },
+            onAddNewTradeLedger = { isCreateLedgerOpen = true },
+            onPostSaleInvoice = { customer, sales, lines, date, ref, narration, pricingMode ->
+                viewModel.postSaleInvoice(customer, sales, lines, date, ref, narration, pricingMode)
+            },
+            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode ->
+                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode)
+            },
+            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn ->
+                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn)
+            },
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn)
+            }
+        )
+    } else if (isCreateVoucherOpen) {
         CreateVoucherDialog(
             ledgers = uiState.ledgers,
             groups = uiState.groups,
             stockItems = uiState.stockItems,
             vouchers = uiState.vouchers,
             outstandingInvoices = uiState.outstandingInvoices,
-            companyStateCode = uiState.currentCompany?.stateCode ?: "",
+            companyStateCode = uiState.currentCompany?.stateCode.orEmpty(),
             isInventoryEnabled = isInventoryEnabled(uiState),
             gstApplicable = uiState.currentCompany?.gstOperatingMode != com.example.accounting.domain.company.GstOperatingMode.ACCOUNT_ONLY,
-            isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
             defaultVoucherType = createVoucherType,
+            isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
             lockedType = isCreateVoucherTypeLocked,
             prefillFrom = uiState.pendingVoucherCorrection,
-            prefillGstDetail = uiState.pendingVoucherCorrectionGstDetail,
-            onDismiss = {
-                isCreateVoucherOpen = false
-                viewModel.clearOutstandingInvoices()
-                viewModel.consumeVoucherCorrection()
-            },
+            onDismiss = { isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false; viewModel.clearOutstandingInvoices() },
             onAddNewParty = { role -> createPartyRole = role },
-            onAddNewBankLedger = {
-                quickAddLedgerGroupId = uiState.groups.firstOrNull {
-                    com.example.accounting.domain.accounting.StandardSystemGroups.isExactSystemGroup(it.groupId, com.example.accounting.domain.accounting.StandardSystemGroups.BANK_GROUP_ID)
-                }?.groupId
-                isCreateLedgerOpen = true
+            onAddNewBankLedger = { editingLedger = null; quickAddLedgerGroupId = null; isCreateLedgerOpen = true },
+            onAddNewTradeLedger = { isCreateLedgerOpen = true },
+            onPostQuickVoucher = { type, date, debit, credit, amount, narration, ref ->
+                viewModel.postQuickVoucher(type, date, debit, credit, amount, narration, ref)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onAddNewTradeLedger = { isSale ->
-                val wantGroupId = if (isSale) com.example.accounting.domain.accounting.StandardSystemGroups.SALES_GROUP_ID else com.example.accounting.domain.accounting.StandardSystemGroups.PURCHASE_GROUP_ID
-                quickAddLedgerGroupId = uiState.groups.firstOrNull { it.groupId.startsWith("${wantGroupId}_") }?.groupId
-                isCreateLedgerOpen = true
+            onPostSaleInvoice = { customer, sales, lines, date, ref, narration, pricingMode ->
+                viewModel.postSaleInvoice(customer, sales, lines, date, ref, narration, pricingMode)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onPostQuickVoucher = { type, date, drLedger, crLedger, amount, narration, ref ->
-                viewModel.postQuickVoucher(type, date, drLedger, crLedger, amount, narration, ref)
+            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode ->
+                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onSaveAsDraft = { type, date, drLedger, crLedger, amount, narration, ref ->
-                viewModel.saveVoucherAsDraft(type, date, drLedger, crLedger, amount, narration, ref)
+            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn ->
+                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onPostSaleInvoice = { customer, sales, lines, date, ref, narration ->
-                viewModel.postSaleInvoice(customer, sales, lines, date, ref, narration)
-            },
-            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration ->
-                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration)
-            },
-            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsnSac ->
-                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsnSac)
-            },
-            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsnSac ->
-                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsnSac)
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
             onPostCreditNote = { originalId, date, ref, narration ->
                 viewModel.postCreditNote(originalId, date, ref, narration)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
             onPostDebitNote = { originalId, date, ref, narration ->
                 viewModel.postDebitNote(originalId, date, ref, narration)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onPostSettlement = { type, date, drLedger, crLedger, amount, narration, ref, paymentMode, allocations ->
-                viewModel.postQuickVoucher(type, date, drLedger, crLedger, amount, narration, ref, paymentMode, allocations)
+            onPostSettlement = { type, date, debit, credit, amount, narration, ref, mode, allocations ->
+                viewModel.postQuickVoucher(type, date, debit, credit, amount, narration, ref, mode, allocations)
+                isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onLoadOutstandingInvoices = { partyLedgerId -> viewModel.loadOutstandingInvoices(partyLedgerId) },
+            onLoadOutstandingInvoices = { viewModel.loadOutstandingInvoices(it) },
             onClearOutstandingInvoices = { viewModel.clearOutstandingInvoices() },
-            onScanBarcode = {
-                barcodeScanTarget = BarcodeScanTarget.PurchaseVoucher
-                barcodePhotoPickerLauncher.launch(
-                    androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            },
-            scannedBarcodeValue = if (barcodeScanTarget == BarcodeScanTarget.PurchaseVoucher) uiState.lastBarcodeScan?.rawValue else null,
-            scannedMatchedItemId = if (barcodeScanTarget == BarcodeScanTarget.PurchaseVoucher) uiState.lastBarcodeScan?.matchedStockItemId else null,
+            onScanBarcode = { barcodeScanTarget = BarcodeScanTarget.PurchaseVoucher; barcodePhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            scannedBarcodeValue = uiState.lastBarcodeScan?.rawValue,
+            scannedMatchedItemId = uiState.lastBarcodeScan?.matchedStockItemId,
             onScannedValueConsumed = { viewModel.clearBarcodeState() }
         )
     }
@@ -947,13 +965,9 @@ fun MainAppScreen(
             isLookingUp = uiState.isPinCodeLookupInProgress,
             lookupResult = uiState.pinCodeLookupResult,
             onLookupPinCode = { viewModel.lookupPinCode(it) },
-            onDismiss = { isCreateLedgerOpen = false; quickAddLedgerGroupId = null; editingLedger = null },
-            onCreateLedger = { name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode ->
-                viewModel.createLedger(name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode)
-            },
-            onUpdateLedger = { ledgerId, name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode ->
-                viewModel.updateLedger(ledgerId, name, grpId, opBal, opType, gstin, pan, phone, email, addr, hsn, taxRate, bankName, bankAcctNo, bankIfsc, bankBranch, stateCode, pinCode)
-            }
+            onDismiss = { isCreateLedgerOpen = false; editingLedger = null; quickAddLedgerGroupId = null },
+            onCreateLedger = viewModel::createLedger,
+            onUpdateLedger = viewModel::updateLedger
         )
     }
 
@@ -968,24 +982,29 @@ fun MainAppScreen(
     if (isCreateStockItemOpen) {
         CreateStockItemDialog(
             onDismiss = { isCreateStockItemOpen = false },
-            onCreateItem = { name, sku, hsn, unit, gstRate, openingQty, openingRate ->
-                viewModel.createStockItem(name, sku, hsn, unit, gstRate, openingQty, openingRate)
-            }
+            onCreateItem = viewModel::createStockItem
         )
     }
 
     if (isCreateCompanyOpen) {
         CreateCompanyDialog(
-            onDismiss = { isCreateCompanyOpen = false; editingCompany = null },
+            onDismiss = { isCreateCompanyOpen = false },
             isLookingUp = uiState.isPinCodeLookupInProgress,
             lookupResult = uiState.pinCodeLookupResult,
             onLookupPinCode = { viewModel.lookupPinCode(it) },
-            existingCompany = editingCompany,
-            onCreateCompany = { name, trade, gstin, pan, state, addr, email, phone, pinCode ->
-                viewModel.createCompany(name, trade, gstin, pan, state, addr, email, phone, pinCode)
-            },
-            onUpdateCompany = { companyId, name, trade, gstin, pan, state, addr, email, phone, pinCode ->
-                viewModel.updateCompany(companyId, name, trade, gstin, pan, state, addr, email, phone, pinCode)
+            onCreateCompany = { name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode ->
+                viewModel.createCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
+                isCreateCompanyOpen = false
+            }
+        )
+    }
+
+    if (isCreateBankUpiOpen) {
+        CreateBankUpiProfileDialog(
+            onDismiss = { isCreateBankUpiOpen = false },
+            onCreate = { bankName, accountHolderName, accountNumber, ifscCode, branchName, upiId, upiPayeeName ->
+                viewModel.createBankUpiProfile(bankName, accountHolderName, accountNumber, ifscCode, branchName, upiId, upiPayeeName)
+                isCreateBankUpiOpen = false
             }
         )
     }
@@ -997,29 +1016,27 @@ fun MainAppScreen(
             isLookingUp = uiState.isPinCodeLookupInProgress,
             lookupResult = uiState.pinCodeLookupResult,
             onLookupPinCode = { viewModel.lookupPinCode(it) },
-            onCreateParty = { displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode, openingBalance, openingBalanceType ->
-                viewModel.createParty(displayName, r, entityType, gstin, phone, email, address, stateCode, gstRegistrationStatus, pinCode, openingBalance, openingBalanceType)
-            }
+            onCreateParty = viewModel::createParty,
+            onRequestContactImport = onRequestContactImport,
+            importedContact = pendingContactImport,
+            onContactImportConsumed = { pendingContactImport = null }
         )
     }
 
-    if (isCreateBankUpiOpen) {
-        CreateBankUpiProfileDialog(
-            onDismiss = { isCreateBankUpiOpen = false },
-            onCreate = { bankName, holder, accNum, ifsc, branch, upiId, upiPayee ->
-                viewModel.createBankUpiProfile(bankName, holder, accNum, ifsc, branch, upiId, upiPayee)
-            }
-        )
-    }
-
-    uiState.lastBarcodeGeneration?.let { generated ->
+    if (showContactsPermissionRationale) {
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { viewModel.clearBarcodeState() },
+            onDismissRequest = { showContactsPermissionRationale = false },
+            title = { Text("Allow Contacts access?") },
+            text = { Text("LedgerPrime reads your Contacts only when you tap \"Import from Contacts\" while adding a Customer or Supplier, to fill in their name and phone number for you.") },
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { viewModel.clearBarcodeState() }) { Text("Close") }
+                androidx.compose.material3.TextButton(onClick = {
+                    showContactsPermissionRationale = false
+                    contactsPermissionLauncher.launch(android.Manifest.permission.READ_CONTACTS)
+                }) { Text("Continue") }
             },
-            title = { Text("Item Barcode") },
-            text = { Text(generated.payload.rawValue, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace) }
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showContactsPermissionRationale = false }) { Text("Not now") }
+            }
         )
     }
 
@@ -1031,35 +1048,73 @@ fun MainAppScreen(
     // prefill (see CreateVoucherDialog/MoneyVoucherEntryScreen's own LaunchedEffect), so this
     // generic result dialog would otherwise pop up redundantly on top of it.
     if (barcodeScanTarget == BarcodeScanTarget.ItemLookup) {
-    uiState.lastBarcodeScan?.let { scan ->
-        val matchedItem = uiState.stockItems.firstOrNull { it.itemId == scan.matchedStockItemId }
+        uiState.lastBarcodeScan?.let { scan ->
+            val matchedItem = uiState.stockItems.firstOrNull { it.itemId == scan.matchedStockItemId }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.clearBarcodeState() },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { viewModel.clearBarcodeState() }) { Text("Close") }
+                },
+                title = { Text("Barcode Scan") },
+                text = {
+                    if (matchedItem != null) {
+                        Text("Matched: ${matchedItem.name}")
+                    } else {
+                        Text("No matching item found for this barcode. You can add it as a new item.")
+                    }
+                }
+            )
+        }
+    }
+
+    // Step 8 audit fix - the exact same class of bug the Barcode Scan dialog above was already
+    // fixed for ("was computed by the ViewModel but never displayed anywhere - a scan silently
+    // produced a result no one could see"): ItemsListView's own "Generate barcode" button called
+    // AccountingViewModel.generateBarcodeForItem, which stored a real BarcodeGenerationResult in
+    // uiState.lastBarcodeGeneration - and nothing anywhere ever read that state. Tapping the
+    // button had zero visible effect. Reuses the same QrCodeImage component "Invoice QR > Show"
+    // already renders a real scannable code with (VoucherDetailDialog) - never a new rendering
+    // path.
+    uiState.lastBarcodeGeneration?.let { generation ->
+        val item = uiState.stockItems.firstOrNull { it.itemId == generation.stockItemId }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { viewModel.clearBarcodeState() },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { viewModel.clearBarcodeState() }) { Text("Close") }
             },
-            title = { Text("Barcode Scan") },
-            text = {
-                if (matchedItem != null) {
-                    Text("Matched: ${matchedItem.name}")
-                } else {
-                    Text("No matching item found for this barcode. You can add it as a new item.")
-                }
-            }
+            title = { Text(item?.name?.let { "Barcode - $it" } ?: "Barcode") },
+            text = { com.example.accounting.presentation.components.GeneratedBarcodeContent(generation.payload.rawValue) }
         )
     }
+
+    uiState.lastOcrExtraction?.let { extraction ->
+        OcrReviewDialog(
+            extraction = extraction,
+            onApplyOcrProfileDraft = { name, pan -> viewModel.applyOcrProfileDraft(name, pan) },
+            onApplyOcrBusinessProfileDraft = { businessName, gstin -> viewModel.applyOcrBusinessProfileDraft(businessName, gstin) },
+            onOpenOcrPendingReviews = { viewModel.clearOcrExtraction(); viewModel.navigateTo(AppRoute.Money) },
+            onDismiss = { viewModel.clearOcrExtraction() }
+        )
     }
 
     selectedVoucherDetail?.let { voucher ->
-        LaunchedEffect(voucher.voucherId) { viewModel.loadVoucherAttachments(voucher.voucherId) }
+        LaunchedEffect(voucher.voucherId) {
+            viewModel.loadVoucherAttachments(voucher.voucherId)
+            // Product correction ("THIS APPLICATION IS NOT AN ERP") - loads the plain-Bill data
+            // this dialog's default view needs, so it never falls back to showing raw Dr/Cr while
+            // waiting; cleared on dismiss below so a stale bill never flashes for the next voucher.
+            viewModel.loadVoucherBillDetails(voucher)
+        }
         val attachmentsForThisVoucher = if (uiState.voucherAttachmentsVoucherId == voucher.voucherId) uiState.voucherAttachments else emptyList()
         VoucherDetailDialog(
             voucher = voucher,
-            onDismiss = { selectedVoucherDetail = null; viewModel.clearVoucherAttachments() },
+            documentData = uiState.voucherBillDocumentData,
+            billSummary = uiState.voucherBillSummary,
+            onDismiss = { selectedVoucherDetail = null; viewModel.clearVoucherAttachments(); viewModel.clearVoucherBillDetails() },
             onDeleteVoucher = { v -> viewModel.deleteVoucherSafely(v.voucherId) },
             onCorrectVoucher = { v -> viewModel.correctVoucher(v) },
             onUpdateVoucherMetadata = { voucherId, narration, referenceNumber -> viewModel.updateVoucherMetadata(voucherId, narration, referenceNumber) },
-            isInventoryEnabled = com.example.accounting.presentation.viewmodel.isInventoryEnabled(uiState),
+            isInventoryEnabled = isInventoryEnabled(uiState),
             allVouchers = uiState.vouchers,
             attachments = attachmentsForThisVoucher,
             isAttachmentsLoading = uiState.isVoucherAttachmentsLoading,
@@ -1078,31 +1133,118 @@ fun MainAppScreen(
                     )
                 )
             },
-            onRemoveAttachment = { attachment -> viewModel.removeVoucherAttachment(voucher.voucherId, attachment.referenceId) }
+            onRemoveAttachment = { attachment -> viewModel.removeVoucherAttachment(voucher.voucherId, attachment.referenceId) },
+            outstandingPaise = uiState.outstandingByVoucherId[voucher.voucherId],
+            companyGstin = uiState.currentCompany?.gstin.orEmpty(),
+            onPreviewInvoice = { v ->
+                selectedVoucherDetail = null
+                showInvoicePreview = true
+                viewModel.loadInvoicePreview(v.voucherId)
+            }
         )
+    }
+
+    if (showInvoicePreview) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showInvoicePreview = false; viewModel.clearInvoicePreview() },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            androidx.compose.material3.Surface(modifier = Modifier.fillMaxSize()) {
+                InvoicePreviewScreen(
+                    data = uiState.invoicePreviewData,
+                    templates = uiState.invoicePreviewTemplates,
+                    selectedTemplateId = uiState.invoicePreviewSelectedTemplateId,
+                    errorMessage = uiState.invoicePreviewError,
+                    onBack = { showInvoicePreview = false; viewModel.clearInvoicePreview() },
+                    onSelectTemplate = { viewModel.selectInvoicePreviewTemplate(it) },
+                    onSetAsDefault = { viewModel.setInvoicePreviewTemplateAsDefault() },
+                    onShare = {
+                        val intent = viewModel.shareInvoicePreviewPdf()
+                        if (intent != null) context.startActivity(Intent.createChooser(intent, "Share Invoice PDF"))
+                    },
+                    onShareCsv = {
+                        val intent = viewModel.shareInvoicePreviewCsv()
+                        if (intent != null) context.startActivity(Intent.createChooser(intent, "Share Invoice CSV"))
+                    },
+                    onShareExcel = {
+                        val intent = viewModel.shareInvoicePreviewExcel()
+                        if (intent != null) context.startActivity(Intent.createChooser(intent, "Share Invoice Excel"))
+                    },
+                    onPrint = {
+                        // Real-device QA fix - Android's PrintManager requires a real Activity
+                        // Context (throws "Can print only from an activity" otherwise, which is
+                        // exactly what crashed here when this used to go through the ViewModel's
+                        // Application-only `getApplication()`). `context` here is the Composable's
+                        // own LocalContext, the real hosting Activity.
+                        val file = viewModel.renderInvoicePreviewPdf()
+                        if (file != null) {
+                            try {
+                                com.example.accounting.data.rendering.PrintAdapter.print(context, file, "Invoice")
+                            } catch (e: Exception) {
+                                // No print service configured on this device - same silent-no-op
+                                // convention every other export/share callback here already uses.
+                            }
+                        }
+                    }
+                )
+            }
+        }
     }
 }
 
 /** Tapping a Party navigates to its linked Ledger's statement - reuses the existing
- * `loadLedgerStatement`/`ChartOfAccountsScreen` machinery verbatim, never a second statement view
- * (Party is a thin Ledger extension, Phase 7A - this is the same underlying account). */
-private fun onPartySelected(party: Party, ledgers: List<Ledger>, viewModel: AccountingViewModel) {
-    val ledger = ledgers.find { it.ledgerId == party.ledgerId } ?: return
-    viewModel.loadLedgerStatement(ledger)
-    viewModel.navigateTo(AppRoute.ChartOfAccounts)
+ * `loadLedgerStatement`/`ChartOfAccountsScreen` machinery verbatim, never a second statement view.
+ *
+ * Copies a picked SAF [android.net.Uri] into this app's own cache dir under [fileName] - every
+ * OCR/import/branding photo picker above needs a real, stable [File] (not a content:// Uri) to
+ * hand to the ViewModel; returns null (never throws) if the source stream can't be opened/read. */
+private fun copyUriToCacheFile(context: android.content.Context, uri: android.net.Uri, fileName: String): File? = try {
+    // Step 6 audit fix - openInputStream returning null (a real, documented Android possibility)
+    // used to fall through silently: the `?.use` block simply never ran, so outputFile was never
+    // actually written, yet this function still returned it as a normal non-null File - directly
+    // contradicting this function's own "returns null ... if the source stream can't be opened"
+    // doc comment above. A caller (e.g. importFromFile) then called sourceFile.readBytes() on a
+    // File that was never created, an uncaught FileNotFoundException inside a bare
+    // viewModelScope.launch with no try/catch of its own.
+    val input = context.contentResolver.openInputStream(uri) ?: return null
+    val outputFile = File(context.cacheDir, fileName)
+    input.use { stream -> outputFile.outputStream().use { output -> stream.copyTo(output) } }
+    outputFile
+} catch (e: Exception) {
+    null
 }
 
-/** Copies a picked SAF/Photo-Picker [android.net.Uri] into an app-private cache [File] - both
- * `DataImportManagementService.parseFile`/`OcrSuggestionService.requestExtraction` need a real
- * [com.example.accounting.domain.rendering.DocumentAsset] backed by a real file path, matching the
- * existing `AccountingRepository.createDocumentAsset` convention used elsewhere in this app. */
-private fun copyUriToCacheFile(context: android.content.Context, uri: android.net.Uri, fileName: String): File? {
+/** Contacts + Favorites correction (docs/CORRECTIONS_LOG.md) - resolves a picked
+ * `ContactsContract.Contacts` [android.net.Uri] to a (display name, phone number) pair. A
+ * try/catch wrapping a `return` needs a real block-body function, not an expression body - split
+ * into this block-body wrapper. Returns null (never a partial/guessed result) if the contact has
+ * no phone number, or on any provider error. */
+private fun resolveContactNameAndPhone(context: android.content.Context, uri: android.net.Uri): Pair<String, String>? {
     return try {
-        val file = File(context.cacheDir, fileName)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().use { output -> input.copyTo(output) }
+        val contactCursor = context.contentResolver.query(uri, null, null, null, null) ?: return null
+        contactCursor.use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val idIndex = cursor.getColumnIndex(android.provider.ContactsContract.Contacts._ID)
+            val nameIndex = cursor.getColumnIndex(android.provider.ContactsContract.Contacts.DISPLAY_NAME)
+            if (idIndex < 0 || nameIndex < 0) return null
+            val contactId = cursor.getString(idIndex) ?: return null
+            val displayName = cursor.getString(nameIndex) ?: ""
+
+            val phoneCursor = context.contentResolver.query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                null,
+                "${android.provider.ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                arrayOf(contactId),
+                null
+            ) ?: return null
+            phoneCursor.use { phones ->
+                if (!phones.moveToFirst()) return null
+                val numberIndex = phones.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
+                if (numberIndex < 0) return null
+                val phone = phones.getString(numberIndex) ?: return null
+                Pair(displayName, phone)
+            }
         }
-        file
     } catch (e: Exception) {
         null
     }

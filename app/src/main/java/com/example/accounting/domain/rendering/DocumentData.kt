@@ -131,7 +131,13 @@ data class DocumentReferenceInfo(
 data class DocumentBrandingSnapshot(
     val logoStorageReference: String? = null,
     val signatureStorageReference: String? = null,
-    val qrCodeStorageReference: String? = null
+    val qrCodeStorageReference: String? = null,
+    /** [IndividualProfile.name] - for a Proprietorship the individual proprietor IS the
+     * authorized signatory, so their name is printed under the signature line/image on an
+     * invoice PDF (user request, docs/CORRECTIONS_LOG.md). Blank when no Individual Profile has
+     * been saved yet; a renderer then falls back to the generic "Authorised Signatory" label it
+     * already prints, never a fabricated name. */
+    val signatoryName: String = ""
 )
 
 /** The output of a [com.example.accounting.domain.rendering.DocumentRenderer] - a thin, typed

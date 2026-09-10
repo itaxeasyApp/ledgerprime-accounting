@@ -173,6 +173,8 @@ fun ChartOfAccountsScreen(
             onPrint = onPrintLedgerStatement,
             onShare = onShareLedgerStatement,
             onRefresh = onRefreshLedgerStatement,
+            businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+            financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --",
             modifier = modifier
         )
     } else {
@@ -475,6 +477,15 @@ fun PrimaryGroupCard(
     onLedgerClick: (Ledger) -> Unit
 ) {
     var isExpanded by remember { mutableStateOf(true) }
+    // Step 4 audit fix (real Group hierarchy) - this tab is literally labeled "Groups Tree", but
+    // was rendering every group under this primary as one flat, unordered sibling list, with no
+    // regard for AccountGroup.parentGroupId at all - a company-created User Group nested under a
+    // System Group (CreateGroupDialog's whole reason for existing) showed as its parent's sibling,
+    // not its child. GroupAggregationEngine already walks this exact parentGroupId chain correctly
+    // for Trial Balance/P&L/Balance Sheet; this mirrors that same root/children convention (root =
+    // parentGroupId == null) purely for display, never a second aggregation engine.
+    val childrenByParent = remember(groups) { groups.filter { it.parentGroupId != null }.groupBy { it.parentGroupId } }
+    val rootGroups = remember(groups) { groups.filter { it.parentGroupId == null } }
 
     OutlinedCard(
         shape = RoundedCornerShape(12.dp),
@@ -523,11 +534,12 @@ fun PrimaryGroupCard(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     HorizontalDivider()
-                    groups.forEach { grp ->
-                        val childLedgers = ledgers.filter { it.groupId == grp.groupId }
+                    rootGroups.forEach { grp ->
                         GroupRowItem(
                             group = grp,
-                            childLedgers = childLedgers,
+                            depth = 0,
+                            childrenByParent = childrenByParent,
+                            ledgers = ledgers,
                             onLedgerClick = onLedgerClick
                         )
                     }
@@ -540,21 +552,28 @@ fun PrimaryGroupCard(
 @Composable
 fun GroupRowItem(
     group: AccountGroup,
-    childLedgers: List<Ledger>,
+    depth: Int,
+    childrenByParent: Map<String?, List<AccountGroup>>,
+    ledgers: List<Ledger>,
     onLedgerClick: (Ledger) -> Unit
 ) {
     var showChildren by remember { mutableStateOf(false) }
+    val childGroups = childrenByParent[group.groupId] ?: emptyList()
+    val directLedgers = remember(ledgers, group.groupId) { ledgers.filter { it.groupId == group.groupId } }
+    val hasExpandableContent = childGroups.isNotEmpty() || directLedgers.isNotEmpty()
 
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 16).dp)
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { showChildren = !showChildren },
+                    .clickable(enabled = hasExpandableContent) { showChildren = !showChildren },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -568,11 +587,11 @@ fun GroupRowItem(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "${childLedgers.size} a/c",
+                        text = "${directLedgers.size} a/c" + if (childGroups.isNotEmpty()) " • ${childGroups.size} sub-group${if (childGroups.size == 1) "" else "s"}" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (childLedgers.isNotEmpty()) {
+                    if (hasExpandableContent) {
                         Icon(
                             imageVector = if (showChildren) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = null,
@@ -582,14 +601,14 @@ fun GroupRowItem(
                 }
             }
 
-            if (showChildren && childLedgers.isNotEmpty()) {
+            if (showChildren && hasExpandableContent) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 24.dp, top = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    childLedgers.forEach { led ->
+                    directLedgers.forEach { led ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -607,6 +626,15 @@ fun GroupRowItem(
                                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                             )
                         }
+                    }
+                    childGroups.forEach { child ->
+                        GroupRowItem(
+                            group = child,
+                            depth = depth + 1,
+                            childrenByParent = childrenByParent,
+                            ledgers = ledgers,
+                            onLedgerClick = onLedgerClick
+                        )
                     }
                 }
             }
@@ -728,6 +756,11 @@ fun LedgerStatementDetailView(
      * rather than navigating away and back. Null by default, same additive convention as
      * onPrint/onShare. */
     onRefresh: (() -> Unit)? = null,
+    /** Document-design header fields (explicit instruction) - defaulted to blank so this remains
+     * source-compatible; the one real call site (this file's own `ChartOfAccountsScreen`) always
+     * passes the real values from `AccountingUiState`. */
+    businessName: String = "",
+    financialYearLabel: String = "",
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -769,6 +802,15 @@ fun LedgerStatementDetailView(
                     Icon(Icons.Default.Share, contentDescription = "Share")
                 }
             }
+        }
+
+        if (businessName.isNotBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            com.example.accounting.presentation.components.ReportDocumentHeader(
+                reportName = "${statement.ledgerName} - Ledger Statement",
+                businessName = businessName,
+                financialYearLabel = financialYearLabel
+            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -839,7 +881,13 @@ fun LedgerStatementDetailView(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(bottom = 40.dp)
             ) {
-                items(statement.rows) { row ->
+                // Phase 7J Reports integration - LedgerStatementRowUi (ReportUiModels.kt) wraps
+                // each real row; voucherTypeEnum is the same VoucherType already fixed in the
+                // domain model itself, formattedRunningBalance replaces this row's own hand-built
+                // "<amount> <Dr/Cr>" string with the shared one - identical output ("Dr"/"Cr" via
+                // DrCr.code, unchanged), just no longer duplicated per screen.
+                items(statement.rows.map { com.example.accounting.presentation.features.reports.LedgerStatementRowUi(it) }, key = { it.row.voucherId }) { ui ->
+                    val row = ui.row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -851,7 +899,7 @@ fun LedgerStatementDetailView(
                     ) {
                         Column(modifier = Modifier.weight(1.2f)) {
                             Text(row.voucherNumber, style = rowPrimaryPaint)
-                            Text("${row.date} • ${row.voucherType}", style = rowSecondaryPaint, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${row.date} • ${ui.voucherTypeEnum.displayName}", style = rowSecondaryPaint, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Text(
                             text = if (row.debitAmount.isPositive) row.debitAmount.formatPlain() else "--",
@@ -864,7 +912,7 @@ fun LedgerStatementDetailView(
                             modifier = Modifier.weight(0.8f)
                         )
                         Text(
-                            text = "${row.runningBalance.formatPlain()} ${row.balanceType.code}",
+                            text = ui.formattedRunningBalance,
                             style = rowAmountPaint.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (row.balanceType == DrCr.DEBIT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary

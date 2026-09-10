@@ -41,6 +41,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
+/**
+ * Single-business app - this dialog is only ever reached in create mode now (Settings > My
+ * Business > "Set Up My Business", shown only when no business exists yet). Editing an existing
+ * business goes through Settings > My Business's own Edit Business Details/GST Details/Contact
+ * Details sub-screens instead (see SettingsAndSyncScreen.kt) - this dialog previously also
+ * supported an edit mode (`existingCompany`/`onUpdateCompany`) for the old single "edit pencil"
+ * entry point, removed as dead code once that entry point stopped existing.
+ */
 @Composable
 fun CreateCompanyDialog(
     onDismiss: () -> Unit,
@@ -50,27 +58,26 @@ fun CreateCompanyDialog(
     isLookingUp: Boolean = false,
     lookupResult: com.example.accounting.domain.profile.PinCodeLookupResult? = null,
     onLookupPinCode: (String) -> Unit = {},
-    /** Edit-Company fix - same create-vs-edit dialog pattern as [CreateLedgerDialog]'s
-     * [CreateLedgerDialog]/`existingLedger`: non-null here switches the dialog into editing this
-     * exact company (fields pre-filled, [onUpdateCompany] called instead of [onCreateCompany]) -
-     * previously there was no UI anywhere to change a company's own name/GSTIN/PAN/address/phone/
-     * email after creation, despite the repository already supporting it. */
-    existingCompany: com.example.accounting.domain.company.Company? = null,
-    onCreateCompany: (String, String, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
-    onUpdateCompany: (companyId: String, String, String, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> }
+    onCreateCompany: (String, String, String, String, String, String, String, String, String) -> Unit = { _, _, _, _, _, _, _, _, _ -> }
 ) {
-    var name by remember(existingCompany) { mutableStateOf(existingCompany?.name ?: "") }
-    var tradeName by remember(existingCompany) { mutableStateOf(existingCompany?.tradeName ?: "") }
-    var gstin by remember(existingCompany) { mutableStateOf(existingCompany?.gstin ?: "") }
-    var pan by remember(existingCompany) { mutableStateOf(existingCompany?.pan ?: "") }
-    var stateCode by remember(existingCompany) { mutableStateOf(existingCompany?.stateCode ?: "27") }
-    var address by remember(existingCompany) { mutableStateOf(existingCompany?.address ?: "") }
-    var email by remember(existingCompany) { mutableStateOf(existingCompany?.email ?: "") }
-    var phone by remember(existingCompany) { mutableStateOf(existingCompany?.phone ?: "") }
-    var pinCode by remember(existingCompany) { mutableStateOf(existingCompany?.pinCode ?: "") }
+    var name by remember { mutableStateOf("") }
+    var tradeName by remember { mutableStateOf("") }
+    var gstin by remember { mutableStateOf("") }
+    var pan by remember { mutableStateOf("") }
+    var stateCode by remember { mutableStateOf("27") }
+    var address by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var pinCode by remember { mutableStateOf("") }
 
     LaunchedEffect(pinCode) {
         if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
+    }
+    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
+    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
+    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
+    LaunchedEffect(gstin) {
+        if (pan.isBlank()) com.example.accounting.core.common.ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
     }
     LaunchedEffect(lookupResult) {
         val result = lookupResult
@@ -79,6 +86,14 @@ fun CreateCompanyDialog(
             if (address.isBlank() && result.city.isNotBlank()) address = result.city
         }
     }
+
+    // Play Store readiness correction (docs/CORRECTIONS_LOG.md) - real format validation for
+    // GSTIN/PAN/phone/email on the very first data this app ever collects; all four stay optional
+    // except the legal name, this only rejects a non-blank value that isn't shaped like a real one.
+    val gstinInvalid = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)
+    val panInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidPan(pan)
+    val phoneInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidIndianMobile(phone)
+    val emailInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidEmail(email)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -102,12 +117,9 @@ fun CreateCompanyDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
+                        Text("Set Up My Business", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
                         Text(
-                            text = if (existingCompany != null) "Edit Company" else "Add Company",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = if (existingCompany != null) "Update this company's details" else "Set up a new business to track",
+                            "Tell us about your business to get started",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -161,6 +173,8 @@ fun CreateCompanyDialog(
                         },
                         label = { Text("GSTIN") },
                         placeholder = { Text("27ABCDE1234F1Z5") },
+                        isError = gstinInvalid,
+                        supportingText = if (gstinInvalid) { { Text("Not a valid GSTIN") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
@@ -168,6 +182,8 @@ fun CreateCompanyDialog(
                         onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) },
                         label = { Text("PAN") },
                         placeholder = { Text("ABCDE1234F") },
+                        isError = panInvalid,
+                        supportingText = if (panInvalid) { { Text("Not a valid PAN") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -189,6 +205,9 @@ fun CreateCompanyDialog(
                         value = phone,
                         onValueChange = { phone = it },
                         label = { Text("Phone") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        isError = phoneInvalid,
+                        supportingText = if (phoneInvalid) { { Text("Not a valid 10-digit mobile number") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -199,6 +218,9 @@ fun CreateCompanyDialog(
                     value = email,
                     onValueChange = { email = it },
                     label = { Text("Email") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    isError = emailInvalid,
+                    supportingText = if (emailInvalid) { { Text("Not a valid email address") } } else null,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -249,17 +271,13 @@ fun CreateCompanyDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            if (existingCompany != null) {
-                                onUpdateCompany(existingCompany.companyId, name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
-                            } else {
-                                onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
-                            }
+                            onCreateCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
                             onDismiss()
                         },
-                        enabled = name.isNotBlank(),
+                        enabled = name.isNotBlank() && !gstinInvalid && !panInvalid && !phoneInvalid && !emailInvalid,
                         modifier = Modifier.testTag("submit_company_button")
                     ) {
-                        Text(if (existingCompany != null) "Update Company" else "Create Company")
+                        Text("Create My Business")
                     }
                 }
             }

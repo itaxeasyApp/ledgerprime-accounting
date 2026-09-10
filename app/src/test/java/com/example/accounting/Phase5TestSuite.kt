@@ -35,6 +35,7 @@ import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyEntityType
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.domain.party.PartyValidation
+import com.example.accounting.domain.taxation.gst.GSTRules
 import com.example.accounting.domain.taxation.gst.GstCalculationEngine
 import com.example.accounting.domain.taxation.gst.GstChargeType
 import com.example.accounting.domain.taxation.gst.GstDirection
@@ -79,7 +80,7 @@ class Phase5TestSuite {
     /** D1b - made non-private so [D1bGstOnlyTestSuite] can reuse this same real GST-transaction-
      * tracking DAO wrapper instead of duplicating it (this project's "reuse over duplication" rule) -
      * zero behavior change, visibility only. */
-    class Phase5AwareDao(delegate: AccountingDao) : AccountingDao by delegate {
+    class Phase5AwareDao(private val delegate: AccountingDao) : AccountingDao by delegate {
         private val gstTransactions = mutableListOf<GstTransactionEntity>()
         private val allocations = mutableListOf<SettlementAllocationEntity>()
         private val filingPeriods = LinkedHashMap<String, GstFilingPeriodEntity>()
@@ -89,8 +90,13 @@ class Phase5TestSuite {
         private val parties = LinkedHashMap<String, PartyEntity>()
 
         override suspend fun getGstTransactionsForVoucher(voucherId: String) = gstTransactions.filter { it.voucherId == voucherId }
+        // Soft-cancel fix - mirrors the real DAO's "NOT IN (SELECT voucherId FROM vouchers WHERE
+        // isCancelled = 1)" clause (see AccountingDao.getGstTransactionsForCompanyFY's own
+        // comment): a cancelled voucher's gst_transactions rows are never deleted any more, so this
+        // aggregate query must exclude them itself. A null voucherId (a GST-only note's own
+        // transaction group) never resolves to a cancelled voucher and is correctly unaffected.
         override suspend fun getGstTransactionsForCompanyFY(companyId: String, fyId: String) =
-            gstTransactions.filter { it.companyId == companyId && it.financialYearId == fyId }
+            gstTransactions.filter { it.companyId == companyId && it.financialYearId == fyId && delegate.getVoucherById(companyId, it.voucherId ?: "")?.isCancelled != true }
         // D1b - the only way to find a GST-only transaction's lines (voucherId is always null there).
         override suspend fun getGstTransactionsByGroupId(companyId: String, groupId: String) =
             gstTransactions.filter { it.companyId == companyId && it.transactionGroupId == groupId }.sortedBy { it.lineOrder }
@@ -194,8 +200,9 @@ class Phase5TestSuite {
         )
     }
 
-    private fun line(itemId: String, qty: Long, ratePaise: Long, gstRate: Double, hsn: String = "8471") = TradingLineInput(
-        itemId = itemId, itemName = itemId, hsnSacCode = hsn, quantity = Quantity.fromLong(qty), rate = Money.fromPaise(ratePaise), gstRatePercent = gstRate
+    private fun line(itemId: String, qty: Long, ratePaise: Long, gstRate: Double, hsn: String = "8471", discountPercent: Double = 0.0) = TradingLineInput(
+        itemId = itemId, itemName = itemId, hsnSacCode = hsn, quantity = Quantity.fromLong(qty), rate = Money.fromPaise(ratePaise), gstRatePercent = gstRate,
+        discountPercent = discountPercent
     )
 
     // ==========================================
@@ -300,6 +307,20 @@ class Phase5TestSuite {
     }
 
     @Test
+    fun a6b_ExtractTaxableFromInclusive_MatchesSpecFormula() {
+        // Taxable = Inclusive x 100 / (100 + Rate); GST = Inclusive - Taxable.
+        val taxable = GSTRules.extractTaxableFromInclusive(Money.fromRupees(1180L), 18.0)
+        assertEquals(1000_00L, taxable.paise)
+        assertEquals(180_00L, (Money.fromRupees(1180L) - taxable).paise)
+    }
+
+    @Test
+    fun a6c_ExtractTaxableFromInclusive_ZeroRate_ReturnsInclusiveUnchanged() {
+        val taxable = GSTRules.extractTaxableFromInclusive(Money.fromRupees(500L), 0.0)
+        assertEquals(500_00L, taxable.paise)
+    }
+
+    @Test
     fun a7_TradingWorkflow_ItemDrivenRate_NeverHardcoded() {
         val result = TradingWorkflowEngine.buildSale(
             voucherId = "V1", companyId = companyId, financialYearId = fyId,
@@ -316,6 +337,84 @@ class Phase5TestSuite {
         assertEquals(2, result.gstTransactions.size)
         assertEquals(5.0, result.gstTransactions.first { it.itemId == "ITEM_A" }.gstRatePercent, 0.0001)
         assertEquals(28.0, result.gstTransactions.first { it.itemId == "ITEM_B" }.gstRatePercent, 0.0001)
+    }
+
+    @Test
+    fun a7b_TradingWorkflow_LineDiscount_ReducesTaxableBeforeGst() {
+        // Rate 1000 x qty 1 = 1000 gross; 10% discount -> 900 net taxable; GST 18% of 900 = 162.
+        val result = TradingWorkflowEngine.buildSale(
+            voucherId = "V1", companyId = companyId, financialYearId = fyId,
+            customerLedgerId = "LED_DEBTOR", customerName = "Cust", customerGstin = "",
+            salesLedgerId = "LED_SALES", salesLedgerName = "Sales", companyStateCode = "27", placeOfSupply = "27",
+            lines = listOf(line("ITEM_A", 1, 1000_00L, gstRate = 18.0, discountPercent = 10.0)),
+            gstLedgers = gstLedgerRefs(companyId), roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off"
+        )
+        val gstTx = result.gstTransactions.single()
+        assertEquals(900_00L, gstTx.taxableAmount.paise)
+        val totalTax = result.journalItems.filter { it.ledgerId.startsWith("LED_GST") }.fold(Money.ZERO) { acc, i -> acc + i.amount }
+        assertEquals(162_00L, totalTax.paise)
+        // The stock line's amount is the net (post-discount) taxable value; rate stays the entered list price.
+        val stockLine = result.stockLines.single()
+        assertEquals(1000_00L, stockLine.rate.paise)
+        assertEquals(900_00L, stockLine.amount.paise)
+        // 5 Invoice PDF Templates - the actual discount amount is now stored verbatim (never
+        // re-derived later for display).
+        assertEquals(100_00L, stockLine.discount.paise)
+        // Total = net taxable + tax = 900 + 162 = 1062, no round-off needed.
+        assertEquals(1062_00L, result.totalAmount.paise)
+    }
+
+    @Test
+    fun a7c_TradingWorkflow_ZeroDiscount_ByteIdenticalToNoDiscountField() {
+        val withZero = TradingWorkflowEngine.buildSale(
+            voucherId = "V1", companyId = companyId, financialYearId = fyId,
+            customerLedgerId = "LED_DEBTOR", customerName = "Cust", customerGstin = "",
+            salesLedgerId = "LED_SALES", salesLedgerName = "Sales", companyStateCode = "27", placeOfSupply = "27",
+            lines = listOf(line("ITEM_A", 1, 1000_00L, gstRate = 18.0, discountPercent = 0.0)),
+            gstLedgers = gstLedgerRefs(companyId), roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off"
+        )
+        assertEquals(1000_00L, withZero.gstTransactions.single().taxableAmount.paise)
+        assertEquals(1180_00L, withZero.totalAmount.paise)
+        assertEquals(0L, withZero.stockLines.single().discount.paise)
+    }
+
+    @Test
+    fun a7d_TradingWorkflow_InclusivePricing_BacksOutTaxableBeforeGst() {
+        // Rate 1180 (inclusive of 18% GST) x qty 1 -> taxable = 1180 x 100/118 = 1000.00 exactly;
+        // GST = 1180 - 1000 = 180.00 (90 CGST + 90 SGST, intra-state).
+        val result = TradingWorkflowEngine.buildSale(
+            voucherId = "V1", companyId = companyId, financialYearId = fyId,
+            customerLedgerId = "LED_DEBTOR", customerName = "Cust", customerGstin = "",
+            salesLedgerId = "LED_SALES", salesLedgerName = "Sales", companyStateCode = "27", placeOfSupply = "27",
+            lines = listOf(line("ITEM_A", 1, 1180_00L, gstRate = 18.0)),
+            gstLedgers = gstLedgerRefs(companyId), roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off",
+            pricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.INCLUSIVE
+        )
+        val gstTx = result.gstTransactions.single()
+        assertEquals(1000_00L, gstTx.taxableAmount.paise)
+        assertEquals(90_00L, gstTx.cgst.paise)
+        assertEquals(90_00L, gstTx.sgst.paise)
+        assertEquals(0L, gstTx.igst.paise)
+        // Inclusive-mode Grand Total equals the original inclusive rate entered - the customer
+        // pays exactly what the rate said, GST was already inside it.
+        assertEquals(1180_00L, result.totalAmount.paise)
+    }
+
+    @Test
+    fun a7e_TradingWorkflow_InclusivePricing_InterState_UsesIgstNotCgstSgst() {
+        val result = TradingWorkflowEngine.buildSale(
+            voucherId = "V1", companyId = companyId, financialYearId = fyId,
+            customerLedgerId = "LED_DEBTOR", customerName = "Cust", customerGstin = "",
+            salesLedgerId = "LED_SALES", salesLedgerName = "Sales", companyStateCode = "27", placeOfSupply = "29",
+            lines = listOf(line("ITEM_A", 1, 1180_00L, gstRate = 18.0)),
+            gstLedgers = gstLedgerRefs(companyId), roundOffLedgerId = "LED_RO", roundOffLedgerName = "Round Off",
+            pricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.INCLUSIVE
+        )
+        val gstTx = result.gstTransactions.single()
+        assertEquals(1000_00L, gstTx.taxableAmount.paise)
+        assertEquals(0L, gstTx.cgst.paise)
+        assertEquals(0L, gstTx.sgst.paise)
+        assertEquals(180_00L, gstTx.igst.paise)
     }
 
     @Test

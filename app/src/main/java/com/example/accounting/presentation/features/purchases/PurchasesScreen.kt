@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,8 +32,10 @@ import androidx.compose.ui.unit.dp
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.Voucher
 import com.example.accounting.domain.accounting.VoucherType
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyRole
+import com.example.accounting.presentation.components.ScanTypePickerDialog
 import com.example.accounting.presentation.features.dashboard.VoucherSummaryCard
 import com.example.accounting.presentation.features.party.PartiesScreen
 
@@ -55,6 +59,13 @@ fun PurchasesScreen(
     onVoucherClick: (Voucher) -> Unit,
     onAddSupplier: () -> Unit,
     onPartyClick: (Party) -> Unit,
+    onToggleFavoriteParty: (Party) -> Unit = {},
+    /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) -
+     * opens the Photo Picker with the type chosen from this screen's own compact Purchase Bill/UPI
+     * Payment dialog already known. Shown on the Purchases tab only. */
+    onScanDocument: (OcrDocumentType) -> Unit = {},
+    /** Payment-status badge - see [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId]. */
+    outstandingByVoucherId: Map<String, Long> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     var tabIndex by remember { mutableIntStateOf(0) }
@@ -80,7 +91,9 @@ fun PurchasesScreen(
                 emptyMessage = "Record your first purchase from a supplier.",
                 onVoucherClick = onVoucherClick,
                 onNew = onNewPurchase,
-                fabDescription = "New Purchase"
+                fabDescription = "New Purchase",
+                outstandingByVoucherId = outstandingByVoucherId,
+                onScanDocument = onScanDocument
             )
             1 -> PurchaseVoucherList(
                 vouchers = debitNotes,
@@ -89,14 +102,16 @@ fun PurchasesScreen(
                 emptyMessage = "Record a Debit Note against a supplier bill to adjust it.",
                 onVoucherClick = onVoucherClick,
                 onNew = onNewDebitNote,
-                fabDescription = "New Debit Note"
+                fabDescription = "New Debit Note",
+                outstandingByVoucherId = outstandingByVoucherId
             )
             2 -> PartiesScreen(
                 role = PartyRole.SUPPLIER,
                 parties = parties,
                 ledgers = ledgers,
                 onAddParty = onAddSupplier,
-                onPartyClick = onPartyClick
+                onPartyClick = onPartyClick,
+                onToggleFavorite = onToggleFavoriteParty
             )
         }
     }
@@ -110,8 +125,18 @@ private fun PurchaseVoucherList(
     emptyMessage: String,
     onVoucherClick: (Voucher) -> Unit,
     onNew: () -> Unit,
-    fabDescription: String
+    fabDescription: String,
+    outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    onScanDocument: ((OcrDocumentType) -> Unit)? = null
 ) {
+    var isScanPickerOpen by remember { mutableStateOf(false) }
+    if (isScanPickerOpen && onScanDocument != null) {
+        ScanTypePickerDialog(
+            options = listOf("Purchase Bill" to OcrDocumentType.PURCHASE_BILL, "UPI Payment" to OcrDocumentType.UPI_PAYMENT),
+            onDismiss = { isScanPickerOpen = false },
+            onSelect = { type -> isScanPickerOpen = false; onScanDocument(type) }
+        )
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         if (vouchers.isEmpty()) {
             Column(
@@ -130,9 +155,19 @@ private fun PurchaseVoucherList(
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
                 items(vouchers, key = { it.voucherId }) { voucher ->
-                    VoucherSummaryCard(voucher = voucher, onClick = { onVoucherClick(voucher) })
+                    VoucherSummaryCard(
+                        voucher = voucher,
+                        onClick = { onVoucherClick(voucher) },
+                        outstandingPaise = outstandingByVoucherId[voucher.voucherId]
+                    )
                 }
             }
+        }
+        if (onScanDocument != null) {
+            FloatingActionButton(
+                onClick = { isScanPickerOpen = true },
+                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 20.dp, start = 20.dp)
+            ) { Icon(Icons.Default.DocumentScanner, contentDescription = "Scan Document") }
         }
         FloatingActionButton(
             onClick = onNew,

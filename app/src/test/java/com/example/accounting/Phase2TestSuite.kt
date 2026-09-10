@@ -203,12 +203,14 @@ class Phase2TestSuite {
     }
 
     // ==========================================
-    // 4. CANCELLATION - REAL DELETE (explicit correction: real Indian accounting/GST practice
-    // never leaves a same-voucher offsetting entry behind - a voucher not yet reported to the
-    // government is genuinely deleted, not "reversed in place")
+    // 4. CANCELLATION - AUDITABLE SOFT-CANCEL (Step 3 live-device fix: a hard-delete here silently
+    // let a cancelled voucher's number be reissued to a different real transaction - reproduced on
+    // device correcting a Receipt - and made the app's own CANCELLED badge/audit-trail features
+    // permanently unreachable. Ledger balances still net to zero; the row, its journal items, and
+    // its GST transactions are never removed.)
     // ==========================================
     @Test
-    fun testCancelVoucherAtomic_RestoresBalanceAndDeletesVoucherAndItems() = runBlocking {
+    fun testCancelVoucherAtomic_RestoresBalanceAndSoftCancelsWithoutDeletingHistory() = runBlocking {
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_CASH", 500_000L, DrCr.DEBIT))
         dao.insertLedger(ledger("LED_RENT", 0L, DrCr.DEBIT))
@@ -229,12 +231,16 @@ class Phase2TestSuite {
         assertEquals(DrCr.DEBIT, cash.currentBalanceType)
         assertEquals("Rent balance must be restored to pre-posting value", 0L, rent.currentBalancePaise)
 
-        // The voucher row itself is genuinely gone, not merely flagged isCancelled.
-        assertEquals(null, dao.getVoucherById(companyId, voucherId))
+        // The voucher row remains - soft-cancelled, not deleted - so its own detail view, the
+        // CANCELLED badge, and any "corrected by" link can still find it.
+        val cancelled = dao.getVoucherById(companyId, voucherId)
+        assertNotNull("Cancellation must be a soft flag - the voucher row must still exist", cancelled)
+        assertTrue("The persisted row must be flagged isCancelled", cancelled!!.isCancelled)
 
-        // No journal items remain for this voucher at all - neither original nor a reversal.
+        // Journal items remain too - the voucher's own detail view still shows real Dr/Cr history,
+        // never a second same-voucher offsetting entry.
         val allItems = dao.getJournalItemsForVoucherSync(voucherId)
-        assertEquals("Cancellation must delete the original lines outright, nothing left behind", 0, allItems.size)
+        assertEquals("Cancellation must never delete the original journal lines", 2, allItems.size)
 
         val outboxEntry = dao.getOutboxByIdempotencyKey("IK-CANCEL-1")
         assertNotNull(outboxEntry)
@@ -242,7 +248,7 @@ class Phase2TestSuite {
     }
 
     @Test
-    fun testCancelVoucherAtomic_AlreadyDeleted_Rejected() = runBlocking {
+    fun testCancelVoucherAtomic_AlreadyCancelled_Rejected() = runBlocking {
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_CASH", 500_000L, DrCr.DEBIT))
         dao.insertLedger(ledger("LED_RENT", 0L, DrCr.DEBIT))
@@ -257,14 +263,20 @@ class Phase2TestSuite {
         VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-DBLCANCEL-1", "TESTER")
 
         // A second cancel attempt (a different idempotency key, so the replay guard doesn't just
-        // silently no-op) now fails because the voucher row itself is genuinely gone - a real
-        // "not found", not a "was already cancelled" business-rule rejection.
+        // silently no-op) must still be rejected - now via an explicit "already cancelled" guard,
+        // since the row itself no longer disappears to reject this "for free" the way a hard
+        // delete used to. Without this guard the ledger balances would be reversed a second time.
         try {
             VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-DBLCANCEL-2", "TESTER")
-            fail("Expected cancelling an already-deleted voucher to be rejected")
+            fail("Expected cancelling an already-cancelled voucher to be rejected")
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message?.contains(voucherId) == true)
+            assertTrue(e.message?.contains("already cancelled") == true)
         }
+
+        // The ledger balance must reflect exactly one reversal, not two.
+        val cash = dao.getLedgerById(companyId, "LED_CASH")!!
+        assertEquals("A rejected second cancel must not reverse the ledger balance again", 500_000L, cash.currentBalancePaise)
     }
 
     // ==========================================
@@ -331,10 +343,12 @@ class Phase2TestSuite {
         assertEquals(0L, dao.getLedgerById(companyId, "LED_DEBTOR")!!.currentBalancePaise)
         assertEquals(0L, dao.getLedgerById(companyId, "LED_SALES")!!.currentBalancePaise)
         assertEquals(0L, dao.getLedgerById(companyId, "LED_GST")!!.currentBalancePaise)
-        // Real delete (explicit correction): the voucher row itself is gone, not merely flagged
-        // isCancelled, and no journal items - original or reversal - remain for it.
-        assertEquals(null, dao.getVoucherById(companyId, voucherId))
-        assertEquals(0, dao.getJournalItemsForVoucherSync(voucherId).size)
+        // Auditable soft-cancel (Step 3 live-device fix): the voucher row and its journal items
+        // persist, flagged isCancelled - never deleted, never offset by a reversal entry.
+        val cancelled = dao.getVoucherById(companyId, voucherId)
+        assertNotNull("Voucher row must persist after cancellation", cancelled)
+        assertTrue(cancelled!!.isCancelled)
+        assertEquals(3, dao.getJournalItemsForVoucherSync(voucherId).size)
         assertNotNull(dao.getOutboxByIdempotencyKey("IK-CHAIN-CANCEL"))
     }
 }

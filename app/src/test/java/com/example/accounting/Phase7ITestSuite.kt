@@ -12,10 +12,12 @@ import org.junit.Test
 /**
  * Phase 7I (Advanced Input & Reporting Architecture: OCR ingestion, bank-reconciliation
  * suggestions, CMA report - architecture/contracts only) - pure JVM, structural-contract tests
- * only, matching [SandboxIntegrationTestSuite]'s exact pattern. There is no implementation of any
- * of these three interfaces anywhere in the codebase to exercise behaviorally - these tests lock
- * in the contract shape itself, so a future implementation phase cannot silently widen what these
- * interfaces are allowed to touch.
+ * only, matching [SandboxIntegrationTestSuite]'s exact pattern. [OcrIngestionAdapter] gained its
+ * first real implementation (`data/ocr/MlKitOcrAdapter.kt`, behaviorally exercised by
+ * `Phase7JBOcrSuggestionTestSuite`'s fake and by real device testing) after this suite was written;
+ * [ReconciliationAdapter]/[CmaReportGenerator] remain contract-only. These tests still lock in each
+ * contract's shape, so no implementation can silently widen what these interfaces are allowed to
+ * touch.
  */
 class Phase7ITestSuite {
 
@@ -40,7 +42,12 @@ class Phase7ITestSuite {
     fun testOcrIngestionAdapter_isAPureInterface_withExactlyOneOperation() {
         val clazz = OcrIngestionAdapter::class.java
         assertTrue("OcrIngestionAdapter must be an interface", clazz.isInterface)
-        assertEquals(setOf("extractFromDocument"), clazz.declaredMethods.map { it.name }.toSet())
+        // extractFromDocument's documentTypeHint default parameter value makes the Kotlin compiler
+        // emit a synthetic "extractFromDocument$default" bridge alongside the real method - one
+        // logical operation, not two; excluded here rather than asserted on, same as every other
+        // JVM-synthesized method name would be.
+        val realMethodNames = clazz.declaredMethods.map { it.name }.filterNot { it.endsWith("\$default") }.toSet()
+        assertEquals(setOf("extractFromDocument"), realMethodNames)
     }
 
     @Test

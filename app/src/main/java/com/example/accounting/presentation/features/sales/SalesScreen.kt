@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,11 +32,13 @@ import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.Voucher
 import com.example.accounting.domain.accounting.VoucherType
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.presentation.components.EmptyState
 import com.example.accounting.presentation.components.ReceiptSummary
 import com.example.accounting.presentation.components.SalesSummary
+import com.example.accounting.presentation.components.ScanTypePickerDialog
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.features.dashboard.VoucherSummaryCard
 import com.example.accounting.presentation.features.party.PartiesScreen
@@ -71,6 +75,15 @@ fun SalesScreen(
     onVoucherClick: (Voucher) -> Unit,
     onAddCustomer: () -> Unit,
     onPartyClick: (Party) -> Unit,
+    onToggleFavoriteParty: (Party) -> Unit = {},
+    /** Payment-status badge - see [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId]. */
+    outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md) - opens the Photo
+     * Picker with the type the user picked from this screen's own compact Sales Invoice/UPI
+     * Payment dialog already known, skipping the fully-generic "which document type?" dialog
+     * (retired entirely - docs/CORRECTIONS_LOG.md). Shown on the Sales tab only (not Returns/
+     * Credit Notes - no contextual OCR was requested there). */
+    onScanDocument: (OcrDocumentType) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var tabIndex by remember { mutableIntStateOf(0) }
@@ -104,21 +117,25 @@ fun SalesScreen(
                 emptyMessage = "No sales yet. Record your first sale to a customer.",
                 onVoucherClick = onVoucherClick,
                 onNew = onNewSale,
-                fabDescription = "New Sale"
+                fabDescription = "New Sale",
+                outstandingByVoucherId = outstandingByVoucherId,
+                onScanDocument = onScanDocument
             )
             2 -> SalesVoucherList(
                 vouchers = creditNotes,
                 emptyMessage = "No Sales Returns or Credit Notes yet.",
                 onVoucherClick = onVoucherClick,
                 onNew = onNewCreditNote,
-                fabDescription = "New Credit Note"
+                fabDescription = "New Credit Note",
+                outstandingByVoucherId = outstandingByVoucherId
             )
             3 -> PartiesScreen(
                 role = PartyRole.CUSTOMER,
                 parties = parties,
                 ledgers = ledgers,
                 onAddParty = onAddCustomer,
-                onPartyClick = onPartyClick
+                onPartyClick = onPartyClick,
+                onToggleFavorite = onToggleFavoriteParty
             )
         }
     }
@@ -154,8 +171,18 @@ private fun SalesVoucherList(
     emptyMessage: String,
     onVoucherClick: (Voucher) -> Unit,
     onNew: () -> Unit,
-    fabDescription: String
+    fabDescription: String,
+    outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    onScanDocument: ((OcrDocumentType) -> Unit)? = null
 ) {
+    var isScanPickerOpen by remember { mutableStateOf(false) }
+    if (isScanPickerOpen && onScanDocument != null) {
+        ScanTypePickerDialog(
+            options = listOf("Sales Invoice" to OcrDocumentType.SALES_INVOICE, "UPI Payment" to OcrDocumentType.UPI_PAYMENT),
+            onDismiss = { isScanPickerOpen = false },
+            onSelect = { type -> isScanPickerOpen = false; onScanDocument(type) }
+        )
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         if (vouchers.isEmpty()) {
             EmptyState(message = emptyMessage, icon = Icons.AutoMirrored.Filled.ReceiptLong)
@@ -166,9 +193,19 @@ private fun SalesVoucherList(
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
                 items(vouchers, key = { it.voucherId }) { voucher ->
-                    VoucherSummaryCard(voucher = voucher, onClick = { onVoucherClick(voucher) })
+                    VoucherSummaryCard(
+                        voucher = voucher,
+                        onClick = { onVoucherClick(voucher) },
+                        outstandingPaise = outstandingByVoucherId[voucher.voucherId]
+                    )
                 }
             }
+        }
+        if (onScanDocument != null) {
+            FloatingActionButton(
+                onClick = { isScanPickerOpen = true },
+                modifier = Modifier.align(Alignment.BottomStart).padding(bottom = Spacing.lg - Spacing.xs, start = Spacing.lg - Spacing.xs)
+            ) { Icon(Icons.Default.DocumentScanner, contentDescription = "Scan Document") }
         }
         FloatingActionButton(
             onClick = onNew,

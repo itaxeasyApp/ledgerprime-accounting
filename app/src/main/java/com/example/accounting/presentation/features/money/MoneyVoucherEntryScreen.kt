@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -68,7 +69,7 @@ fun MoneyVoucherEntryScreen(
     ledgers: List<Ledger>,
     groups: List<com.example.accounting.domain.accounting.AccountGroup> = emptyList(),
     onBack: () -> Unit,
-    onSubmit: (VoucherType, LocalDate, debitLedgerId: String, creditLedgerId: String, amount: Money, narration: String, refNumber: String, applyRoundOff: Boolean) -> Unit,
+    onSubmit: (VoucherType, LocalDate, debitLedgerId: String, creditLedgerId: String, amount: Money, narration: String, refNumber: String, applyRoundOff: Boolean, paymentMode: String) -> Unit,
     /** Phase 7J UI fix: lets Receive Money/Pay Money open Customer/Supplier creation inline
      * instead of forcing the user back out to the Sales/Purchases tab first - reuses the same
      * `CreatePartyDialog` trigger every other screen already uses, never a second creation path.
@@ -82,8 +83,23 @@ fun MoneyVoucherEntryScreen(
     companyPayeeName: String = "",
     /** Opens the existing UPI Details screen so the user can add their own UPI ID when [companyUpiVpa] is blank. */
     onOpenUpiSettings: () -> Unit = {},
+    /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) -
+     * opens the Photo Picker with the type chosen from this screen's own compact Bank Statement/UPI
+     * Payment dialog already known. Null/hidden for Transfer, where neither scan is as relevant. */
+    onScanDocument: ((com.example.accounting.domain.ocr.OcrDocumentType) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    var isScanPickerOpen by remember { mutableStateOf(false) }
+    if (isScanPickerOpen && onScanDocument != null) {
+        com.example.accounting.presentation.components.ScanTypePickerDialog(
+            options = listOf(
+                "Bank Statement" to com.example.accounting.domain.ocr.OcrDocumentType.BANK_STATEMENT,
+                "UPI Payment" to com.example.accounting.domain.ocr.OcrDocumentType.UPI_PAYMENT
+            ),
+            onDismiss = { isScanPickerOpen = false },
+            onSelect = { type -> isScanPickerOpen = false; onScanDocument(type) }
+        )
+    }
     val title = when (voucherType) {
         VoucherType.RECEIPT -> "Receive Money"
         VoucherType.PAYMENT -> "Pay Money"
@@ -132,12 +148,34 @@ fun MoneyVoucherEntryScreen(
     var applyRoundOff by remember { mutableStateOf(false) }
     var cashBankExpanded by remember { mutableStateOf(false) }
     var counterpartyExpanded by remember { mutableStateOf(false) }
+    // Auto-detected payment mode (never asked twice): whether the QR was actually shown to the
+    // customer for this Receive Money entry - see [paymentMode] below.
+    var upiQrShown by remember { mutableStateOf(false) }
     // Post-safety fix - same local double-tap latch as CreateVoucherDialog's Post button.
     var isSubmitting by remember { mutableStateOf(false) }
 
     val amountMoney = remember(amountInput) { Money.parse(amountInput) }
     val roundOffPreview = remember(amountMoney, applyRoundOff) {
         if (applyRoundOff) RoundOffEngine.roundInvoiceTotal(amountMoney) else null
+    }
+
+    /**
+     * "automate ... received in bank or cash or via UPI" - derived purely from what the user
+     * already picked (which Cash/Bank ledger) plus whether they actually opened the "Get paid via
+     * UPI" QR for this entry, never asked as a separate question. A Cash-group ledger is always
+     * "CASH" (a UPI QR is meaningless there); a Bank-group ledger is "UPI" only if the QR was
+     * shown for this Receive Money, otherwise "BANK" (a plain transfer/cheque/card settlement).
+     */
+    val isCashBankLedgerCash = remember(cashBankLedgerId, cashBankLedgers, groupsById) {
+        cashBankLedgers.firstOrNull { it.ledgerId == cashBankLedgerId }?.let {
+            StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
+                StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
+        } ?: false
+    }
+    val paymentMode = when {
+        isCashBankLedgerCash -> "CASH"
+        voucherType == VoucherType.RECEIPT && upiQrShown -> "UPI"
+        else -> "BANK"
     }
 
     // Follow-up fix - a visible summary of what a Receive Payment scan actually found/applied
@@ -154,7 +192,12 @@ fun MoneyVoucherEntryScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
             Spacer(modifier = Modifier.width(Spacing.xs))
-            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            if (onScanDocument != null) {
+                IconButton(onClick = { isScanPickerOpen = true }) {
+                    Icon(Icons.Default.DocumentScanner, contentDescription = "Scan Document")
+                }
+            }
         }
         Spacer(modifier = Modifier.height(Spacing.md))
 
@@ -216,6 +259,8 @@ fun MoneyVoucherEntryScreen(
                 payeeName = companyPayeeName,
                 amount = amountMoney,
                 note = narration.ifBlank { refNumber },
+                expanded = upiQrShown,
+                onExpandedChange = { upiQrShown = it },
                 onOpenUpiSettings = onOpenUpiSettings
             )
             Spacer(modifier = Modifier.height(Spacing.md))
@@ -251,7 +296,7 @@ fun MoneyVoucherEntryScreen(
             onClick = onClick@{
                 if (isSubmitting) return@onClick
                 isSubmitting = true
-                onSubmit(voucherType, LocalDate.now(), debitLedgerId, creditLedgerId, amountMoney, narration, refNumber, applyRoundOff)
+                onSubmit(voucherType, LocalDate.now(), debitLedgerId, creditLedgerId, amountMoney, narration, refNumber, applyRoundOff, paymentMode)
             }
         )
     }
@@ -271,9 +316,12 @@ private fun UpiReceiveQrCard(
     payeeName: String,
     amount: Money,
     note: String,
+    /** Lifted (not local) - the parent derives the automatic CASH/BANK/UPI [paymentMode] off
+     * whether this was actually turned on, so the toggle state has to live above this card. */
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     onOpenUpiSettings: () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
     SectionCard(elevated = true) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -285,7 +333,7 @@ private fun UpiReceiveQrCard(
                 )
             }
             if (vpa.isNotBlank()) {
-                Switch(checked = expanded, onCheckedChange = { expanded = it })
+                Switch(checked = expanded, onCheckedChange = onExpandedChange)
             }
         }
         if (vpa.isBlank()) {

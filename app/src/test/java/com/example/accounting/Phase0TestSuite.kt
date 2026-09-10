@@ -210,10 +210,14 @@ class Phase0TestSuite {
         // PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/
         // country columns; Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId)
         // unique index; D1a: companies.gstOperatingMode column; D1b: gst_transactions.supplyNature/
-        // transactionGroupId/transactionDate/partyGstRegistrationStatus columns), backed by exactly
-        // eighteen explicit, non-destructive migrations - see testMigrationInfrastructure_ExplicitRegistry.
+        // transactionGroupId/transactionDate/partyGstRegistrationStatus columns; 5 Invoice PDF
+        // Templates: voucher_stock_lines.discountPaise column; GST Settings refactor:
+        // companies.gstReturnPeriodMonth/gstReturnPeriodQuarter columns; company-deletion foreign-
+        // key fix: stock_movements gains the missing companies CASCADE; Contacts + Favorites
+        // correction: parties.isFavorite column), backed by exactly twenty-eight explicit,
+        // non-destructive migrations - see testMigrationInfrastructure_ExplicitRegistry.
         assertNotNull(AppDatabase::class.java)
-        assertEquals(24, AppDatabase.ALL_MIGRATIONS.size)
+        assertEquals(28, AppDatabase.ALL_MIGRATIONS.size)
     }
 
     // ==========================================
@@ -223,7 +227,7 @@ class Phase0TestSuite {
     fun testMigrationInfrastructure_ExplicitRegistry() {
         val migrations = AppDatabase.ALL_MIGRATIONS
         assertNotNull("Explicit migrations array must be defined", migrations)
-        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column), and 24->25 (Phase 8A, Part 2: companies.gstr1ReminderEnabled column) are the only migrations registered so far", 24, migrations.size)
+        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column), 24->25 (Phase 8A, Part 2: companies.gstr1ReminderEnabled column), 25->26 (5 Invoice PDF Templates: voucher_stock_lines.discountPaise column), 26->27 (GST Settings refactor: companies.gstReturnPeriodMonth/gstReturnPeriodQuarter columns), 27->28 (company-deletion foreign-key fix: stock_movements gains the missing companies CASCADE), and 28->29 (Contacts + Favorites correction: parties.isFavorite column) are the only migrations registered so far", 28, migrations.size)
         assertEquals(1, migrations[0].startVersion)
         assertEquals(2, migrations[0].endVersion)
         assertEquals(2, migrations[1].startVersion)
@@ -272,6 +276,14 @@ class Phase0TestSuite {
         assertEquals(24, migrations[22].endVersion)
         assertEquals(24, migrations[23].startVersion)
         assertEquals(25, migrations[23].endVersion)
+        assertEquals(25, migrations[24].startVersion)
+        assertEquals(26, migrations[24].endVersion)
+        assertEquals(26, migrations[25].startVersion)
+        assertEquals(27, migrations[25].endVersion)
+        assertEquals(27, migrations[26].startVersion)
+        assertEquals(28, migrations[26].endVersion)
+        assertEquals(28, migrations[27].startVersion)
+        assertEquals(29, migrations[27].endVersion)
     }
 
     // ==========================================
@@ -402,10 +414,6 @@ class FakeAccountingDao : AccountingDao {
     override fun getAllCompanies(): Flow<List<CompanyEntity>> = flowOf(companies.values.toList())
 
     override suspend fun getCompanyById(companyId: String): CompanyEntity? = companies[companyId]
-
-    override suspend fun getDefaultCompany(): CompanyEntity? = companies.values.firstOrNull { it.isDefault }
-
-    override suspend fun getCompanyCount(): Int = companies.size
 
     override suspend fun getAllCompaniesSnapshot(): List<CompanyEntity> = companies.values.sortedBy { it.name }
 
@@ -551,10 +559,14 @@ class FakeAccountingDao : AccountingDao {
         vouchers.values.any { it.companyId == companyId && it.financialYearId == financialYearId && it.voucherNumber == voucherNumber }
 
     override fun getJournalItemsByVoucher(voucherId: String) = flowOf(journalItems.values.filter { it.voucherId == voucherId })
-    override fun getAllJournalItems(companyId: String, fyId: String) = flowOf(journalItems.values.filter { it.companyId == companyId && it.financialYearId == fyId })
-    override fun getAllJournalItemsForCompany(companyId: String) = flowOf(journalItems.values.filter { it.companyId == companyId })
+    // Soft-cancel fix - mirrors the real DAO's "NOT IN (SELECT voucherId FROM vouchers WHERE
+    // isCancelled = 1)" clause: a cancelled voucher's journal_items row is never deleted any more,
+    // so every cross-voucher aggregation must exclude it itself, exactly like the real query does.
+    private fun isLiveVoucher(voucherId: String) = vouchers[voucherId]?.isCancelled != true
+    override fun getAllJournalItems(companyId: String, fyId: String) = flowOf(journalItems.values.filter { it.companyId == companyId && it.financialYearId == fyId && isLiveVoucher(it.voucherId) })
+    override fun getAllJournalItemsForCompany(companyId: String) = flowOf(journalItems.values.filter { it.companyId == companyId && isLiveVoucher(it.voucherId) })
     override suspend fun getJournalItemsForVoucherSync(voucherId: String) = journalItems.values.filter { it.voucherId == voucherId }
-    override suspend fun getJournalItemsByLedger(companyId: String, ledgerId: String) = journalItems.values.filter { it.companyId == companyId && it.ledgerId == ledgerId }
+    override suspend fun getJournalItemsByLedger(companyId: String, ledgerId: String) = journalItems.values.filter { it.companyId == companyId && it.ledgerId == ledgerId && isLiveVoucher(it.voucherId) }
     override suspend fun insertJournalItems(items: List<com.example.accounting.data.local.entity.JournalItemEntity>) {
         items.forEach { journalItems[it.itemId] = it }
     }

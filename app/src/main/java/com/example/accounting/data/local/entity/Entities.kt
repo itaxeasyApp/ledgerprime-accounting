@@ -636,6 +636,7 @@ data class PartyEntity(
     val paymentTermsType: PaymentTermsType,
     val paymentTermsCustomDays: Int?,
     val isActive: Boolean,
+    val isFavorite: Boolean = false,
     val createdAt: Long,
     val updatedAt: Long
 )

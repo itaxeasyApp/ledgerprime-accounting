@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -190,6 +191,14 @@ private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (Strin
                 }
             }
         )
+        // Document-style header (explicit design instruction), same shape/data source as
+        // ReportsScreen.kt's tab-based reports - report name, Business/User Profile name,
+        // Financial Year, then a divider.
+        com.example.accounting.presentation.components.ReportDocumentHeader(
+            reportName = reportKey!!,
+            businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+            financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
+        )
         when (reportKey) {
             "Trial Balance" -> TrialBalanceView(report = uiState.trialBalance)
             "Profit & Loss" -> if (uiState.currentCompany?.businessType == BusinessType.SERVICE) {
@@ -300,6 +309,16 @@ private fun GstCategory(uiState: AccountingUiState, gstReturnActions: GstReturnD
                 else reportKey = null
             }
         )
+        // Document-style header only for the two static financial statements here - GST Return
+        // Dashboard is its own filing workflow screen, not a Particulars/totals report, so it
+        // keeps its existing layout untouched.
+        if (reportKey == "GST Summary" || reportKey == "HSN/SAC Summary") {
+            com.example.accounting.presentation.components.ReportDocumentHeader(
+                reportName = reportKey!!,
+                businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+                financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
+            )
+        }
         when (reportKey) {
             "GST Summary" -> GSTCenterView(report = uiState.gstSummary, trialBalance = uiState.trialBalance)
             "HSN/SAC Summary" -> HsnSacSummaryView(uiState.hsnSacSummary)
@@ -435,21 +454,48 @@ private fun AnalysisCategory(uiState: AccountingUiState) {
     }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         BackRow(reportKey!!, onBack = { reportKey = null })
-        if (reportKey == "Ratio Analysis") RatioAnalysisView(uiState.ratioAnalysisReport)
+        if (reportKey == "Ratio Analysis") {
+            com.example.accounting.presentation.components.ReportDocumentHeader(
+                reportName = reportKey!!,
+                businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+                financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
+            )
+            RatioAnalysisView(uiState.ratioAnalysisReport)
+        }
     }
 }
 
 @Composable
 private fun RatioAnalysisView(report: RatioAnalysisReport?) {
     if (report == null) { EmptyReportState(); return }
+    // Phase 7J Reports integration - a small colored health dot next to each existing TableRow
+    // (RatioStatus, from ReportUiModels.kt), never a redesign of TableRow itself (a shared
+    // primitive other reports also use) or of this screen's layout - same rows, same order, same
+    // low-density spacing, one additive visual cue per row.
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-        item { TableRow("Current Ratio", "%.2f".format(report.currentRatio)) }
-        item { TableRow("Quick Ratio", "%.2f".format(report.quickRatio)) }
-        item { TableRow("Debt-Equity Ratio", "%.2f".format(report.debtEquityRatio)) }
-        item { TableRow("Gross Profit Ratio", "%.2f%%".format(report.grossProfitRatioPercent)) }
-        item { TableRow("Net Profit Ratio", "%.2f%%".format(report.netProfitRatioPercent)) }
-        item { TableRow("Operating Ratio", "%.2f%%".format(report.operatingRatioPercent)) }
-        item { TableRow("Return on Capital Employed", "%.2f%%".format(report.returnOnCapitalEmployedPercent)) }
+        item { RatioTableRow("Current Ratio", "%.2f".format(report.currentRatio), report.currentRatioStatus) }
+        item { RatioTableRow("Quick Ratio", "%.2f".format(report.quickRatio), report.quickRatioStatus) }
+        item { RatioTableRow("Debt-Equity Ratio", "%.2f".format(report.debtEquityRatio), report.debtEquityRatioStatus) }
+        item { RatioTableRow("Gross Profit Ratio", "%.2f%%".format(report.grossProfitRatioPercent), report.grossProfitRatioStatus) }
+        item { RatioTableRow("Net Profit Ratio", "%.2f%%".format(report.netProfitRatioPercent), report.netProfitRatioStatus) }
+        item { RatioTableRow("Operating Ratio", "%.2f%%".format(report.operatingRatioPercent), report.operatingRatioStatus) }
+        item { RatioTableRow("Return on Capital Employed", "%.2f%%".format(report.returnOnCapitalEmployedPercent), report.returnOnCapitalEmployedStatus) }
+    }
+}
+
+@Composable
+private fun RatioTableRow(label: String, value: String, status: com.example.accounting.presentation.features.reports.RatioStatus) {
+    val dotColor = when (status) {
+        com.example.accounting.presentation.features.reports.RatioStatus.HEALTHY -> androidx.compose.ui.graphics.Color(0xFF2E7D32)
+        com.example.accounting.presentation.features.reports.RatioStatus.WARNING -> androidx.compose.ui.graphics.Color(0xFFF57C00)
+        com.example.accounting.presentation.features.reports.RatioStatus.CRITICAL -> MaterialTheme.colorScheme.error
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.size(8.dp)) {
+            drawCircle(color = dotColor)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        TableRow(label, value, modifier = Modifier.weight(1f))
     }
 }
 

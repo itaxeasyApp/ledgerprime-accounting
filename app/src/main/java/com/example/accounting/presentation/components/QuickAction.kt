@@ -1,5 +1,6 @@
 package com.example.accounting.presentation.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,7 +16,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -42,19 +42,29 @@ fun QuickAction(
     onClick: () -> Unit
 ) {
     Surface(
-        shape = Radius.shapeMd,
+        // Radius.shapeLg (14dp), same as StatCard/the Dashboard's "Reports" card - explicit
+        // follow-up ("dashboard container are not similar"): every Dashboard container now shares
+        // one corner radius and one border treatment, not three independently-tuned looks.
+        shape = Radius.shapeLg,
         color = containerColor,
-        modifier = modifier.clip(Radius.shapeMd).clickable { onClick() }
+        // A low-alpha dark stroke, not a fixed theme token - this app's `colorScheme.outline`
+        // (`PurpleGrayOutline`, #C9C2D6) is a pale lavender-gray that visually disappears against
+        // these same-toned pastel container colors (confirmed live on-device: no visible ring on
+        // any tile with either `outline` or `outlineVariant`). onSurface at low alpha stays a
+        // visible dark ring against every one of this row's colors, not just the near-white ones -
+        // the same [DashboardCardBorder] token StatCard/the Reports card now also use.
+        border = DashboardCardBorder(),
+        modifier = modifier.clickable { onClick() }
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp),
+            modifier = Modifier.padding(vertical = 16.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(imageVector = icon, contentDescription = title, tint = contentColor, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.height(6.dp))
+            Icon(imageVector = icon, contentDescription = title, tint = contentColor, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = title,
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
                 color = contentColor,
                 textAlign = TextAlign.Center,
                 maxLines = 2

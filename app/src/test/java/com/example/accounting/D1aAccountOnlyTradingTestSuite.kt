@@ -482,11 +482,13 @@ class D1aAccountOnlyTradingTestSuite {
 
         VoucherPostingEngine.cancel(dao, companyId, fyId, "V20", "IK_V20_CANCEL", "TESTER")
 
-        // Real cancellation (explicit correction): a voucher not yet reported to the government is
-        // genuinely deleted, never left as a same-voucher offsetting entry - so its GST
-        // transactions are gone outright, not netted to zero via a compensating row.
+        // Auditable soft-cancel (Step 3 live-device fix): the voucher's GST transaction rows are
+        // never deleted - the voucher itself is merely flagged isCancelled, so its own detail view
+        // still shows real GST history. Cross-voucher GST report/summary/export queries exclude a
+        // cancelled voucher's rows themselves (see AccountingDao.getGstTransactionsForCompanyFY's
+        // own comment) - this single-voucher lookup is intentionally unfiltered.
         val afterCancel = dao.getGstTransactionsForVoucher("V20")
-        assertEquals("Cancellation must delete the original GST transaction(s) outright", 0, afterCancel.size)
+        assertEquals("Cancellation must never delete the original GST transaction(s)", 1, afterCancel.size)
     }
 
     // ==========================================

@@ -229,27 +229,42 @@ internal object VoucherPostingEngine {
     }
 
     /**
-     * Real cancellation (explicit correction, not the earlier "Rule 12 compensating reversal"
-     * design): per actual Indian accounting/GST practice, a voucher whose period has never been
-     * reported to the government is genuinely cancelled/deleted - never left visible alongside a
-     * same-voucher offsetting entry (that made a single cancelled "Sale Invoice" show both its
-     * original lines AND a reversal of itself, which is not a real transaction and confused the
-     * voucher's own detail view). [AccountingRepository.deleteVoucherSafely] already blocks this
-     * whole function from ever running once the voucher's period has a PROCESSING/FILED GST return
-     * - the only correct correction past that point is a real, separate Credit/Debit Note.
+     * Auditable soft-cancellation (Step 3 device-testing fix - reverts a prior "real
+     * cancellation"/hard-delete pass that silently broke three things at once: (a) a cancelled
+     * voucher's own number became free for [AccountingRepository.generateNextVoucherNumber]'s
+     * plain COUNT(*) to hand straight back out to the very next voucher of that type - live-
+     * reproduced on device: correcting Receipt RCT-2026-0002 posted its replacement as ANOTHER
+     * "RCT-2026-0002", two different real transactions sharing one number; (b) every place already
+     * built to show a cancelled voucher - [VoucherDetailDialog]'s own "CANCELLED" badge, its
+     * `correctedByVoucher`/`correctsOriginal` links, the Day Book's CANCELLED status - went
+     * permanently unreachable, since the row it depends on no longer existed; (c) the
+     * already-declared, already-correct [AccountingDao.cancelVoucher] soft-flag method sat
+     * completely unused. None of that was a real "never leave a same-voucher offsetting entry
+     * visible" problem (the actual, valid complaint about the still-earlier "Rule 12" design this
+     * hard-delete itself replaced) - this restores the flag-and-keep approach WITHOUT reintroducing
+     * that: no offsetting/reversal JournalItem is ever inserted anywhere, on this voucher or any
+     * other; a cancelled voucher's own detail view still shows only its one original set of lines,
+     * now with a CANCELLED badge instead of no longer existing at all.
+     * [AccountingRepository.deleteVoucherSafely] already blocks this whole function from ever
+     * running once the voucher's period has a PROCESSING/FILED GST return - the only correct
+     * correction past that point is a real, separate Credit/Debit Note.
      * 0. Idempotent replay guard.
      * 1. Reverses ledger balance mutations using the same delta helper as posting (this math is
      *    unchanged from the old design - only proven-correct here, nothing new).
-     * 2. Deletes the original Journal Items and GST transactions outright (never a same-voucher
-     *    offsetting entry).
-     * 3. Deletes the voucher row itself.
-     * 4. Appends Audit Log (CANCEL_VOUCHER) - the real audit trail lives here, not in fabricated
-     *    day-book entries.
-     * 5. Enqueues Outbox deletion entry.
+     * 2. Journal Items and GST transactions are left exactly as posted - never deleted, never
+     *    offset by a new row - so the voucher's own detail view keeps showing real history. Every
+     *    report/summary query that aggregates ACROSS vouchers (Trial Balance, P&L, Balance Sheet,
+     *    Ledger Statement, GST Summary/GSTR/export) now excludes a cancelled voucher's rows itself
+     *    at the DAO level (see [AccountingDao.getAllJournalItems]'s own comment) - so a cancellation
+     *    still nets to zero everywhere it's supposed to, without erasing the rows themselves.
+     * 3. Soft-cancels the voucher row via the existing [AccountingDao.cancelVoucher] (`isCancelled
+     *    = 1`) - never a delete. `generateNextVoucherNumber`'s COUNT(*) now correctly keeps counting
+     *    it, so its number can never be reissued to a different voucher.
+     * 4. Appends Audit Log (CANCEL_VOUCHER) - a second, independent record of the same fact; the
+     *    voucher row itself remains the primary one now that it isn't deleted.
+     * 5. Enqueues Outbox deletion entry (sync-only concept; the local row itself is untouched).
      * Stock movements (Phase 4, inventory-tracked vouchers only) still use their own existing
-     * compensating-reversal path below (step 6) - reversing average-cost history safely on a true
-     * delete is a materially different, higher-risk problem than reversing a ledger balance, and is
-     * deliberately out of scope for this pass.
+     * compensating-reversal path below (step 6) - unrelated to this change.
      */
     suspend fun cancel(
         dao: AccountingDao,
@@ -267,6 +282,15 @@ internal object VoucherPostingEngine {
         val voucher = dao.getVoucherById(companyId, voucherId)
             ?: throw IllegalArgumentException("Voucher $voucherId not found")
 
+        // Soft-cancel fix - the old hard-delete design got double-cancellation rejection "for
+        // free" (a deleted row can never be found again, so the lookup above threw "not found").
+        // Now that the row persists, that same protection must be explicit: without this guard, a
+        // second cancel call (a genuinely different idempotency key, so the replay guard above
+        // doesn't already catch it) would reverse this voucher's ledger balances a second time.
+        if (voucher.isCancelled) {
+            throw IllegalArgumentException("Voucher $voucherId is already cancelled")
+        }
+
         val originalItems = dao.getJournalItemsForVoucherSync(voucherId)
 
         // 1. Reverse ledger balances - same math as the old design, just never re-inserted as a
@@ -280,17 +304,16 @@ internal object VoucherPostingEngine {
             }
         }
 
-        // 2. Delete the original Journal Items and GST transactions outright - the whole point is
-        // that nothing about this voucher remains visible anywhere once it's gone.
-        dao.deleteJournalItemsByVoucher(voucherId)
-        dao.deleteGstTransactionsByVoucher(voucherId)
+        // 2. Journal Items and GST transactions are left exactly as posted - see this function's
+        // own KDoc for why (audit trail + report-query filtering, not a same-voucher offsetting
+        // entry).
 
-        // 3. Delete the voucher row itself - a genuine delete, not an isCancelled flag on a row
-        // that still shows up everywhere.
-        dao.deleteVoucher(companyId, voucherId)
+        // 3. Soft-cancel the voucher row via the existing isCancelled flag - never a delete, so its
+        // number can never be reissued and its own detail view can still show it (CANCELLED badge).
+        dao.cancelVoucher(companyId, voucherId, System.currentTimeMillis())
 
-        // 4. Audit Log - the real record that this happened, since the voucher/journal rows
-        // themselves are now gone rather than left behind as a visible trail.
+        // 4. Audit Log - a second, independent record of the same fact; the voucher row itself
+        // (now merely flagged, not gone) remains the primary audit trail.
         dao.insertAuditLog(
             AuditLogEntity(
                 logId = UUID.randomUUID().toString(),
@@ -299,7 +322,7 @@ internal object VoucherPostingEngine {
                 action = AuditAction.CANCEL_VOUCHER,
                 entityType = "VOUCHER",
                 entityId = voucherId,
-                description = "Deleted voucher ${voucher.voucherNumber} (${originalItems.size} journal line(s) removed, ledger balances reversed)",
+                description = "Cancelled voucher ${voucher.voucherNumber} (${originalItems.size} journal line(s) reversed, history preserved)",
                 performedBy = userId,
                 timestamp = System.currentTimeMillis(),
                 payloadJson = "{\"voucherId\":\"$voucherId\",\"idempotencyKey\":\"$idempotencyKey\"}"

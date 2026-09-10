@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,12 +35,14 @@ import com.example.accounting.presentation.components.SectionCard
 
 /**
  * Phase 7J UI: Customer or Supplier list, reached from the Sales/Purchases tabs (never its own
- * bottom-nav item, per the UX spec's 5-item nav). Read-only view + create for Party-specific
- * fields (credit limit/payment terms/contact name - no `updateParty` exists anywhere in the frozen
- * 7J-B service layer, and that stays true here). Architecture correction: GSTIN/phone/address/
- * opening-balance all live on the underlying Ledger, not the Party record, so [onEditLedger]
- * (when provided) opens the existing generic ledger-edit flow for that party's ledger - a
- * different, already-correct path that was simply never reachable from this screen before.
+ * bottom-nav item, per the UX spec's 5-item nav). Read-only view + create for most Party-specific
+ * fields (credit limit/payment terms/contact name - still no general-purpose `updateParty` UI);
+ * [Party.isFavorite] is the one exception (Contacts + Favorites correction,
+ * docs/CORRECTIONS_LOG.md), via the real, persisted [onToggleFavorite]. Architecture correction:
+ * GSTIN/phone/address/opening-balance all live on the underlying Ledger, not the Party record, so
+ * [onEditLedger] (when provided) opens the existing generic ledger-edit flow for that party's
+ * ledger - a different, already-correct path that was simply never reachable from this screen
+ * before.
  */
 @Composable
 fun PartiesScreen(
@@ -48,10 +52,13 @@ fun PartiesScreen(
     onAddParty: () -> Unit,
     onPartyClick: (Party) -> Unit,
     onEditLedger: ((Ledger) -> Unit)? = null,
+    onToggleFavorite: (Party) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val roleLabel = if (role == PartyRole.CUSTOMER) "Customers" else "Suppliers"
-    val filtered = parties.filter { it.role == role && it.isActive }
+    // Favorites first (stable sort - ties keep their original relative order), so a starred
+    // Customer/Supplier never gets lost in a long list.
+    val filtered = parties.filter { it.role == role && it.isActive }.sortedByDescending { it.isFavorite }
     val ledgersMap = ledgers.associateBy { it.ledgerId }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -82,6 +89,13 @@ fun PartiesScreen(
                         onClick = { onPartyClick(party) },
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onToggleFavorite(party) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(
+                                        if (party.isFavorite) Icons.Default.Star else Icons.Outlined.StarOutline,
+                                        contentDescription = if (party.isFavorite) "Unmark favorite" else "Mark favorite",
+                                        tint = if (party.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                                 Text(
                                     text = ledger?.currentBalance?.formatPlain() ?: "--",
                                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)

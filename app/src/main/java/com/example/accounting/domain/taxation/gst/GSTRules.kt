@@ -9,6 +9,17 @@ enum class SupplyType {
     EXEMPT
 }
 
+/**
+ * Whether an entered line amount already includes GST (Inclusive) or excludes it (Exclusive,
+ * every existing caller before this field existed). This is the ONE place the distinction is
+ * resolved into a taxable value - see [GSTRules.extractTaxableFromInclusive] - so
+ * UI live-preview, [com.example.accounting.domain.trading.TradingWorkflowEngine] posting, Room
+ * persistence, and PDF rendering all read the same already-computed [TaxBreakdown]/
+ * [com.example.accounting.domain.taxation.gst.GstTransaction] figures rather than each
+ * re-deriving taxable-vs-inclusive themselves.
+ */
+enum class GstPricingMode { EXCLUSIVE, INCLUSIVE }
+
 data class TaxBreakdown(
     val taxableAmount: Money,
     val taxRatePercent: Double,
@@ -92,6 +103,22 @@ object GSTRules {
                 )
             }
         }
+    }
+
+    /**
+     * `Taxable Amount = Inclusive Amount x 100 / (100 + GST Rate)`, `GST = Inclusive - Taxable`
+     * (the latter is just subtraction at the call site, never a second formula). Rounds to the
+     * nearest paisa with HALF_EVEN, the same convention [Money.percentage] already uses - so an
+     * inclusive-mode line and an exclusive-mode line at the same net rate settle to the same
+     * paisa via two different, individually-exact paths, never silently drifting apart. A 0%
+     * rate has nothing to extract - the inclusive amount already equals the taxable amount.
+     */
+    fun extractTaxableFromInclusive(inclusiveAmount: Money, gstRatePercent: Double): Money {
+        if (gstRatePercent <= 0.0) return inclusiveAmount
+        val divisor = java.math.BigDecimal.valueOf(100.0 + gstRatePercent)
+        val numerator = java.math.BigDecimal(inclusiveAmount.paise).multiply(java.math.BigDecimal.valueOf(100.0))
+        val taxablePaise = numerator.divide(divisor, 0, java.math.RoundingMode.HALF_EVEN).toLong()
+        return Money.fromPaise(taxablePaise)
     }
 
     fun isValidGSTIN(gstin: String): Boolean {

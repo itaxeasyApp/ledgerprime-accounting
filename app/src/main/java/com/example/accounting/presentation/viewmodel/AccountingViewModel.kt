@@ -55,6 +55,7 @@ import com.example.accounting.domain.financialyear.AccountingPeriod
 import com.example.accounting.domain.financialyear.FinancialYear
 import com.example.accounting.domain.inventory.StockItem
 import com.example.accounting.domain.invoice.Invoice
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.ocr.OcrExtractionResult
 import com.example.accounting.domain.party.Party
 import com.example.accounting.domain.party.PartyEntityType
@@ -136,6 +137,12 @@ data class AccountingUiState(
     val groups: List<AccountGroup> = emptyList(),
     val ledgers: List<Ledger> = emptyList(),
     val vouchers: List<Voucher> = emptyList(),
+    /** Payment-status badge (Sales/Purchase list, Voucher detail) - outstanding paise per Sale/
+     * Purchase voucherId, composed from the same frozen `computeOutstandingPaise` the Outstanding
+     * report already uses via [AccountingRepository.getOutstandingPaiseForVoucher]. Refreshed
+     * alongside [vouchers]; absent entries (a non-trading voucher, or not yet computed) simply
+     * don't show a badge - see [InvoiceStatusEngine]. */
+    val outstandingByVoucherId: Map<String, Long> = emptyMap(),
     val auditLogs: List<AuditLog> = emptyList(),
     val outboxQueue: List<OutboxSyncEntity> = emptyList(),
     val pendingSyncCount: Int = 0,
@@ -190,6 +197,27 @@ data class AccountingUiState(
     val lastOcrExtraction: OcrExtractionResult? = null,
     val lastBarcodeGeneration: BarcodeGenerationResult? = null,
     val lastBarcodeScan: BarcodeScanSuggestion? = null,
+
+    // ==== "5 Invoice PDF Templates" - Invoice Preview ====
+    /** Non-null while the Invoice Preview screen is open - see [AccountingViewModel.loadInvoicePreview]. */
+    val invoicePreviewData: com.example.accounting.domain.rendering.DocumentData? = null,
+    /** The 5 built-in presets (seeded on first open) plus any of the company's own custom
+     * templates for this document type - see [AccountingRepository.ensureBuiltinInvoiceTemplatesSeeded]. */
+    val invoicePreviewTemplates: List<com.example.accounting.domain.rendering.DocumentTemplate> = emptyList(),
+    /** The template currently being previewed - starts at the company's resolved default, changes
+     * only in-memory as the user taps a different template card, until they explicitly tap "Set as
+     * Default" ([setInvoiceTemplateAsDefault]). */
+    val invoicePreviewSelectedTemplateId: String? = null,
+    val invoicePreviewError: String? = null,
+
+    // ==== Product correction ("THIS APPLICATION IS NOT AN ERP") - VoucherDetailDialog's default
+    // plain-business-Bill view, never Dr/Cr. Non-null while that dialog is open for a Sale/Purchase
+    // voucher whose item-level data assembled successfully - see [AccountingViewModel.loadVoucherBillDetails]. ====
+    val voucherBillDocumentData: com.example.accounting.domain.rendering.DocumentData? = null,
+    /** Fallback bill summary (party/GST/total with no item breakdown) - populated whenever
+     * [voucherBillDocumentData] isn't applicable (account-only Sale/Purchase, or any non-trading
+     * voucher type). Both are cleared together when the dialog closes. */
+    val voucherBillSummary: com.example.accounting.domain.accounting.VoucherBillSummary? = null,
 
     // ==== Rule 33: GST Return Dashboard & Filing Foundation ====
     val gstReturns: List<GstReturn> = emptyList(),
@@ -282,9 +310,17 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     private val businessProfessionService = BusinessProfessionService()
     private val dataImportService = DataImportManagementService(CsvJsonDataImportAdapter(db.accountingDao()), repository)
     private val qrBarcodeService = QrBarcodeManagementService(repository, ZxingQrBarcodeAdapter(db.accountingDao()))
-    // OcrIngestionAdapter is deliberately left unimplemented (Phase 7J-B) - null adapter here
-    // means requestExtraction always fails gracefully, never a crash. Not a bug to fix.
-    private val ocrService = OcrSuggestionService(null, db.accountingDao())
+    // Document/Image Scan feature - real, on-device ML Kit adapter (see MlKitOcrAdapter's own
+    // KDoc for why ML Kit over Firebase AI/Gemini). Wrapped in FallbackOcrAdapter with `secondary
+    // = null` for now - a future second OCR engine (e.g. a server-side adapter) slots in here as
+    // a one-line change, with zero change to OcrSuggestionService or anything above it.
+    private val ocrService = OcrSuggestionService(
+        com.example.accounting.domain.ocr.FallbackOcrAdapter(
+            primary = com.example.accounting.data.ocr.MlKitOcrAdapter(db.accountingDao()),
+            secondary = null
+        ),
+        db.accountingDao()
+    )
     private val gstReturnService = GstReturnManagementService(repository)
     // The one deliberate offline-first exception (domain/profile/PinCodeLookup.kt's own doc
     // comment) - a real, public, unauthenticated third-party API, never mocked/faked.
@@ -296,6 +332,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     // results are cached - a failed/offline lookup is never remembered as "no address found",
     // since a later retry with connectivity back should get a real answer.
     private val pinCodeLookupCache = mutableMapOf<String, com.example.accounting.domain.profile.PinCodeLookupResult>()
+    private var pinCodeRequestSeq = 0L
 
     private val _uiState = MutableStateFlow(AccountingUiState(isCloudSyncLoggedIn = authRepository.isLoggedIn()))
     val uiState: StateFlow<AccountingUiState> = _uiState.asStateFlow()
@@ -310,7 +347,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     init {
         // No auto-seeded default company (removed - see AccountingRepository.seedInitialDataForCompany's
         // own doc): a fresh install starts with zero companies, exactly as loadCompaniesAndInitialData
-        // already handles (currentCompany stays null; AppTopBar renders "Select Company").
+        // already handles (currentCompany stays null; AppTopBar renders "My Business").
         viewModelScope.launch {
             loadCompaniesAndInitialData()
         }
@@ -504,8 +541,32 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 repository.getVouchers(companyId, fyId).collect { vouchersList ->
                     _uiState.update { it.copy(vouchers = vouchersList, isLoading = false) }
                     refreshFinancialReports()
+                    refreshOutstandingByVoucher(companyId, vouchersList)
                 }
             }
+        }
+    }
+
+    /** Payment-status badge data (Sales/Purchase list, Voucher detail) - one outstanding-paise
+     * lookup per live Sale/Purchase, reusing [AccountingRepository.getOutstandingPaiseForVoucher]
+     * (itself the same frozen `computeOutstandingPaise` the Outstanding report already uses).
+     * Cancelled vouchers are skipped (nothing to settle); everything else keeps whatever value it
+     * last had if this fails, rather than blanking the whole map for one bad lookup. */
+    private var outstandingRefreshJob: kotlinx.coroutines.Job? = null
+    private fun refreshOutstandingByVoucher(companyId: String, vouchers: List<Voucher>) {
+        outstandingRefreshJob?.cancel()
+        val tradingVouchers = vouchers.filter {
+            (it.voucherType == VoucherType.SALES || it.voucherType == VoucherType.PURCHASE) && !it.isCancelled
+        }
+        if (tradingVouchers.isEmpty()) {
+            _uiState.update { it.copy(outstandingByVoucherId = emptyMap()) }
+            return
+        }
+        outstandingRefreshJob = viewModelScope.launch {
+            val result = tradingVouchers.mapNotNull { voucher ->
+                repository.getOutstandingPaiseForVoucher(companyId, voucher.voucherId)?.let { voucher.voucherId to it }
+            }.toMap()
+            _uiState.update { it.copy(outstandingByVoucherId = result) }
         }
     }
 
@@ -581,10 +642,12 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(searchQuery = query) }
     }
 
+    /** Single-business app - this only has one real caller now (createCompany, right after a
+     * successful create), never a user-facing "switch between businesses" action; no message of
+     * its own since the caller already announces what happened ("Created company '...'"). */
     fun switchCompany(company: Company) {
         _uiState.update { it.copy(currentCompany = company, isLoading = true) }
         observeCompanyData(company.companyId)
-        emitMessage("Switched active company context to: ${company.name}")
         // Persist so app cold-start reopens this company instead of falling back to alphabetical
         // order (see AccountingRepository.setDefaultCompany) - fire-and-forget, never blocks the
         // UI switch above and never worth surfacing a failure toast for.
@@ -705,9 +768,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val result = repository.createCompany(newCompany)
             if (result is AccountingResult.Success) {
                 switchCompany(newCompany)
-                emitMessage("Created company '${newCompany.name}' with isolated Chart of Accounts")
+                emitMessage("Your business '${newCompany.name}' is set up and ready")
+                // Real gap fix (docs/CORRECTIONS_LOG.md, user report: "its not taking auto Business
+                // setup wizard") - a brand-new business previously landed on the Dashboard with no
+                // guided next step; now continues straight into the same Business Setup Wizard
+                // reachable from Profile & Business Setup, never a second/different flow.
+                navigateTo(AppRoute.ProfileWizard)
             } else {
-                emitMessage("Error creating company: ${result.errorOrNull()?.message}")
+                emitMessage("Error setting up your business: ${result.errorOrNull()?.message}")
             }
         }
     }
@@ -737,26 +805,26 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             )
             val result = repository.updateCompany(updated)
             if (result is AccountingResult.Success) {
-                emitMessage("Updated company '${updated.name}'")
+                emitMessage("Business details updated")
             } else {
-                emitMessage("Error updating company: ${result.errorOrNull()?.message}")
+                emitMessage("Error updating your business: ${result.errorOrNull()?.message}")
             }
         }
     }
 
-    /** Full Company CRUD - Delete. See [AccountingRepository.deleteCompany] for the cascade
-     * mechanics. `companies`/`currentCompany` self-heal via `loadCompaniesAndInitialData`'s live
-     * Flow collector once this returns: it already falls back to another company whenever the
-     * previously-current `companyId` no longer appears in the fresh list, so no manual
-     * `switchCompany` call is needed here even when deleting the currently active company. */
+    /** Delete My Business. See [AccountingRepository.deleteCompany] for the cascade mechanics.
+     * `currentCompany` self-heals to null via `loadCompaniesAndInitialData`'s live Flow collector
+     * once this returns (the deleted `companyId` no longer appears in the fresh, now-empty list) -
+     * MainAppScreen already renders the Dashboard with a "Set Up My Business" prompt for that
+     * state, so no manual follow-up navigation is needed here. */
     fun deleteCompany(companyId: String) {
         viewModelScope.launch {
             val target = _uiState.value.companies.find { it.companyId == companyId } ?: return@launch
             val result = repository.deleteCompany(companyId)
             if (result is AccountingResult.Success) {
-                emitMessage("Deleted company '${target.name}' and all its data")
+                emitMessage("Deleted '${target.name}' and all its data")
             } else {
-                emitMessage("Error deleting company: ${result.errorOrNull()?.message}")
+                emitMessage("Error deleting your business: ${result.errorOrNull()?.message}")
             }
         }
     }
@@ -818,7 +886,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         pinCode: String = ""
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val ledger = Ledger(
                 ledgerId = "LED_${UUID.randomUUID().toString().take(8).uppercase()}_${comp.companyId}",
                 companyId = comp.companyId,
@@ -880,7 +948,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         pinCode: String = ""
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val ledger = Ledger(
                 ledgerId = ledgerId,
                 companyId = comp.companyId,
@@ -918,7 +986,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * never a separately-chosen one, so the hierarchy can never end up internally inconsistent. */
     fun createGroup(name: String, parentGroupId: String) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val parent = _uiState.value.groups.firstOrNull { it.groupId == parentGroupId }
             if (parent == null) {
                 emitMessage("Select a parent group.")
@@ -1186,7 +1254,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         amount: Money,
         narration: String,
         refNumber: String = "",
-        applyRoundOff: Boolean = false
+        applyRoundOff: Boolean = false,
+        paymentMode: String = ""
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1205,7 +1274,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             } else null
 
             if (roundOff == null || roundOff.roundOffAmount.paise == 0L) {
-                postQuickVoucher(voucherType, date, debitLedgerId, creditLedgerId, amount, narration, refNumber)
+                postQuickVoucher(voucherType, date, debitLedgerId, creditLedgerId, amount, narration, refNumber, paymentMode)
                 return@launch
             }
 
@@ -1237,7 +1306,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val voucher = Voucher(
                 voucherId = voucherId, companyId = comp.companyId, financialYearId = fy.financialYearId,
                 voucherNumber = voucherNumber, voucherType = voucherType, date = date, referenceNumber = refNumber,
-                narration = narration, totalAmount = roundOff.roundedTotal, items = items, createdBy = "SENIOR_ACCOUNTANT"
+                narration = narration, totalAmount = roundOff.roundedTotal, items = items, createdBy = "SENIOR_ACCOUNTANT",
+                paymentMode = paymentMode
             )
 
             when (val result = repository.postVoucher(voucher)) {
@@ -1274,7 +1344,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         val supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
         /** Rule 31 (Purchase/RCM Foundation) - defaults to FORWARD_CHARGE, matching every line's
          * behavior before this field existed. Only meaningful on a Purchase line. */
-        val chargeType: com.example.accounting.domain.taxation.gst.GstChargeType = com.example.accounting.domain.taxation.gst.GstChargeType.FORWARD_CHARGE
+        val chargeType: com.example.accounting.domain.taxation.gst.GstChargeType = com.example.accounting.domain.taxation.gst.GstChargeType.FORWARD_CHARGE,
+        /** Trade discount % on this line - reduces the taxable value before GST, see
+         * [com.example.accounting.domain.trading.TradingLineInput.discountPercent]. Defaults to
+         * 0.0, matching every line's behavior before this field existed. */
+        val discountPercent: Double = 0.0
     )
 
     fun postSaleInvoice(
@@ -1283,10 +1357,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         lines: List<TradingLineForm>,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE
     ) = postTradingDocument(
         isSale = true, partyLedgerId = customerLedgerId, tradeLedgerId = salesLedgerId,
-        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration
+        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration, pricingMode = pricingMode
     )
 
     fun postPurchaseBill(
@@ -1295,10 +1370,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         lines: List<TradingLineForm>,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE
     ) = postTradingDocument(
         isSale = false, partyLedgerId = supplierLedgerId, tradeLedgerId = purchaseLedgerId,
-        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration
+        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration, pricingMode = pricingMode
     )
 
     /**
@@ -1314,7 +1390,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         lines: List<TradingLineForm>,
         date: LocalDate,
         referenceNumber: String,
-        narration: String
+        narration: String,
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1356,7 +1433,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     itemId = item.itemId, itemName = item.name, hsnSacCode = item.hsnCode,
                     quantity = com.example.accounting.core.common.Quantity.fromDouble(line.quantity, item.unit),
                     rate = line.rate, gstRatePercent = item.gstRatePercent, supplyNature = line.supplyNature,
-                    chargeType = line.chargeType
+                    chargeType = line.chargeType, discountPercent = line.discountPercent
                 )
             }
 
@@ -1385,7 +1462,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     salesLedgerId = tradeLedgerId, salesLedgerName = tradeLedger.name,
                     companyStateCode = comp.stateCode, placeOfSupply = placeOfSupply,
                     lines = tradingLines, gstLedgers = gstLedgers,
-                    roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name
+                    roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
+                    pricingMode = pricingMode
                 )
             } else {
                 TradingWorkflowEngine.buildPurchase(
@@ -1394,7 +1472,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     purchaseLedgerId = tradeLedgerId, purchaseLedgerName = tradeLedger.name,
                     companyStateCode = comp.stateCode, placeOfSupply = placeOfSupply,
                     lines = tradingLines, gstLedgers = gstLedgers,
-                    roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name
+                    roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
+                    pricingMode = pricingMode
                 )
             }
 
@@ -1918,6 +1997,19 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Contacts + Favorites correction (docs/CORRECTIONS_LOG.md) - real, persisted toggle, never a
+     * UI-only star. Parties are reloaded via the existing `getParties` Flow this ViewModel already
+     * collects, so no manual `_uiState` patch is needed here. */
+    fun toggleFavoriteParty(partyId: String) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            when (val result = repository.toggleFavoriteParty(comp.companyId, partyId)) {
+                is AccountingResult.Failure -> emitMessage("Failed: ${result.error.message}")
+                is AccountingResult.Success -> {}
+            }
+        }
+    }
+
     // ---- Cash/Bank/UPI ----
 
     fun createBankUpiProfile(
@@ -2222,7 +2314,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         pinCode: String? = null, city: String? = null, state: String? = null, country: String? = null
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            // Real bug fix (docs/CORRECTIONS_LOG.md, user report: "Business profile is not
+            // working not saving too") - this used to silently no-op with zero feedback when no
+            // business existed yet, which looked identical to "the Save button is broken."
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val base = _uiState.value.businessProfile ?: BusinessProfile(businessProfileId = "", companyId = comp.companyId, businessName = businessName)
             val profile = base.copy(
                 businessName = businessName, legalName = legalName, address = address, phone = phone, email = email, gstin = gstin, pan = pan,
@@ -2250,7 +2345,11 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         termsAndConditions: String
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            // Real bug fix (docs/CORRECTIONS_LOG.md, user report: "not taking auto Business setup
+            // wizard") - same silent-no-op issue as [updateBusinessProfile] above, plus this
+            // function previously gave no feedback even on a real success, making every "Next"/
+            // "Finish" tap in the wizard look like it did nothing.
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val base = _uiState.value.businessProfile ?: BusinessProfile(businessProfileId = "", companyId = comp.companyId, businessName = businessName)
             val profile = base.copy(
                 businessName = businessName, legalName = legalName, constitutionType = constitutionType,
@@ -2261,7 +2360,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 termsAndConditions = termsAndConditions
             )
             when (val result = profileService.upsertBusinessProfile(comp.companyId, profile)) {
-                is AccountingResult.Success -> _uiState.update { it.copy(businessProfile = result.data) }
+                is AccountingResult.Success -> {
+                    _uiState.update { it.copy(businessProfile = result.data) }
+                    emitMessage("Saved")
+                }
                 is AccountingResult.Failure -> emitMessage("Failed: ${result.error.message}")
             }
         }
@@ -2272,7 +2374,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * currently stands via `.copy()`, same safe-partial-update pattern as [updateBusinessProfileFull]. */
     fun uploadBusinessBrandingAsset(imageFile: File, type: DocumentAssetType) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            // Real bug fix (docs/CORRECTIONS_LOG.md, user report: "logo and signature is also not
+            // uploading nor saving") - same silent-no-op issue as the profile-save functions above.
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val bytes = imageFile.readBytes()
             val assetResult = repository.createDocumentAsset(comp.companyId, type, imageFile.absolutePath, sha256(bytes), "image/jpeg", imageFile.length())
             if (assetResult is AccountingResult.Failure) {
@@ -2302,7 +2406,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         pinCode: String? = null, city: String? = null, state: String? = null, country: String? = null
     ) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: return@launch
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val base = _uiState.value.individualProfile ?: IndividualProfile(individualProfileId = "", companyId = comp.companyId, name = name)
             val profile = base.copy(
                 name = name, address = address, phone = phone, email = email, pan = pan,
@@ -2325,16 +2429,21 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * failure/offline, [PinCodeLookupResult.success] is false and the fields stay exactly as the
      * user already had them - never a guessed value. */
     fun lookupPinCode(pinCode: String) {
+        // Real bug fix (docs/CORRECTIONS_LOG.md) - `requestId` is stamped fresh on every call
+        // (cache hit or not) so two lookups that resolve to the same City/State/Country never
+        // produce a `pinCodeLookupResult` that `equals()` the one already in `_uiState` - see
+        // [PinCodeLookupResult.requestId]'s own KDoc for why that equality was silently eating the
+        // second caller's update.
         val cached = pinCodeLookupCache[pinCode]
         if (cached != null) {
-            _uiState.update { it.copy(pinCodeLookupResult = cached) }
+            _uiState.update { it.copy(pinCodeLookupResult = cached.copy(requestId = ++pinCodeRequestSeq)) }
             return
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isPinCodeLookupInProgress = true) }
             val result = pinCodeLookupAdapter.lookup(pinCode)
             if (result.success) pinCodeLookupCache[pinCode] = result
-            _uiState.update { it.copy(isPinCodeLookupInProgress = false, pinCodeLookupResult = result) }
+            _uiState.update { it.copy(isPinCodeLookupInProgress = false, pinCodeLookupResult = result.copy(requestId = ++pinCodeRequestSeq)) }
         }
     }
 
@@ -2688,7 +2797,16 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     // ---- OCR (suggestion-only, adapter deliberately unimplemented - always fails gracefully) ----
 
-    fun scanReceiptForVoucherDraft(imageFile: File) {
+    /** [documentTypeHint] steers extraction (e.g. tells the extractor to look for a PAN vs. an
+     * invoice); the actual routing below always trusts the extraction's own returned
+     * [com.example.accounting.domain.ocr.OcrExtractionResult.documentType], not the hint, since a
+     * hint is only ever a guess of what the user picked before the image was even decoded. Invoice-
+     * like and Bank/UPI documents both become a `PENDING_REVIEW` voucher draft - the existing
+     * Draft/Review/Post queue - never a posted voucher. PAN/Aadhaar populate [AccountingUiState.lastOcrExtraction]
+     * only, for the caller to render a reviewable profile-draft UI and explicitly call
+     * [applyOcrProfileDraft] - this function never writes to [com.example.accounting.domain.rendering.IndividualProfile]
+     * itself. */
+    fun scanDocument(imageFile: File, documentTypeHint: OcrDocumentType = OcrDocumentType.UNKNOWN) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
             val fy = _uiState.value.currentFinancialYear ?: return@launch
@@ -2701,22 +2819,88 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 return@launch
             }
             val asset = (assetResult as AccountingResult.Success).data
-            when (val result = ocrService.requestExtraction(currentRequestingProfile(comp), asset.assetId)) {
+            when (val result = ocrService.requestExtraction(currentRequestingProfile(comp), asset.assetId, documentTypeHint)) {
                 is AccountingResult.Success -> {
                     _uiState.update { it.copy(lastOcrExtraction = result.data) }
-                    ocrService.reviewAndPrefillVoucherDraft(comp.companyId, fy.financialYearId, result.data)
-                    emitMessage("Receipt scanned - a draft was created for review; add ledger lines before posting.")
+                    when (result.data.documentType) {
+                        OcrDocumentType.PURCHASE_BILL, OcrDocumentType.SALES_INVOICE, OcrDocumentType.EXPENSE_RECEIPT,
+                        OcrDocumentType.BANK_STATEMENT, OcrDocumentType.UPI_PAYMENT -> {
+                            // Step 7 audit fix - VoucherDraftEditorScreen has no voucher-type
+                            // selector at all (only ledger/Dr-Cr/amount per line), so whatever type
+                            // reviewAndPrefillVoucherDraft's draft is created with is exactly what
+                            // gets posted - this call used to always take its JOURNAL default,
+                            // silently misclassifying every scanned Purchase Bill/Sales Invoice as
+                            // a generic Journal entry (wrong Day Book/report label, wrong "PMT-"/
+                            // "INV-"-style numbering sequence) even though the correct type was
+                            // already sitting right here in result.data.documentType. Only the two
+                            // unambiguous 1:1 mappings are made explicit - Expense Receipt/Bank
+                            // Statement/UPI Payment genuinely could be either a Receipt or a
+                            // Payment (OCR never determines direction), so JOURNAL remains the
+                            // correct, safe generic choice for those, exactly as before.
+                            val draftVoucherType = when (result.data.documentType) {
+                                OcrDocumentType.PURCHASE_BILL -> VoucherType.PURCHASE
+                                OcrDocumentType.SALES_INVOICE -> VoucherType.SALES
+                                else -> VoucherType.JOURNAL
+                            }
+                            ocrService.reviewAndPrefillVoucherDraft(comp.companyId, fy.financialYearId, result.data, draftVoucherType)
+                            emitMessage("Scanned - a draft was created under Money > Pending Reviews; add ledger lines before posting.")
+                        }
+                        OcrDocumentType.PAN_CARD, OcrDocumentType.AADHAAR_CARD ->
+                            emitMessage("Scanned - review the extracted details below before applying them to your profile.")
+                        OcrDocumentType.GST_CERTIFICATE ->
+                            emitMessage("Scanned - review the extracted trade name/GSTIN below before applying them to your Business Profile.")
+                        else -> emitMessage("Scanned - review the extracted text below.")
+                    }
                 }
                 is AccountingResult.Failure -> emitMessage(result.error.message)
             }
         }
     }
 
+    /** Explicit, human-triggered apply of a reviewed/edited PAN or Aadhaar OCR guess onto the
+     * Individual Profile - never automatic. Only `name`/`pan` have a real destination field on
+     * [com.example.accounting.domain.rendering.IndividualProfile] today; every other existing field
+     * on the profile is preserved as-is via [updateIndividualProfile]'s own merge-onto-base
+     * behaviour. */
+    fun applyOcrProfileDraft(name: String, pan: String) {
+        val base = _uiState.value.individualProfile
+        updateIndividualProfile(
+            name = name, address = base?.address ?: "", phone = base?.phone ?: "", email = base?.email ?: "", pan = pan,
+            pinCode = base?.pinCode, city = base?.city, state = base?.state, country = base?.country
+        )
+        _uiState.update { it.copy(lastOcrExtraction = null) }
+    }
+
+    /** Explicit, human-triggered apply of a reviewed/edited GST Certificate OCR guess onto the
+     * **Business Profile** (trade name/GSTIN, document-branding) - never onto [Company][com.example.accounting.domain.company.Company]'s
+     * own statutory GSTIN. A scanned GST certificate is real evidence of a business's actual
+     * registration, but per docs/57_BUSINESS_IDENTITY_DISPLAY.md, changing the record GST returns
+     * are filed against must stay a deliberate act in Settings > My Business > GST Details, never
+     * something an OCR "Apply" tap does as a side effect - if this GSTIN should also become the
+     * company's statutory one, the user re-enters it there themselves. */
+    fun applyOcrBusinessProfileDraft(businessName: String, gstin: String) {
+        val base = _uiState.value.businessProfile
+        updateBusinessProfile(
+            businessName = businessName, legalName = base?.legalName ?: businessName, address = base?.address ?: "",
+            phone = base?.phone ?: "", email = base?.email ?: "", gstin = gstin, pan = base?.pan ?: "",
+            pinCode = base?.pinCode, city = base?.city, state = base?.state, country = base?.country
+        )
+        _uiState.update { it.copy(lastOcrExtraction = null) }
+    }
+
+    /** Dismisses the current OCR review card (Data Tools screen) without applying anything -
+     * always safe, since nothing has been written anywhere except the already-created
+     * [DocumentAssetType.OCR_SOURCE_IMAGE] asset and, for invoice-like/Bank/UPI documents, a
+     * `PENDING_REVIEW` voucher draft that still needs its own explicit review before it can post. */
+    fun clearOcrExtraction() {
+        _uiState.update { it.copy(lastOcrExtraction = null) }
+    }
+
     // ---- QR/Barcode (pure utility - no accounting logic) ----
 
     fun generateBarcodeForItem(itemId: String) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             when (val result = qrBarcodeService.generateForStockItem(currentRequestingProfile(comp), comp.companyId, itemId)) {
                 is AccountingResult.Success -> _uiState.update { it.copy(lastBarcodeGeneration = result.data) }
                 is AccountingResult.Failure -> emitMessage("Could not generate barcode: ${result.error.message}")
@@ -2726,7 +2910,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     fun scanBarcodeImage(imageFile: File) {
         viewModelScope.launch {
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Select a company first."); return@launch }
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
             val bytes = imageFile.readBytes()
             val assetResult = repository.createDocumentAsset(
                 comp.companyId, DocumentAssetType.OCR_SOURCE_IMAGE, imageFile.absolutePath, sha256(bytes), "image/jpeg", imageFile.length()
@@ -2910,7 +3094,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * not an accounting boundary). Returns null (with a controlled message) rather than throwing
      * when no company/financial year is active - never a fabricated report. */
     suspend fun renderDayBookPdf(): java.io.File? {
-        val comp = _uiState.value.currentCompany ?: run { emitMessage("No company selected."); return null }
+        val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return null }
         val fy = _uiState.value.currentFinancialYear ?: run { emitMessage("No financial year selected."); return null }
         val report = reportService.dayBook(comp.companyId, fy.startDate..fy.endDate)
         return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), report.toPdfData())
@@ -2922,6 +3106,144 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * [com.example.accounting.data.rendering.TabularPdfRenderer] - mirrors [renderReportPdf]'s
      * exact pattern for the one report kind that pattern didn't originally cover. Null if nothing
      * is selected. */
+    // ==== "5 Invoice PDF Templates" - Invoice Preview ====
+
+    /**
+     * Opens the Invoice Preview screen for a real, posted Sale/Purchase [Voucher] - assembles
+     * [com.example.accounting.domain.rendering.DocumentData] via the new
+     * [AccountingRepository.assembleDocumentDataFromVoucher] bridge (never the separate,
+     * unrelated Phase 7A draft-Invoice path), seeds the 5 built-in templates on first use, and
+     * resolves whichever template the company already has as default. Every figure in the
+     * resulting [DocumentData] is read straight off already-posted rows - nothing here
+     * recalculates GST/discount/rounding.
+     */
+    fun loadInvoicePreview(voucherId: String) {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            when (val result = repository.assembleDocumentDataFromVoucher(comp.companyId, voucherId)) {
+                is AccountingResult.Success -> {
+                    val documentType = result.data.documentType
+                    repository.ensureBuiltinInvoiceTemplatesSeeded(comp.companyId, documentType)
+                    val templates = repository.getDocumentTemplatesByType(comp.companyId, documentType).first()
+                    val resolved = repository.resolveTemplateForRender(comp.companyId, documentType)
+                    _uiState.update {
+                        it.copy(
+                            invoicePreviewData = result.data, invoicePreviewTemplates = templates,
+                            invoicePreviewSelectedTemplateId = resolved.templateId, invoicePreviewError = null
+                        )
+                    }
+                }
+                is AccountingResult.Failure -> _uiState.update {
+                    it.copy(invoicePreviewData = null, invoicePreviewError = result.error.message)
+                }
+            }
+        }
+    }
+
+    fun selectInvoicePreviewTemplate(templateId: String) {
+        _uiState.update { it.copy(invoicePreviewSelectedTemplateId = templateId) }
+    }
+
+    /** Makes the currently-previewed template the company's default for this document type going
+     * forward - every past invoice already rendered stays exactly as it was (Section 10:
+     * `RenderedDocumentRecord` pins the template/version an already-generated PDF actually used). */
+    fun setInvoicePreviewTemplateAsDefault() {
+        viewModelScope.launch {
+            val comp = _uiState.value.currentCompany ?: return@launch
+            val data = _uiState.value.invoicePreviewData ?: return@launch
+            val templateId = _uiState.value.invoicePreviewSelectedTemplateId ?: return@launch
+            when (val result = repository.setDefaultDocumentTemplate(comp.companyId, data.documentType, templateId)) {
+                is AccountingResult.Success -> {
+                    emitMessage("${result.data.templateName} set as your default invoice template.")
+                    val templates = repository.getDocumentTemplatesByType(comp.companyId, data.documentType).first()
+                    _uiState.update { it.copy(invoicePreviewTemplates = templates) }
+                }
+                is AccountingResult.Failure -> emitMessage("Could not set default template: ${result.error.message}")
+            }
+        }
+    }
+
+    fun clearInvoicePreview() {
+        _uiState.update {
+            it.copy(invoicePreviewData = null, invoicePreviewTemplates = emptyList(), invoicePreviewSelectedTemplateId = null, invoicePreviewError = null)
+        }
+    }
+
+    /** Product correction ("THIS APPLICATION IS NOT AN ERP") - loads whatever data
+     * [VoucherDetailDialog]'s default plain-Bill view needs for [voucher]: for a Sale/Purchase with
+     * real item-level data, [AccountingRepository.assembleDocumentDataFromVoucher] (the same single
+     * source of truth Invoice Preview already uses); otherwise (account-only Sale/Purchase, or any
+     * non-trading type) [AccountingRepository.getVoucherBillSummary]. Never both at once - the
+     * dialog prefers `voucherBillDocumentData` when present. Called when the dialog opens; cleared
+     * on close via [clearVoucherBillDetails] so a stale bill never flashes for the next voucher
+     * opened. */
+    fun loadVoucherBillDetails(voucher: Voucher) {
+        val comp = _uiState.value.currentCompany ?: return
+        viewModelScope.launch {
+            val isTrading = voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE
+            val documentData = if (isTrading) {
+                (repository.assembleDocumentDataFromVoucher(comp.companyId, voucher.voucherId) as? AccountingResult.Success)?.data
+            } else null
+            if (documentData != null) {
+                _uiState.update { it.copy(voucherBillDocumentData = documentData, voucherBillSummary = null) }
+            } else {
+                val summary = repository.getVoucherBillSummary(voucher)
+                _uiState.update { it.copy(voucherBillDocumentData = null, voucherBillSummary = summary) }
+            }
+        }
+    }
+
+    fun clearVoucherBillDetails() {
+        _uiState.update { it.copy(voucherBillDocumentData = null, voucherBillSummary = null) }
+    }
+
+    private fun resolvedPreviewTemplate(): com.example.accounting.domain.rendering.DocumentTemplate? {
+        val selectedId = _uiState.value.invoicePreviewSelectedTemplateId
+        return _uiState.value.invoicePreviewTemplates.firstOrNull { it.templateId == selectedId }
+    }
+
+    fun renderInvoicePreviewPdf(): File? {
+        val data = _uiState.value.invoicePreviewData ?: return null
+        val template = resolvedPreviewTemplate() ?: com.example.accounting.domain.rendering.DocumentTemplate.builtinDefault(data.companyId, data.documentType)
+        return documentPreviewService.renderPdf(getApplication(), data, template)
+    }
+
+    fun shareInvoicePreviewPdf(): android.content.Intent? {
+        val file = renderInvoicePreviewPdf() ?: return null
+        return documentPreviewService.buildShareIntent(getApplication(), file, "application/pdf")
+    }
+
+    /** "show me UI for PDF CSV Excel" (docs/CORRECTIONS_LOG.md) - CSV/Excel were never wired into
+     * the actual Invoice Preview/Share flow ([com.example.accounting.domain.rendering.CsvExporter]
+     * existed but nothing ever called it). Same file-then-share pattern [exportVoucherAndShare]
+     * already uses; both read [AccountingUiState.invoicePreviewData], never a second document fetch. */
+    fun shareInvoicePreviewCsv(): android.content.Intent? {
+        val data = _uiState.value.invoicePreviewData ?: return null
+        val csv = com.example.accounting.domain.rendering.CsvExporter.exportDocumentLines(data)
+        val file = File(getApplication<Application>().cacheDir, "invoice_${data.documentNumber}_${System.currentTimeMillis()}.csv")
+        file.writeText(csv)
+        return documentPreviewService.buildShareIntent(getApplication(), file, "text/csv")
+    }
+
+    /** Real `.xlsx` (see [com.example.accounting.domain.rendering.ExcelExporter]'s KDoc) - never a
+     * CSV renamed with an `.xlsx` extension. */
+    fun shareInvoicePreviewExcel(): android.content.Intent? {
+        val data = _uiState.value.invoicePreviewData ?: return null
+        val bytes = com.example.accounting.domain.rendering.ExcelExporter.exportDocumentLines(data)
+        val file = File(getApplication<Application>().cacheDir, "invoice_${data.documentNumber}_${System.currentTimeMillis()}.xlsx")
+        file.writeBytes(bytes)
+        return documentPreviewService.buildShareIntent(
+            getApplication(), file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    }
+
+    // "printInvoicePreview" was removed - real-device QA fix: Android's PrintManager throws
+    // `IllegalStateException: Can print only from an activity` when given an Application Context
+    // (exactly what this ViewModel's own `getApplication()` is) - PrintAdapter itself even
+    // documented "not wired into any screen" before this feature's testing exposed the crash.
+    // MainAppScreen now calls `PrintAdapter.print` directly with the real Activity Context
+    // (`LocalContext.current`), using the same `renderInvoicePreviewPdf()` this used internally.
+
     fun renderGstReturnPdf(): File? {
         val comp = _uiState.value.currentCompany ?: return null
         val gstReturn = _uiState.value.selectedGstReturn ?: return null

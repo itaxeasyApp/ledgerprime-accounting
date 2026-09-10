@@ -30,6 +30,10 @@ data class Party(
     val creditLimitPaise: Long? = null,
     val paymentTerms: PaymentTerms = PaymentTerms.DUE_ON_RECEIPT,
     val isActive: Boolean = true,
+    /** User-marked favorite (real, persisted field - a starred Customer/Supplier sorts first in
+     * the picker so a frequently-invoiced party doesn't get lost in a long list). Never inferred
+     * from transaction frequency or anything else - only ever set by an explicit tap. */
+    val isFavorite: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

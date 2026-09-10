@@ -115,6 +115,7 @@ import com.example.accounting.domain.accounting.PrimaryGroup
 import com.example.accounting.domain.accounting.StandardSystemGroups
 import com.example.accounting.domain.accounting.SyncState
 import com.example.accounting.domain.accounting.Voucher
+import com.example.accounting.domain.accounting.VoucherBillSummary
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.audit.AuditAction
 import com.example.accounting.domain.audit.AuditLog
@@ -183,6 +184,7 @@ import com.example.accounting.domain.rendering.DocumentReferenceInfo
 import com.example.accounting.domain.rendering.DocumentTemplate
 import com.example.accounting.domain.rendering.DocumentTotals
 import com.example.accounting.domain.rendering.IndividualProfile
+import com.example.accounting.domain.rendering.InvoiceTemplatePresets
 import com.example.accounting.domain.rendering.JsonDocumentRenderer
 import com.example.accounting.domain.rendering.RenderedDocumentRecord
 import com.example.accounting.domain.rendering.TemplateConfigSerializer
@@ -239,7 +241,7 @@ class AccountingRepository(
      * data; this function has no default company of its own to fall back to (removed - a
      * production app must never auto-create a fake company at startup just because none exists
      * yet; a genuinely empty company list is the correct, already-supported first-launch state -
-     * `AppTopBar` already renders "Select Company" for a null [com.example.accounting.domain.company.Company]).
+     * `AppTopBar` already renders "My Business" for a null [com.example.accounting.domain.company.Company]).
      */
     suspend fun seedInitialDataForCompany(
         companyId: String,
@@ -1072,7 +1074,7 @@ class AccountingRepository(
                 lineId = it.lineId, voucherId = it.voucherId, companyId = it.companyId, financialYearId = it.financialYearId,
                 itemId = it.itemId, itemName = items[it.itemId]?.name ?: "", direction = it.direction,
                 quantity = com.example.accounting.core.common.Quantity(it.quantityRaw), rate = Money.fromPaise(it.ratePaise),
-                amount = Money.fromPaise(it.amountPaise), lineOrder = it.lineOrder
+                amount = Money.fromPaise(it.amountPaise), lineOrder = it.lineOrder, discount = Money.fromPaise(it.discountPaise)
             )
         }
     }
@@ -1517,6 +1519,15 @@ class AccountingRepository(
         val hasEntries = dao.countJournalEntriesForLedger(ledger.companyId, ledger.ledgerId) > 0
         val openingBalancePaise = if (hasEntries) existing.openingBalancePaise else ledger.openingBalance.paise
         val openingBalanceType = if (hasEntries) existing.openingBalanceType else ledger.openingBalanceType
+        // Step 4 live-device fix - with zero posted entries, current balance IS the opening
+        // balance (opening + no deltas since), so it must track a same-request opening-balance
+        // edit; leaving it at `existing.currentBalancePaise` here left a freshly-edited, never-
+        // posted-to ledger showing a stale current balance that didn't match its own new opening
+        // balance, with no voucher anywhere accounting for the difference. Once real entries
+        // exist, current balance is correctly never recomputed from opening balance - it stays
+        // `existing`'s system-maintained running total, exactly as before.
+        val currentBalancePaise = if (hasEntries) existing.currentBalancePaise else openingBalancePaise
+        val currentBalanceType = if (hasEntries) existing.currentBalanceType else openingBalanceType
 
         val entity = LedgerEntity(
             ledgerId = ledger.ledgerId,
@@ -1526,10 +1537,8 @@ class AccountingRepository(
             code = ledger.code,
             openingBalancePaise = openingBalancePaise,
             openingBalanceType = openingBalanceType,
-            // Current balance is a derived, system-maintained running total (opening balance +
-            // every posted delta since) - never settable from an edit form, entry count or not.
-            currentBalancePaise = existing.currentBalancePaise,
-            currentBalanceType = existing.currentBalanceType,
+            currentBalancePaise = currentBalancePaise,
+            currentBalanceType = currentBalanceType,
             gstin = Constants.normalizeTaxId(ledger.gstin),
             pan = Constants.normalizeTaxId(ledger.pan),
             stateCode = ledger.stateCode,
@@ -1950,7 +1959,8 @@ class AccountingRepository(
                 quantityRaw = line.quantity.rawValue,
                 ratePaise = line.rate.paise,
                 amountPaise = line.amount.paise,
-                lineOrder = index + 1
+                lineOrder = index + 1,
+                discountPaise = line.discount.paise
             )
         }
 
@@ -3207,7 +3217,7 @@ class AccountingRepository(
             LedgerStatementRow(
                 voucherId = item.voucherId,
                 voucherNumber = v?.voucherNumber ?: "VCH",
-                voucherType = v?.voucherType?.displayName ?: "Journal",
+                voucherType = v?.voucherType ?: VoucherType.JOURNAL,
                 date = safeParseDate(v?.date),
                 particulars = item.narration.ifBlank { v?.narration ?: "Transaction Entry" },
                 debitAmount = Money.fromPaise(dr),
@@ -3929,7 +3939,7 @@ class AccountingRepository(
         partyId = partyId, companyId = companyId, ledgerId = ledgerId, role = role, entityType = entityType,
         displayName = displayName, contactName = contactName, creditLimitPaise = creditLimitPaise,
         paymentTerms = PaymentTerms(paymentTermsType, paymentTermsCustomDays),
-        isActive = isActive, createdAt = createdAt, updatedAt = updatedAt
+        isActive = isActive, isFavorite = isFavorite, createdAt = createdAt, updatedAt = updatedAt
     )
 
     private fun InvoiceEntity.toDomainInvoice(): Invoice = Invoice(
@@ -4089,6 +4099,7 @@ class AccountingRepository(
             paymentTermsType = party.paymentTerms.type,
             paymentTermsCustomDays = party.paymentTerms.customDays,
             isActive = party.isActive,
+            isFavorite = party.isFavorite,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
@@ -4120,6 +4131,17 @@ class AccountingRepository(
     fun getParties(companyId: String, role: PartyRole? = null): Flow<List<Party>> {
         val source = if (role != null) dao.getPartiesByRole(companyId, role) else dao.getPartiesByCompany(companyId)
         return source.map { list -> list.map { it.toDomainParty() } }
+    }
+
+    /** Contacts + Favorites correction (docs/CORRECTIONS_LOG.md, 2026-09-09) - flips [Party.isFavorite]
+     * for one party. A real, persisted toggle (via the existing [dao]'s `updateParty`), never a
+     * UI-only/in-memory star. */
+    suspend fun toggleFavoriteParty(companyId: String, partyId: String): AccountingResult<Party> {
+        val entity = dao.getPartyById(companyId, partyId)
+            ?: return AccountingResult.Failure(AppError.ResourceNotFound("Party", partyId))
+        val updated = entity.copy(isFavorite = !entity.isFavorite, updatedAt = System.currentTimeMillis())
+        dao.updateParty(updated)
+        return AccountingResult.Success(updated.toDomainParty())
     }
 
     /**
@@ -4333,6 +4355,16 @@ class AccountingRepository(
 
         return deleteVoucherSafely(companyId, financialYearId, voucherId)
     }
+
+    /**
+     * Public wrapper around the same frozen [computeOutstandingPaise] the Outstanding report and
+     * [getInvoiceStatus] already use - lets the Sales/Purchase list's payment-status badge work
+     * for a plain [com.example.accounting.domain.accounting.Voucher] that was never routed through
+     * the Phase 7A draft-[Invoice] flow (the common case: [postVoucher] posts a Sale/Purchase
+     * directly), never a second outstanding calculation.
+     */
+    suspend fun getOutstandingPaiseForVoucher(companyId: String, voucherId: String): Long? =
+        computeOutstandingPaise(companyId, voucherId)
 
     /** The single read path for an Invoice's lifecycle status (Phase 7A) - composes the existing,
      * unmodified [computeOutstandingPaise] with [InvoiceStatusEngine]; never a stored field. */
@@ -4982,6 +5014,26 @@ class AccountingRepository(
         return default?.toDomain() ?: DocumentTemplate.builtinDefault(companyId, documentType)
     }
 
+    /**
+     * "5 Invoice PDF Templates" task - idempotently creates the 5 built-in preset templates (see
+     * [com.example.accounting.domain.rendering.InvoiceTemplatePresets]) for [documentType] if this
+     * company has none yet, the first one (CLASSIC) marked default so a company that never opens
+     * the template picker still renders exactly as before this feature existed. Never overwrites
+     * or duplicates - a company that already has any template of this [documentType] (its own
+     * custom one, or these presets from an earlier call) is left untouched. Safe to call every
+     * time the template picker/preview screen opens.
+     */
+    suspend fun ensureBuiltinInvoiceTemplatesSeeded(companyId: String, documentType: DocumentType) {
+        val existing = dao.getActiveTemplatesByType(companyId, documentType).first()
+        if (existing.isNotEmpty()) return
+        InvoiceTemplatePresets.ALL_STYLES.forEachIndexed { index, style ->
+            createDocumentTemplate(
+                companyId = companyId, documentType = documentType, templateName = style.displayName,
+                visualConfig = InvoiceTemplatePresets.seedConfigFor(style), isDefault = index == 0
+            )
+        }
+    }
+
     // ---------------- Business / Individual Profiles ----------------
 
     suspend fun getBusinessProfile(companyId: String): BusinessProfile? = dao.getBusinessProfile(companyId)?.toDomain()
@@ -5126,11 +5178,13 @@ class AccountingRepository(
     }
 
     private suspend fun brandingSnapshot(companyId: String): DocumentBrandingSnapshot {
-        val profile = dao.getBusinessProfile(companyId) ?: return DocumentBrandingSnapshot()
+        val signatoryName = dao.getIndividualProfile(companyId)?.name.orEmpty()
+        val profile = dao.getBusinessProfile(companyId) ?: return DocumentBrandingSnapshot(signatoryName = signatoryName)
         return DocumentBrandingSnapshot(
             logoStorageReference = profile.logoAssetId?.let { dao.getDocumentAssetById(companyId, it)?.storageReference },
             signatureStorageReference = profile.signatureAssetId?.let { dao.getDocumentAssetById(companyId, it)?.storageReference },
-            qrCodeStorageReference = profile.qrCodeAssetId?.let { dao.getDocumentAssetById(companyId, it)?.storageReference }
+            qrCodeStorageReference = profile.qrCodeAssetId?.let { dao.getDocumentAssetById(companyId, it)?.storageReference },
+            signatoryName = signatoryName
         )
     }
 
@@ -5294,6 +5348,163 @@ class AccountingRepository(
             )
         )
     }
+
+    /**
+     * "5 Invoice PDF Templates" task - the bridge [assembleDocumentData] never had: that function
+     * only ever reads a Phase 7A [InvoiceEntity]/[TradeDocumentEntity], but the Sale/Purchase
+     * screen a user actually bills through ([postSaleInvoice]/[postPurchaseBill] ->
+     * [com.example.accounting.domain.trading.TradingWorkflowEngine]) posts a real [VoucherEntity]
+     * directly and never creates an [InvoiceEntity] row at all - so there was previously no way to
+     * preview/print/share a PDF for the Sale/Purchase vouchers the Sales/Purchases tabs actually
+     * show. Builds the exact same [DocumentData] shape from [VoucherStockLineEntity] (rate,
+     * quantity, discount - as entered) joined with [GstTransactionEntity] (taxableAmount/cgst/
+     * sgst/igst/cess - as posted) by `lineOrder`, mirroring [assembleDocumentData]'s own
+     * already-posted-Invoice branch exactly. Reads only already-persisted, immutable rows -
+     * performs no GST/discount/rounding calculation of any kind, so a later change to the
+     * customer's or the company's own GSTIN/state never alters what an already-posted invoice
+     * prints (same historical-accuracy guarantee [assembleDocumentData]'s own KDoc documents).
+     */
+    suspend fun assembleDocumentDataFromVoucher(companyId: String, voucherId: String): AccountingResult<DocumentData> {
+        val voucher = dao.getVoucherById(companyId, voucherId)
+            ?: return AccountingResult.Failure(AppError.ResourceNotFound("Voucher", voucherId))
+        if (voucher.voucherType != VoucherType.SALES && voucher.voucherType != VoucherType.PURCHASE) {
+            return AccountingResult.Failure(AppError.ValidationError("Voucher '$voucherId' is not a Sale or Purchase - only those have an invoice-shaped document to render."))
+        }
+        val documentType = if (voucher.voucherType == VoucherType.SALES) DocumentType.SALES_INVOICE else DocumentType.PURCHASE_BILL
+        val isSale = voucher.voucherType == VoucherType.SALES
+
+        val company = dao.getCompanyById(companyId)
+            ?: return AccountingResult.Failure(AppError.ValidationError("Company '$companyId' was not found."))
+        val businessProfile = dao.getBusinessProfile(companyId)
+
+        val stockLines = dao.getStockLinesForVoucher(voucherId).sortedBy { it.lineOrder }
+        val gstByLineOrder = dao.getGstTransactionsForVoucher(voucherId).associateBy { it.lineOrder }
+        if (stockLines.isEmpty() || gstByLineOrder.isEmpty()) {
+            return AccountingResult.Failure(AppError.ValidationError("Voucher '$voucherId' has no line items to render (an Account-Only Sale/Purchase has no item-level invoice; use the GST Summary report instead)."))
+        }
+
+        // Every line shares the same party (Rule 29: one Place of Supply per document) - stored
+        // explicitly on each GstTransaction, never re-derived by guessing which journal item is
+        // "the party line".
+        val partyLedgerId = gstByLineOrder.values.first().partyLedgerId
+        val partyLedger = dao.getLedgerById(companyId, partyLedgerId)
+            ?: return AccountingResult.Failure(AppError.ValidationError("Party ledger '$partyLedgerId' was not found."))
+        val partySnapshot = ledgerSnapshot(partyLedger)
+
+        val itemLines = stockLines.mapNotNull { stockLine ->
+            val gst = gstByLineOrder[stockLine.lineOrder] ?: return@mapNotNull null
+            val item = dao.getStockItemById(companyId, stockLine.itemId)
+            DocumentLineData(
+                itemId = stockLine.itemId, description = item?.name ?: stockLine.itemId, hsnSacCode = gst.hsnSacCode,
+                quantity = quantityOrNull(stockLine.quantityRaw), unit = item?.unit ?: "",
+                rate = Money.fromPaise(stockLine.ratePaise), discount = Money.fromPaise(stockLine.discountPaise),
+                taxableAmount = Money.fromPaise(gst.taxableAmountPaise), gstRatePercent = gst.gstRatePercent,
+                cgst = Money.fromPaise(gst.cgstPaise), sgst = Money.fromPaise(gst.sgstPaise),
+                igst = Money.fromPaise(gst.igstPaise), cess = Money.fromPaise(gst.cessPaise),
+                lineTotal = Money.fromPaise(gst.taxableAmountPaise + gst.cgstPaise + gst.sgstPaise + gst.igstPaise + gst.cessPaise)
+            )
+        }
+
+        val sumTaxable = Money.fromPaise(itemLines.sumOf { it.taxableAmount.paise })
+        val sumCgst = Money.fromPaise(itemLines.sumOf { it.cgst.paise })
+        val sumSgst = Money.fromPaise(itemLines.sumOf { it.sgst.paise })
+        val sumIgst = Money.fromPaise(itemLines.sumOf { it.igst.paise })
+        val sumCess = Money.fromPaise(itemLines.sumOf { it.cess.paise })
+        val sumLineTotals = itemLines.sumOf { it.lineTotal.paise }
+        // Grand Total is the Voucher's own posted total (already includes Round Off, per
+        // TradingWorkflowEngine) - Round Off here is a read of that existing difference, not a
+        // recomputation of RoundOffEngine.
+        val totals = DocumentTotals(
+            taxableAmount = sumTaxable, cgst = sumCgst, sgst = sumSgst, igst = sumIgst, cess = sumCess,
+            roundOff = Money.fromPaise(voucher.totalAmountPaise - sumLineTotals), grandTotal = Money.fromPaise(voucher.totalAmountPaise)
+        )
+
+        return AccountingResult.Success(
+            DocumentData(
+                documentId = voucher.voucherId, companyId = companyId, documentType = documentType,
+                documentNumber = voucher.voucherNumber, documentDate = safeParseDate(voucher.date), dueDate = null,
+                seller = if (isSale) sellerSnapshot(companyId, company) else partySnapshot,
+                buyer = if (isSale) partySnapshot else sellerSnapshot(companyId, company),
+                items = itemLines, totals = totals, paymentInformation = paymentInfoSnapshot(companyId),
+                references = DocumentReferenceInfo(),
+                terms = businessProfile?.termsAndConditions.orEmpty(), branding = brandingSnapshot(companyId),
+                isPosted = true, accountingVoucherNumber = voucher.voucherNumber
+            )
+        )
+    }
+
+    /**
+     * Product correction (docs/CORRECTIONS_LOG.md, "THIS APPLICATION IS NOT AN ERP") - the fallback
+     * plain-business-bill view for [VoucherDetailDialog]'s default screen, used whenever
+     * [assembleDocumentDataFromVoucher] can't apply (an account-only Sale/Purchase with no stock
+     * lines, or any non-trading voucher type: Receipt/Payment/Contra/Journal/Notes). Party identity
+     * comes straight from [voucher]'s own already-posted [JournalItem]s (pure, no extra read) using
+     * the same Dr=Customer/Cr=Supplier double-entry convention [com.example.accounting.domain.trading.TradingWorkflowEngine]
+     * itself posts by; GST breakdown comes from this voucher's own [GstTransactionEntity] rows
+     * (present for BOTH item-level and account-only-with-GST postings, unlike stock lines) - never
+     * recomputed. Types without a confidently-derivable party (Notes/Journal/Stock Journal) get a
+     * blank party (dialog shows narration only) rather than a guessed label.
+     */
+    suspend fun getVoucherBillSummary(voucher: Voucher): VoucherBillSummary {
+        val gstRows = dao.getGstTransactionsForVoucher(voucher.voucherId)
+        // Real bug fix (docs/CORRECTIONS_LOG.md, live device test on a Debit Note) -
+        // GstTransactionEntity stores a reversal document's (Credit/Debit Note) figures as
+        // negative internally (so GST-return net aggregation across normal + reversal rows adds up
+        // correctly) - confirmed live: a Debit Note for a real 6000.00 taxable purchase return
+        // showed "Amount -6000.00" before this fix. A returned/adjusted value is still a real,
+        // positive figure to a non-accountant reading a plain Bill, so this view always takes the
+        // magnitude - the sign is an internal GST-ledger-aggregation concern, never shown here.
+        val taxable = if (gstRows.isNotEmpty()) Money.fromPaise(gstRows.sumOf { it.taxableAmountPaise }).abs() else null
+        val cgst = Money.fromPaise(gstRows.sumOf { it.cgstPaise }).abs()
+        val sgst = Money.fromPaise(gstRows.sumOf { it.sgstPaise }).abs()
+        val igst = Money.fromPaise(gstRows.sumOf { it.igstPaise }).abs()
+        val cess = Money.fromPaise(gstRows.sumOf { it.cessPaise }).abs()
+        val hsn = gstRows.firstOrNull()?.hsnSacCode.orEmpty()
+        val rate = gstRows.firstOrNull()?.gstRatePercent
+
+        fun line(type: com.example.accounting.core.common.DrCr) = voucher.items.firstOrNull { it.type == type }
+        val identity: Pair<String, String>? = when (voucher.voucherType) {
+            VoucherType.SALES -> line(com.example.accounting.core.common.DrCr.DEBIT)?.let { "Customer" to it.ledgerName }
+            VoucherType.PURCHASE -> line(com.example.accounting.core.common.DrCr.CREDIT)?.let { "Supplier" to it.ledgerName }
+            VoucherType.RECEIPT -> line(com.example.accounting.core.common.DrCr.CREDIT)?.let { "Received From" to it.ledgerName }
+            VoucherType.PAYMENT -> line(com.example.accounting.core.common.DrCr.DEBIT)?.let { "Paid To" to it.ledgerName }
+            // Real fix, live-confirmed (docs/CORRECTIONS_LOG.md) - a Credit Note reverses a Sale
+            // (Dr Customer/Cr Sales), so the customer ends up on the CREDIT side; a Debit Note
+            // reverses a Purchase (Dr Purchase/Cr Supplier), so the supplier ends up on the DEBIT
+            // side - confirmed against real posted entries on-device, not assumed by symmetry alone.
+            VoucherType.CREDIT_NOTE -> line(com.example.accounting.core.common.DrCr.CREDIT)?.let { "Customer" to it.ledgerName }
+            VoucherType.DEBIT_NOTE -> line(com.example.accounting.core.common.DrCr.DEBIT)?.let { "Supplier" to it.ledgerName }
+            // Real bug fix (docs/CORRECTIONS_LOG.md, live device test) - "From"/"To" must match
+            // CreateVoucherDialog's own field binding for this exact voucher type (its "From
+            // Account" field is bound to debitLedgerId, "To Account" to creditLedgerId - confirmed
+            // in that file) - not the reverse. Getting this backwards silently mislabeled a real
+            // transfer's direction (caught live: a Cash-in-Hand -> Bank transfer displayed as
+            // "Bank -> Cash" until this fix), which is exactly the kind of "guessed" accounting
+            // fact the product correction forbids.
+            VoucherType.CONTRA -> {
+                val from = line(com.example.accounting.core.common.DrCr.DEBIT)?.ledgerName
+                val to = line(com.example.accounting.core.common.DrCr.CREDIT)?.ledgerName
+                if (from != null && to != null) "Transfer" to "$from -> $to" else null
+            }
+            else -> null
+        }
+
+        return VoucherBillSummary(
+            partyLabel = identity?.first.orEmpty(), partyName = identity?.second.orEmpty(),
+            taxableAmount = taxable, cgst = cgst, sgst = sgst, igst = igst, cess = cess,
+            hsnSacCode = hsn, gstRatePercent = rate,
+            totalAmount = if (voucher.totalDebits.paise >= voucher.totalCredits.paise) voucher.totalDebits else voucher.totalCredits
+        )
+    }
+
+    /** Ledger-only party snapshot (real Sale/Purchase vouchers reference a plain
+     * [com.example.accounting.domain.accounting.Ledger] directly - Party/Customer/Supplier
+     * registration is optional, per the PARTY/COUNTERPARTY audit fix). */
+    private fun ledgerSnapshot(ledger: LedgerEntity): DocumentPartySnapshot = DocumentPartySnapshot(
+        name = ledger.name, address = ledger.address, gstin = ledger.gstin, pan = ledger.pan,
+        phone = ledger.phone, email = ledger.email, stateCode = ledger.stateCode,
+        stateName = Constants.GST_STATE_CODES[ledger.stateCode].orEmpty()
+    )
 
     // ---------------- Rendering entry points ----------------
 

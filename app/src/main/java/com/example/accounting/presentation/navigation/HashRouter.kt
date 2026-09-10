@@ -1,6 +1,5 @@
 package com.example.accounting.presentation.navigation
 
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +23,7 @@ sealed class AppRoute(val path: String, val title: String) {
      * this screen's own step header) ate real vertical space before any content; a dedicated
      * route means only this screen's own header shows. */
     object GstDashboard : AppRoute("#gst-dashboard", "GST Dashboard")
-    object SettingsAndSync : AppRoute("#settings-sync", "Governance & Outbox Sync")
+    object SettingsAndSync : AppRoute("#settings-sync", "Settings")
 
     object Sales : AppRoute("#sales", "Sales")
     object Purchases : AppRoute("#purchases", "Purchases")
@@ -122,22 +121,4 @@ class HashRouter(initialRoute: AppRoute = AppRoute.Dashboard) {
     }
 
     fun currentHash(): String = _currentRoute.value.path
-}
-
-enum class AdaptiveNavigationType {
-    BOTTOM_NAVIGATION_BAR,
-    NAVIGATION_RAIL,
-    PERMANENT_NAVIGATION_DRAWER
-}
-
-/**
- * Computes optimal navigation layout based on Material 3 WindowWidthSizeClass
- */
-fun getAdaptiveNavigationType(widthSizeClass: WindowWidthSizeClass): AdaptiveNavigationType {
-    return when (widthSizeClass) {
-        WindowWidthSizeClass.Compact -> AdaptiveNavigationType.BOTTOM_NAVIGATION_BAR
-        WindowWidthSizeClass.Medium -> AdaptiveNavigationType.NAVIGATION_RAIL
-        WindowWidthSizeClass.Expanded -> AdaptiveNavigationType.NAVIGATION_RAIL
-        else -> AdaptiveNavigationType.BOTTOM_NAVIGATION_BAR
-    }
 }

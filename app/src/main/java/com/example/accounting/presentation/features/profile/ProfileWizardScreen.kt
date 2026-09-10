@@ -123,7 +123,33 @@ fun ProfileWizardScreen(
         }
     }
 
-    val canAdvance = step != ProfileWizardStep.BUSINESS_INFO || businessName.isNotBlank()
+    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
+    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
+    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
+    LaunchedEffect(gstin) {
+        if (pan.isBlank()) com.example.accounting.core.common.ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
+    }
+
+    // PAN's 4th character is legally fixed by holder type (docs/CORRECTIONS_LOG.md, user request) -
+    // this wizard is the one place the real Constitution Type is already known, so the check can be
+    // precise: Proprietorship -> 'P' (a proprietorship's PAN is the proprietor's own individual
+    // PAN), HUF -> 'H', Private/Public Limited -> 'C'. Partnership/LLP/Trust/Society/Other have no
+    // single fixed letter worth enforcing here, so they're left format-only.
+    val expectedPanHolderChar = when (constitutionType) {
+        ConstitutionType.PROPRIETORSHIP -> 'P'
+        ConstitutionType.HUF -> 'H'
+        ConstitutionType.PRIVATE_LIMITED, ConstitutionType.PUBLIC_LIMITED -> 'C'
+        else -> null
+    }
+    // 5th-character (surname/entity-name letter) validation was added and then explicitly
+    // retracted by the user after live testing - too unreliable across real naming conventions to
+    // enforce - so only the 4th-character holder-type check remains.
+    val panFormatInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidPan(pan)
+    val panHolderTypeInvalid = !panFormatInvalid && expectedPanHolderChar != null &&
+        !com.example.accounting.core.common.ContactFieldValidation.isValidPanForHolderType(pan, expectedPanHolderChar)
+    val panInvalid = panFormatInvalid || panHolderTypeInvalid
+
+    val canAdvance = (step != ProfileWizardStep.BUSINESS_INFO || businessName.isNotBlank()) && (step != ProfileWizardStep.GST_TAX || !panInvalid)
 
     Column(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
@@ -184,8 +210,22 @@ fun ProfileWizardScreen(
                 ProfileWizardStep.GST_TAX -> item {
                     SectionCard(title = "GST & Tax Details") {
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            FormField(value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN", modifier = Modifier.weight(1f))
-                            FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.weight(1f))
+                            FormField(
+                                value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN",
+                                isError = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin),
+                                supportingText = if (gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)) "Not a valid GSTIN" else null,
+                                modifier = Modifier.weight(1f)
+                            )
+                            FormField(
+                                value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN",
+                                isError = panInvalid,
+                                supportingText = when {
+                                    panFormatInvalid -> "Not a valid PAN"
+                                    panHolderTypeInvalid -> "A ${constitutionType.name.lowercase().replace('_', ' ')}'s PAN must have '$expectedPanHolderChar' as its 4th character"
+                                    else -> null
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
                         }
                         Spacer(modifier = Modifier.height(Spacing.sm))
                         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {

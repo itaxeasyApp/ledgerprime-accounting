@@ -136,10 +136,13 @@ class Phase7CTestSuite {
     // Day Book
     // ==========================================
     @Test
-    fun testGenerateDayBook_ordersChronologically_andExcludesDeletedVoucher() = runBlocking {
-        // Real delete (explicit correction): a cancelled voucher is genuinely gone, never left
-        // visible in the Day Book with a CANCELLED status - Rule 12's old "posted vouchers are
-        // never physically deleted" design is no longer how cancellation works.
+    fun testGenerateDayBook_ordersChronologically_showsCancelledVoucherButExcludesItsAmount() = runBlocking {
+        // Auditable soft-cancel (Step 3 live-device fix): V3's row persists (isCancelled = true,
+        // never deleted), so it correctly still appears in the Day Book - the CANCELLED
+        // DayBookEntryStatus branch below was actually unreachable before this fix, since a
+        // cancelled voucher's row never existed to be found under the old hard-delete design. Its
+        // amount is still correctly excluded from the report total (generateDayBook's own
+        // status == POSTED filter, unchanged).
         val dao = freshDao()
         val ledgers = dao.seed()
         val repo = AccountingRepository(dao)
@@ -150,10 +153,11 @@ class Phase7CTestSuite {
         VoucherPostingEngine.cancel(dao, companyId, fyId, "V3", "IK_CANCEL_V3", "TESTER")
 
         val report = repo.generateDayBook(companyId, LocalDate.of(2026, 5, 1)..LocalDate.of(2026, 5, 31))
-        assertEquals(listOf("V1", "V2"), report.rows.map { it.voucherId })
+        assertEquals(listOf("V1", "V2", "V3"), report.rows.map { it.voucherId })
         assertEquals(DayBookEntryStatus.POSTED, report.rows[0].status)
         assertEquals(DayBookEntryStatus.POSTED, report.rows[1].status)
-        // Deleted voucher's total must not count toward the report total.
+        assertEquals(DayBookEntryStatus.CANCELLED, report.rows[2].status)
+        // Cancelled voucher's total must not count toward the report total.
         assertEquals(8_000_00L, report.totalAmount.paise)
     }
 

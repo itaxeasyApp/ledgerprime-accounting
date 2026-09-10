@@ -2,15 +2,31 @@ package com.example.accounting.domain.rendering
 
 /**
  * CSV export adapter (Phase 7D, Section 19) - consumes an already-assembled [DocumentData] and
- * writes its line items + totals as CSV. Deliberately dumb: it never computes a total, never
+ * writes its identity/line items/totals as CSV. Deliberately dumb: it never computes a total, never
  * recalculates GST, never reads any DAO/engine itself - every value comes straight from the
- * [DocumentData] it's handed, same as [JsonDocumentRenderer].
+ * [DocumentData] it's handed, same as [JsonDocumentRenderer]/[ExcelExporter].
  */
 object CsvExporter {
     private const val COLUMNS = "Description,HSN/SAC,Quantity,Unit,Rate,Discount,TaxableAmount,GSTRate,CGST,SGST,IGST,CESS,LineTotal"
 
     fun exportDocumentLines(data: DocumentData): String {
         val sb = StringBuilder()
+        // Document-branding correction (docs/CORRECTIONS_LOG.md, "not going into pdf and csv") -
+        // a CSV of just line items had zero seller/buyer identity in it, unlike the PDF. These
+        // header rows carry the same fields the PDF prints, plus the proprietor's name (from
+        // Individual Profile, via `data.branding.signatoryName` - the one field with a real,
+        // well-defined meaning in an export: who signed for the seller) whenever one is on file.
+        sb.append(csvField(data.documentType.name.replace('_', ' '))).append(',')
+            .append(csvField("No: ${data.documentNumber}")).append(',')
+            .append(csvField("Date: ${data.documentDate}")).append('\n')
+        sb.append(csvField("Seller")).append(',').append(csvField(data.seller.name)).append(',')
+            .append(csvField(data.seller.gstin)).append(',').append(csvField(data.seller.address)).append('\n')
+        sb.append(csvField("Buyer")).append(',').append(csvField(data.buyer.name)).append(',')
+            .append(csvField(data.buyer.gstin)).append(',').append(csvField(data.buyer.address)).append('\n')
+        if (data.branding.signatoryName.isNotBlank()) {
+            sb.append(csvField("Proprietor / Authorised Signatory")).append(',').append(csvField(data.branding.signatoryName)).append('\n')
+        }
+        sb.append('\n')
         sb.append(COLUMNS).append('\n')
         for (line in data.items) {
             sb.append(csvField(line.description)).append(',')

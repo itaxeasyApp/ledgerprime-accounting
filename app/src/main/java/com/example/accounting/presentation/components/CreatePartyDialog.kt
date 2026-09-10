@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.accounting.core.common.Constants
+import com.example.accounting.core.common.ContactFieldValidation
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.GstRegistrationStatus
@@ -89,7 +91,15 @@ fun CreatePartyDialog(
         pinCode: String,
         openingBalance: Money,
         openingBalanceType: DrCr
-    ) -> Unit
+    ) -> Unit,
+    /** Contacts + Favorites correction (docs/CORRECTIONS_LOG.md) - opens the real device Contacts
+     * picker (permission handled by the caller, which shows its own rationale first). */
+    onRequestContactImport: () -> Unit = {},
+    /** Non-null once the caller's contact picker resolves - (name, phone). Only fills fields that
+     * are still blank, same "never overwrite what the user already typed" rule the PIN-code lookup
+     * above already follows. */
+    importedContact: Pair<String, String>? = null,
+    onContactImportConsumed: () -> Unit = {}
 ) {
     var displayName by remember { mutableStateOf("") }
     var entityType by remember { mutableStateOf(PartyEntityType.BUSINESS) }
@@ -111,6 +121,14 @@ fun CreatePartyDialog(
     LaunchedEffect(pinCode) {
         if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
     }
+    // Contacts + Favorites correction - fills only fields still blank, never overwrites what the
+    // user already typed (same rule the PIN-code lookup below follows).
+    LaunchedEffect(importedContact) {
+        val contact = importedContact ?: return@LaunchedEffect
+        if (displayName.isBlank()) displayName = contact.first
+        if (phone.isBlank()) phone = contact.second
+        onContactImportConsumed()
+    }
     // 13-point correctness pass, item 1 - pre-fills only, never overwrites what the user already
     // typed; a stale result for a since-edited PIN (`lookupResult.pinCode != pinCode`) is ignored.
     LaunchedEffect(lookupResult) {
@@ -128,7 +146,12 @@ fun CreatePartyDialog(
     val gstinRequired = isBusiness && gstRegistrationStatus == GstRegistrationStatus.REGISTERED
     val gstinFormatInvalid = !GSTRules.isValidGSTIN(gstin)
     val gstinMissing = gstinRequired && gstin.isBlank()
-    val canSubmit = displayName.isNotBlank() && !gstinFormatInvalid && !gstinMissing
+    // Play Store readiness correction - phone/email previously had zero format validation (unlike
+    // GSTIN above). Both stay optional (blank is valid, matches every other optional field here);
+    // this only rejects a non-blank value that isn't shaped like a real phone/email.
+    val phoneFormatInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
+    val emailFormatInvalid = !ContactFieldValidation.isValidEmail(email)
+    val canSubmit = displayName.isNotBlank() && !gstinFormatInvalid && !gstinMissing && !phoneFormatInvalid && !emailFormatInvalid
 
     // decorFitsSystemWindows = false - required for navigationBarsPadding() below to have any
     // effect inside a Dialog's separate window (see CreateLedgerDialog's fuller note).
@@ -147,8 +170,13 @@ fun CreatePartyDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Add $roleLabel", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onRequestContactImport) {
+                            Icon(Icons.Default.ContactPhone, contentDescription = "Import from Contacts")
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
                     }
                 }
                 HorizontalDivider()
@@ -262,8 +290,18 @@ fun CreatePartyDialog(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm + Spacing.xs)) {
-                    FormField(value = phone, onValueChange = { phone = it }, label = "Phone", modifier = Modifier.weight(1f))
-                    FormField(value = email, onValueChange = { email = it }, label = "Email", modifier = Modifier.weight(1f))
+                    FormField(
+                        value = phone, onValueChange = { phone = it }, label = "Phone",
+                        keyboardType = KeyboardType.Phone, isError = phoneFormatInvalid,
+                        supportingText = if (phoneFormatInvalid) "Not a valid 10-digit mobile number" else null,
+                        modifier = Modifier.weight(1f)
+                    )
+                    FormField(
+                        value = email, onValueChange = { email = it }, label = "Email",
+                        keyboardType = KeyboardType.Email, isError = emailFormatInvalid,
+                        supportingText = if (emailFormatInvalid) "Not a valid email address" else null,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
                 Spacer(modifier = Modifier.height(Spacing.sm))
 
@@ -276,15 +314,23 @@ fun CreatePartyDialog(
                         modifier = Modifier.weight(1f)
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // Product correction ("THIS APPLICATION IS NOT AN ERP", docs/CORRECTIONS_LOG.md,
+                        // Phase 1 sweep) - this is the everyday Add Customer/Supplier dialog, not an
+                        // advanced accounting area, so it must not read "Debit"/"Credit". A Debit
+                        // opening balance always means the party owes the business (a receivable) and
+                        // Credit always means the business owes the party (a payable) - true for both
+                        // a Customer and a Supplier ledger alike, so one pair of plain labels covers
+                        // both roles; DrCr.DEBIT/DrCr.CREDIT themselves are completely unchanged, this
+                        // is display-only.
                         FilterChip(
                             selected = openingBalanceType == DrCr.DEBIT,
                             onClick = { openingBalanceType = DrCr.DEBIT },
-                            label = { Text("Debit") }
+                            label = { Text("They owe me") }
                         )
                         FilterChip(
                             selected = openingBalanceType == DrCr.CREDIT,
                             onClick = { openingBalanceType = DrCr.CREDIT },
-                            label = { Text("Credit") }
+                            label = { Text("I owe them") }
                         )
                     }
                 }

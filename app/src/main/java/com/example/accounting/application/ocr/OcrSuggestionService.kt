@@ -6,6 +6,7 @@ import com.example.accounting.core.common.AppError
 import com.example.accounting.data.local.dao.AccountingDao
 import com.example.accounting.data.local.entity.VoucherDraftEntity
 import com.example.accounting.domain.accounting.VoucherType
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.ocr.OcrExtractionResult
 import com.example.accounting.domain.ocr.OcrIngestionAdapter
 import com.example.accounting.domain.rendering.BusinessProfile
@@ -34,10 +35,14 @@ class OcrSuggestionService(
     private val dao: AccountingDao
 ) {
 
-    suspend fun requestExtraction(requestingCompany: BusinessProfile, documentAssetId: String): AccountingResult<OcrExtractionResult> {
+    suspend fun requestExtraction(
+        requestingCompany: BusinessProfile,
+        documentAssetId: String,
+        documentTypeHint: OcrDocumentType = OcrDocumentType.UNKNOWN
+    ): AccountingResult<OcrExtractionResult> {
         val currentAdapter = adapter
             ?: return AccountingResult.Failure(AppError.SystemError("OCR extraction is not yet available - no OcrIngestionAdapter implementation is configured."))
-        return currentAdapter.extractFromDocument(requestingCompany, documentAssetId)
+        return currentAdapter.extractFromDocument(requestingCompany, documentAssetId, documentTypeHint)
     }
 
     /** Returns the new draft's id (a `voucher_drafts` row, `PENDING_REVIEW`, zero lines). */
@@ -52,7 +57,18 @@ class OcrSuggestionService(
 
         val narrationParts = mutableListOf<String>()
         extraction.vendorNameGuess?.let { narrationParts.add("Vendor: $it") }
+        extraction.invoiceNumberGuess?.let { narrationParts.add("Inv#: $it") }
+        extraction.vendorGstinGuess?.let { narrationParts.add("GSTIN: $it") }
         extraction.totalAmountGuess?.let { narrationParts.add("Amount: ${it.format()}") }
+        val gstParts = mutableListOf<String>()
+        extraction.totalCgstGuess?.let { gstParts.add("CGST ${it.format()}") }
+        extraction.totalSgstGuess?.let { gstParts.add("SGST ${it.format()}") }
+        extraction.totalIgstGuess?.let { gstParts.add("IGST ${it.format()}") }
+        extraction.totalCessGuess?.let { gstParts.add("CESS ${it.format()}") }
+        if (gstParts.isNotEmpty()) narrationParts.add(gstParts.joinToString(", "))
+        if (extraction.lineItems.isNotEmpty()) narrationParts.add("${extraction.lineItems.size} line item(s) detected")
+        extraction.upiVpaGuess?.let { narrationParts.add("UPI VPA: $it") }
+        extraction.upiTransactionRefGuess?.let { narrationParts.add("Txn Ref: $it") }
         narrationParts.add("(OCR pre-fill, confidence ${(extraction.confidenceScore * 100).toInt()}% - review ledgers before posting)")
 
         dao.insertVoucherDraft(

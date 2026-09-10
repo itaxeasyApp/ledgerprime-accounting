@@ -4,9 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Payments
@@ -19,15 +17,15 @@ import com.example.accounting.core.common.Money
 import com.example.ui.theme.IndigoTax
 
 /**
- * Widget - the Dashboard's "Business Snapshot" section: a prominent Cash/Bank row plus a compact
- * 3-per-row grid of the remaining figures (Receivables/Payables/Sales-or-Income/Purchases-or-
- * Expenditure/GST Payable) - every card smaller/tighter than the previous 2-per-row layout, per the
- * dashboard-density pass this section went through. Every figure is a parameter - this composable
- * computes nothing; [DashboardScreen] still does that one-time filter/fold over
+ * Widget - the Dashboard's "Business Snapshot" section: one uniform 4-per-row grid for all 8
+ * figures (Cash/Bank/Receivables/Payables/Sales-or-Income/Purchases-or-Expenditure/GST Payable/GST
+ * Dashboard) - explicit follow-up ("take width of containers same on dashboard as they are showing
+ * at quick action"): matches Quick Actions' own 4-per-row width exactly, and 8 real figures divide
+ * into exactly two full rows with no empty filler slot needed. Every figure is a parameter - this
+ * composable computes nothing; [DashboardScreen] still does that one-time filter/fold over
  * [com.example.accounting.domain.accounting.Ledger] balances and passes plain [Money] values in.
  * The standalone Profit/Loss (net profit) card was removed from this section entirely - Profit &
- * Loss remains a full report, reachable from Reports Center, just no longer duplicated here as a
- * dashboard tile.
+ * Loss remains a full report, reachable from Reports Center, never duplicated here.
  */
 @Composable
 fun BusinessSnapshot(
@@ -58,31 +56,22 @@ fun BusinessSnapshot(
     onOpenGstDashboard: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier) {
-        // Hero row - the two liquid-funds figures stay full-width/2-column, the most important
-        // numbers on the whole dashboard.
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // One uniform 4-per-row grid, matching Quick Actions' own card width exactly - 8 real
+        // figures split evenly into two full rows, no empty filler slot needed.
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("Cash", cashBalance, "Tap to view", Icons.Default.Payments, MaterialTheme.colorScheme.primary, Modifier.weight(1f).clickable { onOpenCash() })
             StatCard("Bank", bankBalance, "Tap to view", Icons.Default.AccountBalance, MaterialTheme.colorScheme.primary, Modifier.weight(1f).clickable { onOpenBank() })
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        // Everything else is secondary detail - a compact 3-per-row grid keeps each container small,
-        // matching this pass's "smaller containers" requirement.
-        // SERVICE-mode audit fix - a SERVICE company has no Sales/Purchase concept (see
-        // [com.example.accounting.domain.company.BusinessType]); [income]/[expenditure] are only
-        // ever non-null for a SERVICE company (see DashboardScreen), so that alone decides which
-        // pair of cards fills the trade-figure slot - never a second flag.
-        val tradeFirst: @Composable () -> Unit = if (income != null) { { IncomeSummary(income, Modifier.weight(1f), onViewProfitLoss) } } else { { SalesSummary(salesFigure, Modifier.weight(1f), onOpenSales) } }
-        val tradeSecond: @Composable () -> Unit = if (expenditure != null) { { ExpenditureSummary(expenditure, Modifier.weight(1f), onViewProfitLoss) } } else { { PurchaseSummary(purchasesFigure, Modifier.weight(1f), onOpenPurchases) } }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ReceiptSummary(receivables, Modifier.weight(1f)) { onViewReceivables() }
             PaymentSummary(payables, Modifier.weight(1f)) { onViewPayables() }
-            tradeFirst()
         }
-        Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            tradeSecond()
+            // SERVICE-mode audit fix - a SERVICE company has no Sales/Purchase concept (see
+            // [com.example.accounting.domain.company.BusinessType]); [income]/[expenditure] are
+            // only ever non-null for a SERVICE company (see DashboardScreen), so that alone
+            // decides which pair of cards fills the trade-figure slot - never a second flag.
+            if (income != null) IncomeSummary(income, Modifier.weight(1f), onViewProfitLoss) else SalesSummary(salesFigure, Modifier.weight(1f), onOpenSales)
+            if (expenditure != null) ExpenditureSummary(expenditure, Modifier.weight(1f), onViewProfitLoss) else PurchaseSummary(purchasesFigure, Modifier.weight(1f), onOpenPurchases)
             StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewGstSummary() })
             StatCard("GST Dashboard", gstPayable, "File & track returns", Icons.Default.Receipt, IndigoTax, Modifier.weight(1f).clickable { onOpenGstDashboard() })
         }

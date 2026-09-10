@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,12 +33,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.accounting.core.common.ContactFieldValidation
+import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.profile.PinCodeLookupResult
 import com.example.accounting.domain.rendering.BusinessProfile
 import com.example.accounting.domain.rendering.IndividualProfile
 import com.example.accounting.presentation.components.ActionButton
 import com.example.accounting.presentation.components.AddressPinCodeFields
 import com.example.accounting.presentation.components.FormField
+import com.example.accounting.presentation.components.ScanTypePickerDialog
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.theme.Spacing
 
@@ -62,8 +66,23 @@ fun ProfileScreen(
     onOpenSubscription: () -> Unit,
     onOpenCompanyAndSync: () -> Unit,
     onOpenBusinessSetupWizard: () -> Unit = {},
+    /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md) - opens the Photo
+     * Picker directly with the chosen identity-document type already known. */
+    onScanProfileDocument: (OcrDocumentType) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var isProfileScanPickerOpen by remember { mutableStateOf(false) }
+    if (isProfileScanPickerOpen) {
+        ScanTypePickerDialog(
+            options = listOf(
+                "PAN Card" to OcrDocumentType.PAN_CARD,
+                "Aadhaar Card" to OcrDocumentType.AADHAAR_CARD,
+                "GST Certificate" to OcrDocumentType.GST_CERTIFICATE
+            ),
+            onDismiss = { isProfileScanPickerOpen = false },
+            onSelect = { type -> isProfileScanPickerOpen = false; onScanProfileDocument(type) }
+        )
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -81,6 +100,14 @@ fun ProfileScreen(
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
         }
 
+        SectionCard(
+            onClick = { isProfileScanPickerOpen = true },
+            title = "Scan PAN / Aadhaar / GST Certificate",
+            subtitle = "Extract details as a suggestion for you to review before applying"
+        ) {
+            Icon(Icons.Default.DocumentScanner, contentDescription = null)
+        }
+
         BusinessProfileSection(businessProfile, isPinCodeLookupInProgress, pinCodeLookupResult, onLookupPinCode, onSaveBusinessProfile)
         IndividualProfileSection(individualProfile, isPinCodeLookupInProgress, pinCodeLookupResult, onLookupPinCode, onSaveIndividualProfile)
 
@@ -90,7 +117,7 @@ fun ProfileScreen(
         SectionCard(onClick = onOpenSubscription, title = "Subscription", subtitle = "Plan & entitlements") {
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
         }
-        SectionCard(onClick = onOpenCompanyAndSync, title = "Company & Sync", subtitle = "Accounting setup, governance, cloud sync") {
+        SectionCard(onClick = onOpenCompanyAndSync, title = "My Business & Sync", subtitle = "Accounting setup, governance, cloud sync") {
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
         }
     }
@@ -141,6 +168,20 @@ private fun BusinessProfileSection(
             city = result.city; state = result.state; country = result.country
         }
     }
+    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
+    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
+    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
+    androidx.compose.runtime.LaunchedEffect(gstin) {
+        if (pan.isBlank()) ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
+    }
+
+    // Play Store readiness correction - real format validation for phone/email/PAN, matching the
+    // GSTIN pattern already used elsewhere; all four stay optional (blank is valid), this only
+    // rejects a non-blank value that isn't shaped like a real one.
+    val phoneInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
+    val emailInvalid = !ContactFieldValidation.isValidEmail(email)
+    val gstinInvalid = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)
+    val panInvalid = !ContactFieldValidation.isValidPan(pan)
 
     SectionCard(elevated = true) {
         ProfileSectionHeader(Icons.Default.Business, "Business Profile")
@@ -150,8 +191,16 @@ private fun BusinessProfileSection(
         FormField(value = legalName, onValueChange = { legalName = it }, label = "Legal name", modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(Spacing.sm))
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(value = phone, onValueChange = { phone = it }, label = "Phone", keyboardType = KeyboardType.Phone, modifier = Modifier.weight(1f))
-            FormField(value = email, onValueChange = { email = it }, label = "Email", keyboardType = KeyboardType.Email, modifier = Modifier.weight(1f))
+            FormField(
+                value = phone, onValueChange = { phone = it }, label = "Phone", keyboardType = KeyboardType.Phone,
+                isError = phoneInvalid, supportingText = if (phoneInvalid) "Not a valid 10-digit mobile number" else null,
+                modifier = Modifier.weight(1f)
+            )
+            FormField(
+                value = email, onValueChange = { email = it }, label = "Email", keyboardType = KeyboardType.Email,
+                isError = emailInvalid, supportingText = if (emailInvalid) "Not a valid email address" else null,
+                modifier = Modifier.weight(1f)
+            )
         }
         Spacer(modifier = Modifier.height(Spacing.sm))
         AddressPinCodeFields(
@@ -167,14 +216,22 @@ private fun BusinessProfileSection(
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN", modifier = Modifier.weight(1f))
-            FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.weight(1f))
+            FormField(
+                value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN",
+                isError = gstinInvalid, supportingText = if (gstinInvalid) "Not a valid GSTIN" else null,
+                modifier = Modifier.weight(1f)
+            )
+            FormField(
+                value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN",
+                isError = panInvalid, supportingText = if (panInvalid) "Not a valid PAN" else null,
+                modifier = Modifier.weight(1f)
+            )
         }
         Spacer(modifier = Modifier.height(Spacing.md))
         ActionButton(
             text = "Save Business Profile",
             onClick = { onSave(businessName, legalName, address, pinCode, city, state, country, phone, email, gstin, pan) },
-            enabled = businessName.isNotBlank(),
+            enabled = businessName.isNotBlank() && !phoneInvalid && !emailInvalid && !gstinInvalid && !panInvalid,
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -205,14 +262,33 @@ private fun IndividualProfileSection(
         }
     }
 
+    // Play Store readiness correction - see BusinessProfileSection's identical rationale above.
+    val phoneInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
+    val emailInvalid = !ContactFieldValidation.isValidEmail(email)
+    // An Individual's PAN has real, legally-fixed structure: 4th character 'P' (docs/CORRECTIONS_LOG.md,
+    // user request). The 5th-character (surname-letter) check was added and then explicitly
+    // retracted by the user after live testing - too unreliable across real naming conventions to
+    // enforce - so only the 4th-character holder-type check remains here.
+    val panFormatInvalid = !ContactFieldValidation.isValidPan(pan)
+    val panHolderTypeInvalid = !panFormatInvalid && !ContactFieldValidation.isValidPanForHolderType(pan, 'P')
+    val panInvalid = panFormatInvalid || panHolderTypeInvalid
+
     SectionCard(elevated = true) {
         ProfileSectionHeader(Icons.Default.Person, "Individual Profile")
         Spacer(modifier = Modifier.height(Spacing.md))
         FormField(value = name, onValueChange = { name = it }, label = "Full name", modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(Spacing.sm))
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(value = phone, onValueChange = { phone = it }, label = "Phone", keyboardType = KeyboardType.Phone, modifier = Modifier.weight(1f))
-            FormField(value = email, onValueChange = { email = it }, label = "Email", keyboardType = KeyboardType.Email, modifier = Modifier.weight(1f))
+            FormField(
+                value = phone, onValueChange = { phone = it }, label = "Phone", keyboardType = KeyboardType.Phone,
+                isError = phoneInvalid, supportingText = if (phoneInvalid) "Not a valid 10-digit mobile number" else null,
+                modifier = Modifier.weight(1f)
+            )
+            FormField(
+                value = email, onValueChange = { email = it }, label = "Email", keyboardType = KeyboardType.Email,
+                isError = emailInvalid, supportingText = if (emailInvalid) "Not a valid email address" else null,
+                modifier = Modifier.weight(1f)
+            )
         }
         Spacer(modifier = Modifier.height(Spacing.sm))
         AddressPinCodeFields(
@@ -227,12 +303,21 @@ private fun IndividualProfileSection(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(Spacing.sm))
-        FormField(value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN", modifier = Modifier.fillMaxWidth())
+        FormField(
+            value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN",
+            isError = panInvalid,
+            supportingText = when {
+                panFormatInvalid -> "Not a valid PAN"
+                panHolderTypeInvalid -> "An Individual's PAN must have 'P' as its 4th character"
+                else -> null
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(modifier = Modifier.height(Spacing.md))
         ActionButton(
             text = "Save Individual Profile",
             onClick = { onSave(name, address, pinCode, city, state, country, phone, email, pan) },
-            enabled = name.isNotBlank(),
+            enabled = name.isNotBlank() && !phoneInvalid && !emailInvalid && !panInvalid,
             modifier = Modifier.fillMaxWidth()
         )
     }

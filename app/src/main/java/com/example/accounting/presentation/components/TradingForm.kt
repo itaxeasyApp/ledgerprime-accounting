@@ -42,10 +42,14 @@ import androidx.compose.ui.unit.sp
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.inventory.StockItem
+import com.example.accounting.domain.accounting.RoundOffEngine
+import com.example.accounting.domain.taxation.gst.GSTRules
 import com.example.accounting.domain.taxation.gst.GstCalculationEngine
 import com.example.accounting.domain.taxation.gst.GstChargeType
+import com.example.accounting.domain.taxation.gst.GstPricingMode
 import com.example.accounting.domain.taxation.gst.GstSupplyNature
 import com.example.accounting.domain.taxation.gst.GstTransactionFacts
+import com.example.accounting.domain.taxation.gst.TaxBreakdown
 import java.util.UUID
 
 internal data class LineFormState(
@@ -53,6 +57,10 @@ internal data class LineFormState(
     val itemId: String = "",
     val quantityInput: String = "1",
     val rateInput: String = "",
+    /** Trade discount % on this line - reduces the taxable value before GST is computed, exactly
+     * like a real invoice's Discount column. Blank/0 is byte-identical to before this field
+     * existed. See [com.example.accounting.domain.trading.TradingLineInput.discountPercent]. */
+    val discountInput: String = "",
     val supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
     /** Rule 31 (Purchase/RCM Foundation) - only meaningful on a Purchase line with
      * [supplyNature] == NORMAL; [VoucherLineItemCard] only offers the control in that case. */
@@ -116,7 +124,14 @@ internal fun TradingForm(
     gstRateInput: String = "0",
     onGstRateChange: (String) -> Unit = {},
     hsnSacInput: String = "",
-    onHsnSacChange: (String) -> Unit = {}
+    onHsnSacChange: (String) -> Unit = {},
+    /** Centralized GST engine - whole-document GST Inclusive/Exclusive pricing (see
+     * [GstPricingMode]). Defaults to EXCLUSIVE, byte-identical to every Sale/Purchase before this
+     * toggle existed. Applied identically here (live preview) and in
+     * [com.example.accounting.domain.trading.TradingWorkflowEngine] (posting) via the same
+     * [GSTRules.extractTaxableFromInclusive] call - never a second inclusive/exclusive formula. */
+    pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE,
+    onPricingModeChange: (GstPricingMode) -> Unit = {}
 ) {
     Text(
         if (isSale) (if (isServiceCompany) "Income - Receipt" else "Sale - Tax Invoice") else (if (isServiceCompany) "Expenditure - Bill" else "Purchase - Supplier Bill"),
@@ -255,6 +270,22 @@ internal fun TradingForm(
         return
     }
 
+    Spacer(modifier = Modifier.height(10.dp))
+    Text("GST Pricing", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+    Spacer(modifier = Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        androidx.compose.material3.FilterChip(
+            selected = pricingMode == GstPricingMode.EXCLUSIVE,
+            onClick = { onPricingModeChange(GstPricingMode.EXCLUSIVE) },
+            label = { Text("Exclusive of GST", fontSize = 12.sp) }
+        )
+        androidx.compose.material3.FilterChip(
+            selected = pricingMode == GstPricingMode.INCLUSIVE,
+            onClick = { onPricingModeChange(GstPricingMode.INCLUSIVE) },
+            label = { Text("Inclusive of GST", fontSize = 12.sp) }
+        )
+    }
+
     Spacer(modifier = Modifier.height(12.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -280,13 +311,24 @@ internal fun TradingForm(
     }
 
     var runningTaxable = Money.ZERO
-    var runningTax = Money.ZERO
+    var runningCgst = Money.ZERO
+    var runningSgst = Money.ZERO
+    var runningIgst = Money.ZERO
 
     lines.forEachIndexed { index, line ->
         val item = itemsMap[line.itemId]
         val qty = line.quantityInput.toDoubleOrNull() ?: 0.0
         val rate = Money.parse(line.rateInput.ifBlank { "0" })
-        val lineTaxable = Money.fromPaise((qty * rate.paise).toLong())
+        val grossLineTaxable = Money.fromPaise((qty * rate.paise).toLong())
+        val discountPercent = (line.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0)
+        val netLineAmount = if (discountPercent > 0.0) grossLineTaxable - grossLineTaxable.percentage(discountPercent) else grossLineTaxable
+        // Centralized GST engine - the ONE place (shared with TradingWorkflowEngine.netTaxable)
+        // that turns an Inclusive-priced line into a taxable value; Exclusive is a no-op.
+        val lineTaxable = if (pricingMode == GstPricingMode.INCLUSIVE && item != null) {
+            GSTRules.extractTaxableFromInclusive(netLineAmount, item.gstRatePercent)
+        } else {
+            netLineAmount
+        }
 
         if (item != null && !placeOfSupplyMissing) {
             // UI-06: mirrors exactly what TradingWorkflowEngine.build() will compute at posting
@@ -304,7 +346,9 @@ internal fun TradingForm(
                 )
             )
             runningTaxable += breakdown.taxableAmount
-            runningTax += breakdown.totalTax
+            runningCgst += breakdown.cgstAmount
+            runningSgst += breakdown.sgstAmount
+            runningIgst += breakdown.igstAmount
         }
 
         VoucherLineItemCard(
@@ -312,6 +356,7 @@ internal fun TradingForm(
             line = line,
             item = item,
             lineTaxable = lineTaxable,
+            discountPercent = discountPercent,
             stockItems = stockItems,
             canRemove = lines.size > 1,
             onLineChange = { updated -> onLinesChange(lines.toMutableList().also { it[index] = updated }) },
@@ -320,7 +365,12 @@ internal fun TradingForm(
     }
 
     if (runningTaxable.isPositive) {
-        TradingTotalsSummary(taxable = runningTaxable, tax = runningTax)
+        TradingTotalsSummary(
+            taxable = runningTaxable,
+            cgst = runningCgst,
+            sgst = runningSgst,
+            igst = runningIgst
+        )
     }
 }
 
@@ -332,6 +382,7 @@ private fun VoucherLineItemCard(
     line: LineFormState,
     item: StockItem?,
     lineTaxable: Money,
+    discountPercent: Double = 0.0,
     stockItems: List<StockItem>,
     canRemove: Boolean,
     onLineChange: (LineFormState) -> Unit,
@@ -390,6 +441,13 @@ private fun VoucherLineItemCard(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
+                OutlinedTextField(
+                    value = line.discountInput,
+                    onValueChange = { onLineChange(line.copy(discountInput = it)) },
+                    label = { Text("Disc %") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f)
+                )
             }
             if (item != null) {
                 Spacer(modifier = Modifier.height(6.dp))
@@ -420,15 +478,16 @@ private fun VoucherLineItemCard(
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
+                val discountSuffix = if (discountPercent > 0.0) " (after ${discountPercent.let { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }}% discount)" else ""
                 Text(
                     text = if (line.supplyNature == GstSupplyNature.NORMAL) {
                         if (line.chargeType == GstChargeType.REVERSE_CHARGE) {
-                            "Amount ${lineTaxable.formatPlain()} - GST ${item.gstRatePercent}% (Reverse Charge - self-assessed, not billed by supplier) - HSN ${item.hsnCode.ifBlank { "-" }}"
+                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}% (Reverse Charge - self-assessed, not billed by supplier) - HSN ${item.hsnCode.ifBlank { "-" }}"
                         } else {
-                            "Amount ${lineTaxable.formatPlain()} - GST ${item.gstRatePercent}% - HSN ${item.hsnCode.ifBlank { "-" }}"
+                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}% - HSN ${item.hsnCode.ifBlank { "-" }}"
                         }
                     } else {
-                        "Amount ${lineTaxable.formatPlain()} - ${item.gstRatePercent}% GST (${line.supplyNature.displayLabel} - no tax charged) - HSN ${item.hsnCode.ifBlank { "-" }}"
+                        "Amount ${lineTaxable.formatPlain()}$discountSuffix - ${item.gstRatePercent}% GST (${line.supplyNature.displayLabel} - no tax charged) - HSN ${item.hsnCode.ifBlank { "-" }}"
                     },
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -437,9 +496,18 @@ private fun VoucherLineItemCard(
     }
 }
 
-/** Running Taxable/GST/Total preview - extracted from [TradingForm] since it is pure display logic. */
+/**
+ * Running Taxable/CGST/SGST/IGST/Round Off/Grand Total preview - shows only the applicable tax
+ * columns (CGST+SGST for intra-state, IGST for inter-state - never both, matching what
+ * [com.example.accounting.domain.trading.TradingWorkflowEngine] will actually post and what the
+ * invoice PDF will actually print). Round Off here calls the exact same
+ * [RoundOffEngine.roundInvoiceTotal] the engine calls at posting time - "approx." is gone because
+ * this is no longer an approximation.
+ */
 @Composable
-private fun TradingTotalsSummary(taxable: Money, tax: Money) {
+private fun TradingTotalsSummary(taxable: Money, cgst: Money, sgst: Money, igst: Money) {
+    val totalTax = cgst + sgst + igst
+    val roundOff = RoundOffEngine.roundInvoiceTotal(taxable + totalTax)
     Spacer(modifier = Modifier.height(4.dp))
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
@@ -451,14 +519,38 @@ private fun TradingTotalsSummary(taxable: Money, tax: Money) {
                 Text("Taxable Value:", style = MaterialTheme.typography.bodySmall)
                 Text(taxable.formatPlain(), style = MaterialTheme.typography.bodySmall)
             }
+            // Same-state -> CGST+SGST; different-state -> IGST - never both, mirroring the posted
+            // voucher and the printed invoice exactly.
+            if (cgst.isPositive || sgst.isPositive) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("CGST:", style = MaterialTheme.typography.bodySmall)
+                    Text(cgst.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("SGST:", style = MaterialTheme.typography.bodySmall)
+                    Text(sgst.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            if (igst.isPositive) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("IGST:", style = MaterialTheme.typography.bodySmall)
+                    Text(igst.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("GST:", style = MaterialTheme.typography.bodySmall)
-                Text(tax.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                Text("Total GST:", style = MaterialTheme.typography.bodySmall)
+                Text(totalTax.formatPlain(), style = MaterialTheme.typography.bodySmall)
+            }
+            if (roundOff.roundOffAmount.paise != 0L) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Round Off:", style = MaterialTheme.typography.bodySmall)
+                    Text(roundOff.roundOffAmount.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                }
             }
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Total (approx.):", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                Text((taxable + tax).formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary))
+                Text("Grand Total:", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                Text(roundOff.roundedTotal.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary))
             }
         }
     }

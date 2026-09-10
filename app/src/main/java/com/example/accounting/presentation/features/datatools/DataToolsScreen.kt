@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,12 +39,16 @@ import com.example.accounting.domain.dataimport.ImportSuggestionType
 import com.example.accounting.presentation.components.SectionCard
 
 /**
- * Phase 7J UI: "Import & Scan" - CSV/JSON import and "Scan Receipt" (OCR), both strictly
- * File -> Parser -> Validation -> Draft/Suggestion -> User Review -> Explicit Create/Post per the
- * UX spec's Section 9/10. Nothing here ever calls `createParty`/`createLedger`/`createStockItem`/
- * `postVoucher` directly - only `AccountingViewModel.reviewAndCreateImportRow` (one suggestion at
- * a time, human-triggered) does, and OCR only ever produces a `PENDING_REVIEW` voucher draft for
- * the Money tab's review queue, never a posted voucher.
+ * Phase 7J UI: "Import" - CSV/JSON import, strictly File -> Parser -> Validation -> Draft/
+ * Suggestion -> User Review -> Explicit Create per the UX spec's Section 9/10. Nothing here ever
+ * calls `createParty`/`createLedger`/`createStockItem` directly - only
+ * `AccountingViewModel.reviewAndCreateImportRow` (one suggestion at a time, human-triggered) does.
+ *
+ * The OCR "Scan Document" entry point that used to live here was removed - every scan type now has
+ * a contextual home on the screen it belongs to instead (Sales/Purchases/Profile/Money - see
+ * docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md), and its review step is now a
+ * modal `OcrReviewDialog` shown from `MainAppScreen` itself rather than embedded in this one screen
+ * - a scan started from Sales must be reviewable without navigating here first.
  */
 @Composable
 fun DataToolsScreen(
@@ -58,11 +64,10 @@ fun DataToolsScreen(
     /** Third parameter is the reviewer's chosen Group id for a LEDGER row (from the picker below),
      * always null for PARTY/STOCK_ITEM rows, which need no group. */
     onReviewAndCreateRow: (ImportRowSuggestion, ImportSuggestionType, String?) -> Unit,
-    onPickReceiptPhoto: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("Import & Scan", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+        Text("Import Data", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
 
         SectionCard(elevated = true, title = "Import Party/Ledger/Item data") {
             Text(
@@ -75,16 +80,6 @@ fun DataToolsScreen(
                 OutlinedButton(onClick = onPickCsvFile) { Text("Pick CSV") }
                 OutlinedButton(onClick = onPickJsonFile) { Text("Pick JSON") }
             }
-        }
-
-        SectionCard(elevated = true, title = "Scan Receipt") {
-            Text(
-                "Scan a receipt or bill photo - fields are extracted as a suggestion for a Voucher Draft; nothing posts automatically.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(onClick = onPickReceiptPhoto) { Text("Scan Receipt") }
         }
 
         if (lastImportResult != null) {
@@ -174,7 +169,16 @@ private fun ImportRowCard(
                 }
             }
             else -> {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Step 6 live-device fix - a plain Row here squeezed all three buttons to fit the
+                // available width instead of scrolling, and "Create as STOCK_ITEM" (the longest
+                // label) rendered its text one character per line, unreadable and barely tappable.
+                // Same proven fix as VoucherDetailDialog's own action row: fillMaxWidth +
+                // horizontalScroll lets every button keep its natural width and the row scrolls
+                // instead of compressing.
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     ImportSuggestionType.entries.forEach { type ->
                         OutlinedButton(
                             onClick = {

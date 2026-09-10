@@ -9,9 +9,11 @@ import com.example.accounting.domain.accounting.RoundOffEngine
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.inventory.StockDirection
 import com.example.accounting.domain.inventory.VoucherStockLine
+import com.example.accounting.domain.taxation.gst.GSTRules
 import com.example.accounting.domain.taxation.gst.GstCalculationEngine
 import com.example.accounting.domain.taxation.gst.GstChargeType
 import com.example.accounting.domain.taxation.gst.GstDirection
+import com.example.accounting.domain.taxation.gst.GstPricingMode
 import com.example.accounting.domain.taxation.gst.GstSupplyNature
 import com.example.accounting.domain.taxation.gst.GstTransaction
 import com.example.accounting.domain.taxation.gst.GstTransactionFacts
@@ -40,6 +42,15 @@ data class TradingLineInput(
     val rate: Money,
     val gstRatePercent: Double,
     val cessRatePercent: Double = 0.0,
+    /** Trade discount on this line (Discount %, entered on the Sale/Purchase form) - reduces the
+     * taxable value BEFORE GST is calculated, exactly like a real invoice's Discount column: GST
+     * is charged on the net (post-discount) value, never on the gross list price. Defaults to 0.0,
+     * i.e. byte-identical behavior to before this field existed. Deliberately not persisted as its
+     * own column - [VoucherStockLine.amount]/[GstTransaction.taxableAmount] already store the
+     * resulting net value directly, which is all GST/reporting correctness needs; only the exact
+     * percentage itself is not separately recoverable later (Rate x Qty vs. Amount already shows
+     * a discount was applied). */
+    val discountPercent: Double = 0.0,
     /** Tax Treatment (UI-06) - defaults to NORMAL (Taxable), i.e. byte-identical behavior to
      * before this field existed: geography (company vs place-of-supply) still decides Intra/Inter.
      * EXPORT/EXEMPT/NIL_RATED bypass geography entirely via [GstCalculationEngine.calculateDetailed]. */
@@ -95,6 +106,33 @@ data class TradingWorkflowResult(
  */
 object TradingWorkflowEngine {
 
+    /**
+     * Gross (Rate x Qty) less the line's Discount %, then - only in [GstPricingMode.INCLUSIVE] -
+     * backed out to a pre-tax taxable value via [GSTRules.extractTaxableFromInclusive]. The one
+     * shared computation every build path below uses instead of calling
+     * [VoucherStockLine.computeAmount] directly, so [GstPricingMode.EXCLUSIVE] (every line before
+     * both this field and Discount existed) is byte-identical to the old gross value. Discount is
+     * applied on whatever basis [line.rate] already is (inclusive or exclusive) before the
+     * inclusive-mode backout - the discount itself is never treated as a tax-bearing adjustment.
+     */
+    private fun netTaxable(line: TradingLineInput, pricingMode: GstPricingMode): Money = lineAmounts(line, pricingMode).taxable
+
+    /** The discount amount actually subtracted (Rate x Qty x Discount% - one computation, read
+     * from here by both [netTaxable] callers and the [VoucherStockLine.discount] persisted on the
+     * stock line, never re-derived a second way for display). */
+    private data class LineAmounts(val gross: Money, val discountAmount: Money, val taxable: Money)
+
+    private fun lineAmounts(line: TradingLineInput, pricingMode: GstPricingMode): LineAmounts {
+        val gross = VoucherStockLine.computeAmount(line.quantity, line.rate)
+        val discountAmount = if (line.discountPercent > 0.0) gross.percentage(line.discountPercent) else Money.ZERO
+        val net = gross - discountAmount
+        val taxable = when (pricingMode) {
+            GstPricingMode.EXCLUSIVE -> net
+            GstPricingMode.INCLUSIVE -> GSTRules.extractTaxableFromInclusive(net, line.gstRatePercent)
+        }
+        return LineAmounts(gross, discountAmount, taxable)
+    }
+
     fun buildSale(
         voucherId: String, companyId: String, financialYearId: String,
         customerLedgerId: String, customerName: String, customerGstin: String,
@@ -108,14 +146,18 @@ object TradingWorkflowEngine {
          * closes). `true` (every existing caller, unchanged) produces [VoucherStockLine]s exactly
          * as before; `false` (Account-Only + GST-applicable) skips them while still computing the
          * full CGST/SGST/IGST/CESS breakdown and tax-ledger postings via the same code below. */
-        trackInventory: Boolean = true
+        trackInventory: Boolean = true,
+        /** GST Inclusive/Exclusive pricing (whole document, not per-line - a real invoice is
+         * priced one way or the other) - defaults to EXCLUSIVE, i.e. byte-identical behavior to
+         * before this parameter existed. See [netTaxable]. */
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
     ): TradingWorkflowResult = build(
         isSale = true, voucherId = voucherId, companyId = companyId, financialYearId = financialYearId,
         partyLedgerId = customerLedgerId, partyName = customerName, partyGstin = customerGstin,
         tradeLedgerId = salesLedgerId, tradeLedgerName = salesLedgerName,
         companyStateCode = companyStateCode, placeOfSupply = placeOfSupply, lines = lines,
         gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName,
-        trackInventory = trackInventory
+        trackInventory = trackInventory, pricingMode = pricingMode
     )
 
     /**
@@ -142,13 +184,15 @@ object TradingWorkflowEngine {
         /** D1b - the real invoice/business date for this GST-only Sale; see [GstTransaction.transactionDate]. */
         date: LocalDate,
         /** D1b - the customer's [GstRegistrationStatus] at posting time; see [GstTransaction.partyGstRegistrationStatus]. */
-        partyGstRegistrationStatus: GstRegistrationStatus?
+        partyGstRegistrationStatus: GstRegistrationStatus?,
+        /** See [buildSale]'s parameter of the same name. */
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
     ): List<GstTransaction> {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // D1b: one correlation id shared by every line of THIS Sale - see GstTransaction.transactionGroupId.
         val groupId = UUID.randomUUID().toString()
         return lines.mapIndexed { index, line ->
-            val lineTaxable = VoucherStockLine.computeAmount(line.quantity, line.rate)
+            val lineTaxable = netTaxable(line, pricingMode)
             val breakdown = GstCalculationEngine.calculateDetailed(
                 GstTransactionFacts(
                     taxableAmount = lineTaxable,
@@ -206,7 +250,9 @@ object TradingWorkflowEngine {
         placeOfSupply: String,
         lines: List<TradingLineInput>,
         date: LocalDate,
-        partyGstRegistrationStatus: GstRegistrationStatus?
+        partyGstRegistrationStatus: GstRegistrationStatus?,
+        /** See [buildSale]'s parameter of the same name. */
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
     ): List<GstTransaction> {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // Rule 31 (Purchase/RCM Foundation): the same authoritative backstop `build()` enforces for
@@ -216,7 +262,7 @@ object TradingWorkflowEngine {
         }
         val groupId = UUID.randomUUID().toString()
         return lines.mapIndexed { index, line ->
-            val lineTaxable = VoucherStockLine.computeAmount(line.quantity, line.rate)
+            val lineTaxable = netTaxable(line, pricingMode)
             val breakdown = GstCalculationEngine.calculateDetailed(
                 GstTransactionFacts(
                     taxableAmount = lineTaxable,
@@ -362,14 +408,16 @@ object TradingWorkflowEngine {
         lines: List<TradingLineInput>,
         gstLedgers: TradingGstLedgers,
         roundOffLedgerId: String, roundOffLedgerName: String,
-        trackInventory: Boolean = true
+        trackInventory: Boolean = true,
+        /** See [buildSale]'s parameter of the same name. */
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
     ): TradingWorkflowResult = build(
         isSale = false, voucherId = voucherId, companyId = companyId, financialYearId = financialYearId,
         partyLedgerId = supplierLedgerId, partyName = supplierName, partyGstin = supplierGstin,
         tradeLedgerId = purchaseLedgerId, tradeLedgerName = purchaseLedgerName,
         companyStateCode = companyStateCode, placeOfSupply = placeOfSupply, lines = lines,
         gstLedgers = gstLedgers, roundOffLedgerId = roundOffLedgerId, roundOffLedgerName = roundOffLedgerName,
-        trackInventory = trackInventory
+        trackInventory = trackInventory, pricingMode = pricingMode
     )
 
     private fun build(
@@ -380,7 +428,8 @@ object TradingWorkflowEngine {
         lines: List<TradingLineInput>,
         gstLedgers: TradingGstLedgers,
         roundOffLedgerId: String, roundOffLedgerName: String,
-        trackInventory: Boolean = true
+        trackInventory: Boolean = true,
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
     ): TradingWorkflowResult {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // Rule 31 (Purchase/RCM Foundation): authoritative backstops, matching the
@@ -421,7 +470,8 @@ object TradingWorkflowEngine {
         val gstTransactions = mutableListOf<GstTransaction>()
 
         lines.forEachIndexed { index, line ->
-            val lineTaxable = VoucherStockLine.computeAmount(line.quantity, line.rate)
+            val lineComputed = lineAmounts(line, pricingMode)
+            val lineTaxable = lineComputed.taxable
             val breakdown = GstCalculationEngine.calculateDetailed(
                 GstTransactionFacts(
                     taxableAmount = lineTaxable,
@@ -462,7 +512,7 @@ object TradingWorkflowEngine {
                     lineId = UUID.randomUUID().toString(), voucherId = voucherId, companyId = companyId,
                     financialYearId = financialYearId, itemId = line.itemId, itemName = line.itemName,
                     direction = stockDirection, quantity = line.quantity, rate = line.rate,
-                    amount = lineTaxable, lineOrder = index + 1
+                    amount = lineTaxable, lineOrder = index + 1, discount = lineComputed.discountAmount
                 )
             }
 

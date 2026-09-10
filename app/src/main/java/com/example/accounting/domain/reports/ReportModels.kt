@@ -146,7 +146,13 @@ data class BalanceSheetReport(
 data class LedgerStatementRow(
     val voucherId: String,
     val voucherNumber: String,
-    val voucherType: String,
+    /** Real bug fix (docs/CORRECTIONS_LOG.md) - was a plain `String` (`VoucherType.displayName`,
+     * display text thrown away as the only representation), so a Compose UI row had no way to
+     * branch on the actual voucher type (e.g. deciding whether a "Preview & Share" action applies,
+     * or navigating to the right detail route) without re-parsing a display string. The real enum
+     * is both a valid display value (via its own `.displayName`) and a real navigation/branching
+     * key - never a second, parallel representation of the same fact. */
+    val voucherType: VoucherType,
     val date: LocalDate,
     val particulars: String,
     val debitAmount: Money,

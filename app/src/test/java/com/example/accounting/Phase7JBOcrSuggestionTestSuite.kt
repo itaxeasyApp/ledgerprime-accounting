@@ -10,6 +10,7 @@ import com.example.accounting.domain.ocr.OcrExtractionResult
 import com.example.accounting.domain.ocr.OcrIngestionAdapter
 import com.example.accounting.domain.rendering.BusinessProfile
 import com.example.accounting.domain.rendering.ConstitutionType
+import com.example.accounting.domain.accounting.VoucherType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -38,7 +39,11 @@ class Phase7JBOcrSuggestionTestSuite {
     )
 
     private class FakeOcrAdapter(private val result: AccountingResult<OcrExtractionResult>) : OcrIngestionAdapter {
-        override suspend fun extractFromDocument(requestingCompany: BusinessProfile, documentAssetId: String) = result
+        override suspend fun extractFromDocument(
+            requestingCompany: BusinessProfile,
+            documentAssetId: String,
+            documentTypeHint: com.example.accounting.domain.ocr.OcrDocumentType
+        ) = result
     }
 
     @Test
@@ -86,5 +91,39 @@ class Phase7JBOcrSuggestionTestSuite {
         assertTrue(draft?.narration?.contains("ACME Supplies") == true)
         assertTrue("OCR must never fabricate a ledger-mapped line", dao.getLinesForVoucherDraft(draftId).isEmpty())
         assertTrue(dao.getVouchersByCompany(companyId).first().isEmpty())
+    }
+
+    /** Step 7 live-device fix - [VoucherDraftEditorScreen] has no voucher-type selector at all, so
+     * whichever [VoucherType] this draft is created with is exactly what gets posted.
+     * `AccountingViewModel.scanDocument` now maps a scanned Purchase Bill/Sales Invoice's already-
+     * correctly-classified [OcrExtractionResult.documentType] onto this parameter (PURCHASE_BILL ->
+     * PURCHASE, SALES_INVOICE -> SALES) instead of always taking the JOURNAL default - this pins
+     * the service-level mechanism that fix depends on: the draft actually persists whatever
+     * [VoucherType] it's given, not a hardcoded one. */
+    @Test
+    fun testReviewAndPrefillVoucherDraft_explicitVoucherType_isPersistedOnTheDraft() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompanyAndFy()
+        val service = OcrSuggestionService(adapter = null, dao = dao)
+
+        val purchaseExtraction = OcrExtractionResult(
+            sourceAssetId = "ASSET_2", documentType = OcrDocumentType.PURCHASE_BILL, confidenceScore = 0.75,
+            vendorNameGuess = "ACME Supplies", totalAmountGuess = Money.fromPaise(4_500_00L)
+        )
+        val purchaseDraftId = service.reviewAndPrefillVoucherDraft(companyId, fyId, purchaseExtraction, VoucherType.PURCHASE)
+        assertEquals(VoucherType.PURCHASE, dao.getVoucherDraftById(companyId, purchaseDraftId)?.voucherType)
+
+        val salesExtraction = OcrExtractionResult(
+            sourceAssetId = "ASSET_3", documentType = OcrDocumentType.SALES_INVOICE, confidenceScore = 0.75,
+            vendorNameGuess = "Retail Customer", totalAmountGuess = Money.fromPaise(1_180_00L)
+        )
+        val salesDraftId = service.reviewAndPrefillVoucherDraft(companyId, fyId, salesExtraction, VoucherType.SALES)
+        assertEquals(VoucherType.SALES, dao.getVoucherDraftById(companyId, salesDraftId)?.voucherType)
+
+        // Unchanged default for the genuinely ambiguous document types (Expense Receipt/Bank
+        // Statement/UPI Payment) - direction is never known from OCR alone.
+        val bankExtraction = OcrExtractionResult(sourceAssetId = "ASSET_4", documentType = OcrDocumentType.BANK_STATEMENT, confidenceScore = 0.4)
+        val bankDraftId = service.reviewAndPrefillVoucherDraft(companyId, fyId, bankExtraction)
+        assertEquals(VoucherType.JOURNAL, dao.getVoucherDraftById(companyId, bankDraftId)?.voucherType)
     }
 }

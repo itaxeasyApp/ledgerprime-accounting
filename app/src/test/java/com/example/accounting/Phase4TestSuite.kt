@@ -478,12 +478,13 @@ class Phase4TestSuite {
         VoucherPostingEngine.post(dao, v, simpleJournal("V1", "LED_DEBTOR", "LED_SALES", 4000_00L), "IK1", "TESTER", listOf(stockLine("V1", "ITEM_1", StockDirection.OUT, 4, 1000_00L)))
         VoucherPostingEngine.cancel(dao, companyId, fyId, "V1", "IK-C1", "TESTER")
 
-        // Real delete (explicit correction): the voucher row is genuinely gone after the first
-        // cancel, so a second attempt (a different idempotency key) now fails "not found", not the
-        // old "already cancelled" business-rule rejection.
+        // Auditable soft-cancel (Step 3 live-device fix): the voucher row persists (isCancelled =
+        // true) after the first cancel, so a second attempt (a different idempotency key) is
+        // rejected by VoucherPostingEngine.cancel's own explicit "already cancelled" guard -
+        // without it, stock would be reversed a second time below.
         try {
             VoucherPostingEngine.cancel(dao, companyId, fyId, "V1", "IK-C2", "TESTER")
-            fail("Expected cancelling an already-deleted voucher to be rejected")
+            fail("Expected cancelling an already-cancelled voucher to be rejected")
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message?.contains("V1") == true)
         }

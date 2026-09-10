@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -132,8 +133,8 @@ fun CreateVoucherDialog(
      * double-entry form state. Not offered for Sale/Purchase/Credit-Debit Note this pass - those flows
      * build GST/stock detail only at post time, so a header-only draft would be lossy (see docs/54). */
     onSaveAsDraft: (VoucherType, LocalDate, String, String, Money, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
-    onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
-    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String) -> Unit = { _, _, _, _, _, _ -> },
+    onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, com.example.accounting.domain.taxation.gst.GstPricingMode) -> Unit = { _, _, _, _, _, _, _ -> },
+    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, com.example.accounting.domain.taxation.gst.GstPricingMode) -> Unit = { _, _, _, _, _, _, _ -> },
     /** D1a - Sale/Purchase for an ACCOUNT_ONLY company: Party ledger, Trade ledger, amount, date,
      * reference number, narration, GST rate % (0.0 = no GST), HSN/SAC. Accounting-flow audit fix -
      * the trailing (Double, String) pair was added so Account-Only can still charge/claim GST when
@@ -268,6 +269,12 @@ fun CreateVoucherDialog(
         )
     }
     var lines by remember { mutableStateOf(listOf(LineFormState())) }
+    // Centralized GST engine - GST Inclusive/Exclusive pricing, whole-document (never per-line -
+    // a real invoice is priced one way or the other). Defaults to EXCLUSIVE, byte-identical to
+    // every existing Sale/Purchase before this toggle existed.
+    var pricingMode by remember(selectedType) {
+        mutableStateOf(com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE)
+    }
     // Accounting-flow audit fix - Account-Only Sale/Purchase GST rate/HSN, only ever read when
     // isInventoryEnabled is false and gstApplicable is true (see TradingForm's own gating).
     // Extend-correction-to-all-types fix - seeded from prefillGstDetail when correcting a Sale/
@@ -368,7 +375,13 @@ fun CreateVoucherDialog(
                 ?: cashBankLedgers.firstOrNull()?.ledgerId ?: ""
         )
     }
-    var paymentMode by remember { mutableStateOf("BANK") }
+    // Extend-correction-to-all-types fix (Payment Mode gap) - settlementCashBankLedgerId above
+    // already prefills the correct ledger from the cancelled original, but the Payment Mode pill
+    // (persisted on Voucher.paymentMode, driving the "via CASH/BANK" text on VoucherDetailDialog)
+    // was hardcoded to "BANK" even when correcting a CASH voucher - a real device-testing find.
+    var paymentMode by remember(prefillFrom) {
+        mutableStateOf(if (isPrefillSettlement) prefillFrom?.paymentMode?.takeIf { it.isNotBlank() } ?: "BANK" else "BANK")
+    }
     var settlementAmountInput by remember(prefillFrom) {
         mutableStateOf(if (isPrefillSettlement) prefillFrom?.totalDebits?.takeIf { it.isPositive }?.formatPlain() ?: "" else "")
     }
@@ -394,9 +407,18 @@ fun CreateVoucherDialog(
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
                 .fillMaxWidth(0.94f)
+                // Real-device QA fix - this Surface previously had no height bound, so
+                // `weight(1f, fill = false)` on the scrollable body below (inside an
+                // effectively unbounded-height Column) couldn't actually cap anything: for a
+                // tall form (e.g. an item-based Sale/Purchase with the GST Pricing toggle and
+                // live CGST/SGST/Total GST/Round Off breakdown), the whole dialog just grew
+                // past the screen, pushing "Post to Ledger" underneath the on-screen
+                // navigation bar - visible but untappable. Capping the Surface itself is what
+                // makes that weight meaningful, so the footer always stays on-screen.
+                .fillMaxHeight(0.92f)
                 .padding(vertical = 16.dp)
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
                 // Hoisted out of the scrollable body below - also needed by the fixed footer's
                 // Post button (`enabled = isReady && ...`), which now lives outside that scroll area.
                 val isReady = when {
@@ -575,7 +597,9 @@ fun CreateVoucherDialog(
                         gstRateInput = accountOnlyGstRateInput,
                         onGstRateChange = { accountOnlyGstRateInput = it },
                         hsnSacInput = accountOnlyHsnSacInput,
-                        onHsnSacChange = { accountOnlyHsnSacInput = it }
+                        onHsnSacChange = { accountOnlyHsnSacInput = it },
+                        pricingMode = pricingMode,
+                        onPricingModeChange = { pricingMode = it }
                     )
 
                     isNoteFlow -> NoteForm(
@@ -726,6 +750,10 @@ fun CreateVoucherDialog(
                                 if (isNoteFlow) "Ready to Post" else "Ready to Post - Total ${readyTotal.formatPlain()}"
                             } else if (isSettlementFlow && unallocatedRemainder.paise < 0L) {
                                 "Allocated amount exceeds the amount entered"
+                            } else if (isTradingFlow && partyLedgerId.isBlank()) {
+                                "Select a ${if (isSaleFlow) "Customer" else "Supplier"} to continue"
+                            } else if (isTradingFlow && tradeLedgerId.isBlank()) {
+                                "Select ${if (isSaleFlow) "a Sales" else "a Purchase"} Account to continue"
                             } else "Complete the fields to continue",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                             color = if (isReady) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
@@ -786,17 +814,23 @@ fun CreateVoucherDialog(
                                 isSaleFlow && isInventoryEnabled -> onPostSaleInvoice(
                                     partyLedgerId, tradeLedgerId,
                                     lines.filter { it.itemId.isNotBlank() }.map {
-                                        AccountingViewModel.TradingLineForm(it.itemId, it.quantityInput.toDoubleOrNull() ?: 0.0, Money.parse(it.rateInput.ifBlank { "0" }), it.supplyNature, it.chargeType)
+                                        AccountingViewModel.TradingLineForm(
+                                            it.itemId, it.quantityInput.toDoubleOrNull() ?: 0.0, Money.parse(it.rateInput.ifBlank { "0" }),
+                                            it.supplyNature, it.chargeType, (it.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0)
+                                        )
                                     },
-                                    LocalDate.now(), referenceNumber, narration
+                                    LocalDate.now(), referenceNumber, narration, pricingMode
                                 )
                                 isSaleFlow -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
                                 isPurchaseFlow && isInventoryEnabled -> onPostPurchaseBill(
                                     partyLedgerId, tradeLedgerId,
                                     lines.filter { it.itemId.isNotBlank() }.map {
-                                        AccountingViewModel.TradingLineForm(it.itemId, it.quantityInput.toDoubleOrNull() ?: 0.0, Money.parse(it.rateInput.ifBlank { "0" }), it.supplyNature, it.chargeType)
+                                        AccountingViewModel.TradingLineForm(
+                                            it.itemId, it.quantityInput.toDoubleOrNull() ?: 0.0, Money.parse(it.rateInput.ifBlank { "0" }),
+                                            it.supplyNature, it.chargeType, (it.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0)
+                                        )
                                     },
-                                    LocalDate.now(), referenceNumber, narration
+                                    LocalDate.now(), referenceNumber, narration, pricingMode
                                 )
                                 isPurchaseFlow -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
                                 isCreditNoteFlow -> onPostCreditNote(originalVoucherId, LocalDate.now(), referenceNumber, narration)

@@ -180,6 +180,43 @@ class Phase7JBPartyManagementTestSuite {
         assertEquals(DrCr.DEBIT, updated.openingBalanceType)
     }
 
+    /** Step 4 live-device fix - reproduced on device: editing a never-posted-to ledger's Opening
+     * Balance left Current Balance stuck at the OLD value, since [AccountingRepository.updateLedger]
+     * unconditionally copied `existing.currentBalancePaise` even when zero entries exist. With zero
+     * postings, current balance IS opening balance by definition (opening + no deltas since), so it
+     * must track a same-request opening-balance edit - unlike the entries-exist case above, which
+     * correctly stays untouched (system-maintained running total). */
+    @Test
+    fun testUpdateLedger_OpeningBalanceEdited_ZeroEntries_CurrentBalanceTracksNewOpeningBalance() = runBlocking {
+        val dao = freshDao()
+        dao.seedCompanyAndFy()
+        val repository = AccountingRepository(dao, db = null)
+
+        val created = (repository.createLedger(
+            Ledger(
+                ledgerId = "", companyId = companyId,
+                groupId = "${StandardSystemGroups.INDIRECT_EXPENSE_GROUP_ID}_$companyId",
+                name = "Test", openingBalance = Money.fromPaise(999_00L), openingBalanceType = DrCr.DEBIT
+            )
+        ) as AccountingResult.Success).data
+        // createLedger's return value is the caller's own input Ledger (patched only with the
+        // generated id) - it never reflects the persisted entity's computed currentBalance, so
+        // the real, persisted balance is read back from the dao directly, same as every other
+        // balance assertion in this suite.
+        val persistedAfterCreate = dao.getLedgerById(companyId, created.ledgerId)!!
+        assertEquals("Current balance must equal opening balance right after creation", 999_00L, persistedAfterCreate.currentBalancePaise)
+
+        val updateResult = repository.updateLedger(created.copy(openingBalance = Money.fromPaise(555_00L)))
+        val updated = (updateResult as AccountingResult.Success).data
+
+        assertEquals("Opening balance edit must apply with zero postings", 555_00L, updated.openingBalance.paise)
+        assertEquals("Current balance must track the new opening balance, not the stale old one", 555_00L, updated.currentBalance.paise)
+        assertEquals(DrCr.DEBIT, updated.currentBalanceType)
+
+        val persistedAfterUpdate = dao.getLedgerById(companyId, created.ledgerId)!!
+        assertEquals("Persisted row's current balance must also track the new opening balance", 555_00L, persistedAfterUpdate.currentBalancePaise)
+    }
+
     @Test
     fun testStockItemManagementService_createAndList() = runBlocking {
         val dao = freshDao()

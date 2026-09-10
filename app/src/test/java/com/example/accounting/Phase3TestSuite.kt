@@ -268,9 +268,10 @@ class Phase3TestSuite {
         assertEquals(0L, debtorRow.closingDebit.paise)
         assertEquals(0L, debtorRow.closingCredit.paise)
         assertEquals(0L, salesRow.closingCredit.paise)
-        // Real delete (explicit correction): the original journal lines are gone outright, never
-        // left behind alongside a same-voucher offsetting entry, so period movement is genuinely
-        // zero - not "1000 posted + 1000 reversed".
+        // Auditable soft-cancel (Step 3 live-device fix): the original journal lines are never
+        // deleted (V1's own detail view still shows them), but Trial Balance excludes a cancelled
+        // voucher's lines itself (see AccountingDao.getAllJournalItems's own comment), so period
+        // movement here is still genuinely zero - not "1000 posted + 1000 reversed".
         assertEquals(0L, debtorRow.transactionDebit.paise + debtorRow.transactionCredit.paise)
         assertTrue(tb.isBalanced)
     }

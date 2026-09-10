@@ -18,8 +18,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -39,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,6 +59,7 @@ import com.example.accounting.domain.reports.GSTSummaryReport
 import com.example.accounting.domain.reports.IncomeExpenditureReport
 import com.example.accounting.domain.reports.ProfitAndLossReport
 import com.example.accounting.domain.reports.TrialBalanceReport
+import com.example.accounting.domain.reports.TrialBalanceRow
 import com.example.accounting.presentation.viewmodel.AccountingUiState
 
 @Composable
@@ -90,6 +95,16 @@ fun ReportsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        // Document-style header (explicit design instruction) - report name centered, the
+        // selected Business/User Profile name, the Financial Year, then a divider - identical
+        // shape on every report tab, sourced from the same already-loaded uiState fields the rest
+        // of this screen already uses (never a second company/FY lookup).
+        com.example.accounting.presentation.components.ReportDocumentHeader(
+            reportName = tabs[selectedReportTab],
+            businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+            financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
+        )
+
         when (selectedReportTab) {
             0 -> TrialBalanceView(report = uiState.trialBalance)
             1 -> if (isService) {
@@ -101,6 +116,37 @@ fun ReportsScreen(
             3 -> GSTCenterView(report = uiState.gstSummary)
         }
     }
+}
+
+/** One renderable row of the Trial Balance's expandable group tree - a UI-only flattening of
+ * [UiGroupTreeNode] (from `ReportUiModels.kt`) into what a `LazyColumn` can actually render, kept
+ * in this file (not `ReportUiModels.kt`) since "how to flatten a tree for one specific screen's
+ * LazyColumn" is that screen's own concern, not a general-purpose report-data-shaping concern. */
+private sealed class TrialBalanceVisibleRow {
+    abstract val key: String
+    data class Group(val node: UiGroupTreeNode) : TrialBalanceVisibleRow() {
+        override val key: String = "group_${node.groupId}"
+    }
+    data class Ledger(val row: TrialBalanceRow, val depthLevel: Int) : TrialBalanceVisibleRow() {
+        override val key: String = "ledger_${row.ledgerId}"
+    }
+}
+
+/** Recursively drops a group (and everything under it) once it has zero Debit AND zero Credit
+ * across itself and every descendant - the same "hide empty" rule the old flat list already
+ * applied per-ledger, now applied per-group too so an entirely-unused Primary Group never shows as
+ * an empty, un-expandable row. */
+private fun UiGroupTreeNode.isEffectivelyEmpty(): Boolean =
+    totalDebit.paise == 0L && totalCredit.paise == 0L && ledgers.isEmpty() && children.all { it.isEffectivelyEmpty() }
+
+private fun UiGroupTreeNode.flattenVisible(): List<TrialBalanceVisibleRow> {
+    if (isEffectivelyEmpty()) return emptyList()
+    val self = listOf<TrialBalanceVisibleRow>(TrialBalanceVisibleRow.Group(this))
+    if (!isExpanded) return self
+    val visibleLedgers = ledgers.filter { it.closingDebit.isPositive || it.closingCredit.isPositive }
+        .map { TrialBalanceVisibleRow.Ledger(it, depthLevel + 1) }
+    val visibleChildren = children.flatMap { it.flattenVisible() }
+    return self + visibleLedgers + visibleChildren
 }
 
 /**
@@ -131,6 +177,17 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
     val rowNamePaint = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
     val rowGroupPaint = MaterialTheme.typography.labelSmall.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize * textScale)
     val rowAmountPaint = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize * textScale)
+
+    // Phase 7J Reports integration - real expandable group hierarchy (ReportUiModels.kt's
+    // UiGroupTreeNode/toUiGroupTree(), built from this same report's own already-computed
+    // groupHierarchy - never a second aggregation). Starts fully collapsed (top-level Primary
+    // Groups only) to keep the same low-density first impression the old flat list had; expanding
+    // a group reveals its own ledgers and child groups. Empty groups/ledgers (both zero) are
+    // dropped entirely, matching the old flat list's own `isPositive` filter.
+    var expandedGroupIds by remember { mutableStateOf(setOf<String>()) }
+    val visibleRows = remember(report, expandedGroupIds) {
+        report.toUiGroupTree(expandedGroupIds).flatMap { it.flattenVisible() }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -166,30 +223,67 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
-            items(report.rows.filter { it.closingDebit.isPositive || it.closingCredit.isPositive }) { row ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1.5f)) {
-                        Text(row.ledgerName, style = rowNamePaint)
-                        Text(row.groupName, style = rowGroupPaint, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            items(visibleRows, key = { it.key }) { visible ->
+                when (visible) {
+                    is TrialBalanceVisibleRow.Group -> {
+                        val node = visible.node
+                        val hasContent = node.children.isNotEmpty() || node.ledgers.isNotEmpty()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = (node.depthLevel * 16).dp, top = 8.dp, bottom = 8.dp, end = 8.dp)
+                                .let { if (hasContent) it.clickable { expandedGroupIds = if (node.isExpanded) expandedGroupIds - node.groupId else expandedGroupIds + node.groupId } else it },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(modifier = Modifier.weight(1.5f), verticalAlignment = Alignment.CenterVertically) {
+                                if (hasContent) {
+                                    Icon(
+                                        imageVector = if (node.isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = if (node.isExpanded) "Collapse" else "Expand",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                }
+                                Text(node.groupName, style = rowNamePaint.copy(fontWeight = FontWeight.Bold))
+                            }
+                            Text(
+                                text = if (node.totalDebit.isPositive) node.totalDebit.formatPlain() else "--",
+                                style = rowAmountPaint.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = if (node.totalCredit.isPositive) node.totalCredit.formatPlain() else "--",
+                                style = rowAmountPaint.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     }
-                    Text(
-                        text = if (row.closingDebit.isPositive) row.closingDebit.formatPlain() else "--",
-                        style = rowAmountPaint,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = if (row.closingCredit.isPositive) row.closingCredit.formatPlain() else "--",
-                        style = rowAmountPaint,
-                        modifier = Modifier.weight(1f)
-                    )
+                    is TrialBalanceVisibleRow.Ledger -> {
+                        val row = visible.row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = (visible.depthLevel * 16 + 16).dp, top = 8.dp, bottom = 8.dp, end = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(row.ledgerName, style = rowNamePaint, modifier = Modifier.weight(1.5f))
+                            Text(
+                                text = if (row.closingDebit.isPositive) row.closingDebit.formatPlain() else "--",
+                                style = rowAmountPaint,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = if (row.closingCredit.isPositive) row.closingCredit.formatPlain() else "--",
+                                style = rowAmountPaint,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    }
                 }
-                HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             }
 
             item {

@@ -572,32 +572,34 @@ class Phase2AuditTestSuite {
     // I. REVERSAL RELATIONSHIP - data model inspection
     // ==========================================
     /**
-     * Documents and verifies HOW the original-voucher -> reversal linkage is actually represented.
+     * Documents and verifies HOW the original-voucher -> cancellation is actually represented.
      *
-     * There is no dedicated `reversesItemId`/`reversalOfVoucherId` foreign key in the schema.
-     * The relationship is represented as follows (verified below):
-     *  - Voucher level (unambiguous): the reversal lines share the SAME `voucherId` as the
-     *    original, and `VoucherEntity.isCancelled` flips to true. A voucher and its reversal are
-     *    therefore trivially and unambiguously the same aggregate - there is exactly one voucher,
-     *    never a second "reversal voucher".
-     *  - Line level (unambiguous in aggregate, not via a 1:1 FK): reversal `JournalItemEntity`
-     *    rows are appended (never inserted in place of/deleting originals) with `lineOrder`
-     *    strictly greater than every original line's `lineOrder`, and a `narration` prefixed
-     *    "Reversal: cancellation of voucher ...". Pairing a specific original line to a specific
-     *    reversal line 1:1 is not encoded - but is also not required for accounting correctness,
-     *    since reversal lines are financially fungible with any other reversal line on the same
-     *    ledger for the same amount. Net ledger/trial-balance effect is provably zero either way.
+     * Step 3 live-device fix - supersedes this suite's own earlier "genuinely deleted" design: a
+     * hard delete let a cancelled voucher's number be handed straight back out to the next voucher
+     * of that type (reproduced live correcting a Receipt - two different real transactions ended up
+     * sharing one voucher number), and made [VoucherDetailDialog]'s own CANCELLED badge and
+     * `correctedByVoucher` link permanently unreachable, since the row they depend on no longer
+     * existed. There is no dedicated `reversesItemId`/`reversalOfVoucherId` foreign key in the
+     * schema, and none is added here either - the relationship is represented as follows (verified
+     * below):
+     *  - Voucher level (unambiguous): `VoucherEntity.isCancelled` flips to true on the SAME row -
+     *    never deleted, never replaced by a second "reversal voucher".
+     *  - Line level: the original `JournalItemEntity` rows are left exactly as posted - never
+     *    deleted, never joined by a new offsetting/reversal row. A cancelled voucher's own detail
+     *    view therefore still shows its one real set of Dr/Cr lines, now under a CANCELLED badge,
+     *    which is also what keeps this safely distinct from the still-earlier "Rule 12" design this
+     *    suite already rejected (that one risked a single voucher showing both its original lines
+     *    AND a reversal of itself as if two real transactions had occurred).
      * Conclusion: the existing model represents this relationship SAFELY for accounting-integrity
      * purposes without a new schema field, per the audit instruction to only add one if the
      * current model genuinely cannot represent it safely.
      */
     @Test
-    fun i_CancelledVoucher_IsGenuinelyDeleted_AuditTrailLivesInAuditLog() = runBlocking {
-        // Explicit correction: real Indian accounting/GST practice never leaves a same-voucher
-        // offsetting entry behind - a voucher not yet reported to the government is genuinely
-        // deleted, not "reversed in place". The audit trail for that now lives in the AuditLog
-        // (a CANCEL_VOUCHER record), never in a pair of journal rows a viewer could mistake for two
-        // real transactions.
+    fun i_CancelledVoucher_IsSoftCancelled_HistoryPreservedOnTheSameRow() = runBlocking {
+        // Step 3 live-device fix: a voucher's period never having been reported to the government
+        // still makes it cancellable, but "cancelled" now means the isCancelled flag on this exact
+        // row, never a delete - see this test's own KDoc above for why the hard-delete alternative
+        // broke voucher-number uniqueness and the app's own CANCELLED-badge/audit-trail features.
         val dao = FakeAccountingDao()
         dao.insertLedger(ledger("LED_A", openingPaise = 0L))
         dao.insertLedger(ledger("LED_B", openingPaise = 500_00L))
@@ -615,17 +617,20 @@ class Phase2AuditTestSuite {
         VoucherPostingEngine.post(dao, voucher, originalItems, "IK-I-POST", "AUDITOR")
         VoucherPostingEngine.cancel(dao, companyId, fyId, voucherId, "IK-I-CANCEL", "AUDITOR")
 
-        // No journal items remain for this voucher at all - neither original nor reversal.
+        // The original journal items remain exactly as posted - no deletion, no offsetting/reversal
+        // row appended alongside them.
         val allItems = dao.getJournalItemsForVoucherSync(voucherId)
-        assertEquals(0, allItems.size)
+        assertEquals(2, allItems.size)
+        assertTrue(allItems.all { it.itemId == "ORIG_1" || it.itemId == "ORIG_2" })
 
-        // The voucher row itself is gone too.
-        assertEquals(null, dao.getVoucherById(companyId, voucherId))
+        // The voucher row persists too, flagged isCancelled rather than gone.
+        val cancelled = dao.getVoucherById(companyId, voucherId)
+        assertNotNull(cancelled)
+        assertTrue(cancelled!!.isCancelled)
 
-        // Net effect per ledger is exactly zero (ledger balances are still correctly reversed),
-        // even though no journal rows survive to show the arithmetic. The real audit trail for
-        // this now lives in a CANCEL_VOUCHER AuditLog record (see VoucherPostingEngine.cancel),
-        // not in a pair of journal rows a viewer could mistake for two real transactions.
+        // Net effect per ledger is exactly zero (ledger balances are still correctly reversed).
+        // The CANCEL_VOUCHER AuditLog record (see VoucherPostingEngine.cancel) is a second,
+        // independent record of the same fact - the voucher row above is now the primary one.
         assertEquals(0L, dao.getLedgerById(companyId, "LED_A")!!.currentBalancePaise)
         assertEquals(500_00L, dao.getLedgerById(companyId, "LED_B")!!.currentBalancePaise)
     }

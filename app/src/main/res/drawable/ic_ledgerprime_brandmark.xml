@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LedgerPrime product logo (docs/CORRECTIONS_LOG.md, "make a logo for this project and implant
+     it") - a self-contained, opaque version of the same double-entry-ledger mark already used for
+     the launcher icon (ic_launcher_foreground.xml/ic_launcher_background.xml), so the app has one
+     consistent brand mark rather than a second, competing design invented just for documents. Used
+     wherever the PRODUCT (not the user's own business) needs to be identified: the invoice PDF
+     header, and the in-app drawer/About. Opaque dark-navy rounded-square background (unlike the
+     launcher's separate adaptive-icon layers) so it reads correctly on white paper when printed. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M8,8h92v92h-92z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="8" android:startY="8" android:endX="100" android:endY="100"
+                android:type="linear">
+                <item android:color="#0F172A" android:offset="0.0" />
+                <item android:color="#1E293B" android:offset="0.5" />
+                <item android:color="#0B1329" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M28,26 H80 A6,6 0 0 1 86,32 V76 A6,6 0 0 1 80,82 H28 A6,6 0 0 1 22,76 V32 A6,6 0 0 1 28,26 Z" />
+    <path
+        android:strokeWidth="2.5"
+        android:pathData="M28,26 H80 A6,6 0 0 1 86,32 V76 A6,6 0 0 1 80,82 H28 A6,6 0 0 1 22,76 V32 A6,6 0 0 1 28,26 Z">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="22" android:startY="26" android:endX="86" android:endY="82"
+                android:type="linear">
+                <item android:color="#38BDF8" android:offset="0.0" />
+                <item android:color="#818CF8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#38BDF8" android:pathData="M38,36 H70 V40 H38 Z" />
+    <path android:fillColor="#F8FAFC" android:pathData="M38,44 H62 V48 H38 Z" />
+    <path android:fillColor="#38BDF8" android:pathData="M52,48 H56 V72 H52 Z" />
+    <path android:fillColor="#10B981" android:pathData="M34,62 H48 V65 A7,7 0 0 1 34,65 Z" />
+    <path android:fillColor="#F59E0B" android:pathData="M60,58 H74 V61 A7,7 0 0 1 60,61 Z" />
+    <path android:fillColor="#10B981" android:pathData="M54,34 A3,3 0 1 0 54,40 A3,3 0 1 0 54,34 Z" />
+</vector>

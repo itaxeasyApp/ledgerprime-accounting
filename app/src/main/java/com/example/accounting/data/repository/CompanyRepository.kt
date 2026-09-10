@@ -76,7 +76,7 @@ class CompanyRepository(
             // UI is responsible for warning the user first, not this layer.
             dao.deleteCompany(companyId)
             // If the deleted company held isDefault, promote another remaining company so a
-            // default always exists for getDefaultCompany()/app-launch company resolution.
+            // default always exists for app-launch company resolution.
             if (existing.isDefault) {
                 dao.getAllCompaniesSnapshot().firstOrNull()?.let { replacement ->
                     dao.updateCompany(replacement.copy(isDefault = true))

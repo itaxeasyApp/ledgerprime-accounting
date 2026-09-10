@@ -84,12 +84,6 @@ interface AccountingDao {
     @Query("SELECT * FROM companies WHERE companyId = :companyId LIMIT 1")
     suspend fun getCompanyById(companyId: String): CompanyEntity?
 
-    @Query("SELECT * FROM companies WHERE isDefault = 1 LIMIT 1")
-    suspend fun getDefaultCompany(): CompanyEntity?
-
-    @Query("SELECT COUNT(*) FROM companies")
-    suspend fun getCompanyCount(): Int
-
     @Query("SELECT * FROM companies ORDER BY name ASC")
     suspend fun getAllCompaniesSnapshot(): List<CompanyEntity>
 
@@ -262,7 +256,13 @@ interface AccountingDao {
     @Query("SELECT * FROM journal_items WHERE voucherId = :voucherId ORDER BY lineOrder ASC")
     fun getJournalItemsByVoucher(voucherId: String): Flow<List<JournalItemEntity>>
 
-    @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND financialYearId = :fyId ORDER BY lineOrder ASC")
+    // Soft-cancel fix (Step 3 device-testing finding) - a cancelled voucher's journal_items row is
+    // never deleted any more (see VoucherPostingEngine.cancel's own KDoc), so every report/summary
+    // query that aggregates ACROSS vouchers must exclude a cancelled one's lines itself, exactly as
+    // it implicitly did back when cancellation was a hard delete. A single voucher's OWN lookup
+    // (getJournalItemsForVoucherSync below) stays unfiltered on purpose - that is the audit-trail
+    // view a cancelled voucher's own detail screen still needs to show.
+    @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND financialYearId = :fyId AND voucherId NOT IN (SELECT voucherId FROM vouchers WHERE isCancelled = 1) ORDER BY lineOrder ASC")
     fun getAllJournalItems(companyId: String, fyId: String): Flow<List<JournalItemEntity>>
 
     /** Architecture correction (Opening Balance/FY fix) - every journal item ever posted for this
@@ -271,13 +271,13 @@ interface AccountingDao {
      * to correctly carry a Balance-Sheet-nature ledger's balance forward into any FY after its
      * first one - the single stored [com.example.accounting.data.local.entity.LedgerEntity.openingBalancePaise]
      * alone is only ever correct for that ledger's very first FY. */
-    @Query("SELECT * FROM journal_items WHERE companyId = :companyId ORDER BY lineOrder ASC")
+    @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND voucherId NOT IN (SELECT voucherId FROM vouchers WHERE isCancelled = 1) ORDER BY lineOrder ASC")
     fun getAllJournalItemsForCompany(companyId: String): Flow<List<JournalItemEntity>>
 
     @Query("SELECT * FROM journal_items WHERE voucherId = :voucherId ORDER BY lineOrder ASC")
     suspend fun getJournalItemsForVoucherSync(voucherId: String): List<JournalItemEntity>
 
-    @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND ledgerId = :ledgerId ORDER BY itemId ASC")
+    @Query("SELECT * FROM journal_items WHERE companyId = :companyId AND ledgerId = :ledgerId AND voucherId NOT IN (SELECT voucherId FROM vouchers WHERE isCancelled = 1) ORDER BY itemId ASC")
     suspend fun getJournalItemsByLedger(companyId: String, ledgerId: String): List<JournalItemEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -382,7 +382,12 @@ interface AccountingDao {
     @Query("SELECT * FROM gst_transactions WHERE voucherId = :voucherId ORDER BY lineOrder ASC")
     suspend fun getGstTransactionsForVoucher(voucherId: String): List<GstTransactionEntity>
 
-    @Query("SELECT * FROM gst_transactions WHERE companyId = :companyId AND financialYearId = :fyId ORDER BY createdAt ASC")
+    // Soft-cancel fix (Step 3 device-testing finding) - same reasoning as getAllJournalItems above:
+    // a cancelled voucher's gst_transactions rows are never deleted any more, so every GST
+    // summary/GSTR/export query built on this must exclude them itself. voucherId is null for a
+    // GST-only note's own transaction group (see getGstTransactionsByGroupId's KDoc) and therefore
+    // never matches the NOT IN subquery, so those rows are correctly unaffected.
+    @Query("SELECT * FROM gst_transactions WHERE companyId = :companyId AND financialYearId = :fyId AND voucherId NOT IN (SELECT voucherId FROM vouchers WHERE isCancelled = 1) ORDER BY createdAt ASC")
     suspend fun getGstTransactionsForCompanyFY(companyId: String, fyId: String): List<GstTransactionEntity>
 
     /** D1b - fetches every line of ONE business transaction by its [GstTransactionEntity.transactionGroupId],

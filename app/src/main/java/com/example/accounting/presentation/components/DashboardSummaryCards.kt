@@ -29,14 +29,14 @@ import com.example.accounting.core.common.Money
  */
 @Composable
 fun SalesSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Sales", amount = amount, subtitle = "Current Financial Year",
+    title = "Sales", amount = amount, subtitle = "",
     icon = Icons.Default.ReceiptLong, iconTint = MaterialTheme.colorScheme.primary,
     modifier = modifier.clickable(onClick = onClick)
 )
 
 @Composable
 fun PurchaseSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Purchases", amount = amount, subtitle = "Current Financial Year",
+    title = "Purchases", amount = amount, subtitle = "",
     icon = Icons.Default.ShoppingCart, iconTint = MaterialTheme.colorScheme.primary,
     modifier = modifier.clickable(onClick = onClick)
 )
@@ -60,14 +60,14 @@ fun PaymentSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> 
  * previously never displayed anywhere (only the net `surplusOrDeficit` was shown). */
 @Composable
 fun IncomeSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Income", amount = amount, subtitle = "Current Financial Year",
+    title = "Income", amount = amount, subtitle = "",
     icon = Icons.Default.ArrowDownward, iconTint = MaterialTheme.colorScheme.secondary,
     modifier = modifier.clickable(onClick = onClick)
 )
 
 @Composable
 fun ExpenditureSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Expenditure", amount = amount, subtitle = "Current Financial Year",
+    title = "Expenditure", amount = amount, subtitle = "",
     icon = Icons.Default.ArrowUpward, iconTint = MaterialTheme.colorScheme.error,
     modifier = modifier.clickable(onClick = onClick)
 )

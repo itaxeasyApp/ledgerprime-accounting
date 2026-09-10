@@ -80,7 +80,12 @@ data class VoucherStockLine(
     val quantity: Quantity,
     val rate: Money,
     val amount: Money,
-    val lineOrder: Int = 0
+    val lineOrder: Int = 0,
+    /** The discount actually subtracted (Rate x Qty x Discount%) before tax - see
+     * [com.example.accounting.domain.trading.TradingWorkflowEngine]'s line-amount computation.
+     * Defaults to ZERO, matching every stock line created before Discount existed. Stored
+     * verbatim (never re-derived) so an invoice PDF can display it without recalculating. */
+    val discount: Money = Money.ZERO
 ) {
     companion object {
         /** amount = quantity x rate, computed in integer paise (qty is thousandths, so /1000). */

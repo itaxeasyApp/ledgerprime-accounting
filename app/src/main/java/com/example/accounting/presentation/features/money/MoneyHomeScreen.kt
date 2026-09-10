@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.CallMade
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material3.Icon
@@ -163,7 +164,7 @@ fun MoneyTabContent(
     onSaveDraftLines: (VoucherDraft, List<VoucherDraftLine>) -> Unit,
     onPostDraft: (VoucherDraft) -> Unit,
     onDiscardDraft: (String) -> Unit,
-    onSubmitMoneyVoucher: (VoucherType, LocalDate, String, String, Money, String, String, Boolean) -> Unit,
+    onSubmitMoneyVoucher: (VoucherType, LocalDate, String, String, Money, String, String, Boolean, String) -> Unit,
     onAddParty: (PartyRole) -> Unit,
     /** 13-point correctness pass, item 8 (Editable Ledgers) - opens [CreateLedgerDialog] in edit
      * mode for this ledger. */
@@ -172,6 +173,15 @@ fun MoneyTabContent(
      * own KDoc. Consumed immediately (one-shot), same pattern as `reportsDeepLink`. */
     moneyDeepLink: String? = null,
     onMoneyDeepLinkConsumed: () -> Unit = {},
+    /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md) - opens the Photo
+     * Picker directly with `OcrDocumentType.BANK_STATEMENT` already known. Shown on the Bank
+     * ledger list only, never Cash (a bank statement is meaningless for a cash-in-hand account). */
+    onScanBankStatement: () -> Unit = {},
+    /** Contextual OCR entry point for Receive/Pay voucher entry (docs/CORRECTIONS_LOG.md) - opens
+     * the Photo Picker with the type chosen from that screen's own Bank Statement/UPI Payment
+     * dialog. Separate from [onScanBankStatement] above since the Bank ledger list only ever
+     * scans one fixed type, while voucher entry offers a choice. */
+    onScanDocument: (com.example.accounting.domain.ocr.OcrDocumentType) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var sub by remember { mutableStateOf<MoneySubScreen>(MoneySubScreen.Home) }
@@ -179,6 +189,7 @@ fun MoneyTabContent(
         when (moneyDeepLink) {
             "Cash" -> sub = MoneySubScreen.Cash
             "Bank" -> sub = MoneySubScreen.Bank
+            "PendingReviews" -> sub = MoneySubScreen.PendingReviews
         }
         if (moneyDeepLink != null) onMoneyDeepLinkConsumed()
     }
@@ -212,7 +223,7 @@ fun MoneyTabContent(
             modifier = modifier
         )
         MoneySubScreen.Cash -> CashOrBankLedgerListScreen("Cash", cashLedgers, onLedgerClick, onEditLedger = onEditLedger, modifier = modifier)
-        MoneySubScreen.Bank -> CashOrBankLedgerListScreen("Bank", bankLedgers, onLedgerClick, onEditLedger = onEditLedger, modifier = modifier)
+        MoneySubScreen.Bank -> CashOrBankLedgerListScreen("Bank", bankLedgers, onLedgerClick, onEditLedger = onEditLedger, onScanBankStatement = onScanBankStatement, modifier = modifier)
         MoneySubScreen.Upi -> UpiProfilesScreen(uiState.bankUpiProfiles, onAddBankUpiProfile, onDeleteBankUpiProfile, modifier)
         MoneySubScreen.PendingReviews -> {
             val pending = uiState.voucherDraftsPendingReview
@@ -246,14 +257,15 @@ fun MoneyTabContent(
                 ledgers = uiState.ledgers,
                 groups = uiState.groups,
                 onBack = { sub = MoneySubScreen.Home },
-                onSubmit = { type, date, debitId, creditId, amount, narration, ref, roundOff ->
-                    onSubmitMoneyVoucher(type, date, debitId, creditId, amount, narration, ref, roundOff)
+                onSubmit = { type, date, debitId, creditId, amount, narration, ref, roundOff, paymentMode ->
+                    onSubmitMoneyVoucher(type, date, debitId, creditId, amount, narration, ref, roundOff, paymentMode)
                     sub = MoneySubScreen.Home
                 },
                 onAddParty = onAddParty,
                 companyUpiVpa = companyUpiVpa,
                 companyPayeeName = companyPayeeName,
                 onOpenUpiSettings = { sub = MoneySubScreen.Upi },
+                onScanDocument = if (s.voucherType == VoucherType.CONTRA) null else onScanDocument,
                 modifier = modifier
             )
         }
@@ -270,10 +282,18 @@ fun CashOrBankLedgerListScreen(
     ledgers: List<Ledger>,
     onLedgerClick: (Ledger) -> Unit,
     onEditLedger: (Ledger) -> Unit = {},
+    onScanBankStatement: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize().padding(Spacing.md)) {
-        Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+            if (onScanBankStatement != null) {
+                IconButton(onClick = onScanBankStatement) {
+                    Icon(Icons.Default.DocumentScanner, contentDescription = "Scan Bank Statement")
+                }
+            }
+        }
         Spacer(modifier = Modifier.padding(Spacing.xs))
 
         if (ledgers.isEmpty()) {

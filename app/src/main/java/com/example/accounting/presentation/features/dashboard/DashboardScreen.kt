@@ -1,5 +1,6 @@
 package com.example.accounting.presentation.features.dashboard
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,17 +11,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CallMade
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
@@ -29,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,9 +48,10 @@ import com.example.accounting.domain.accounting.Voucher
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.company.BusinessType
 import com.example.accounting.presentation.components.BusinessSnapshot
+import com.example.accounting.presentation.components.DashboardCardBorder
 import com.example.accounting.presentation.components.QuickActionSpec
 import com.example.accounting.presentation.components.QuickActions
-import com.example.accounting.presentation.components.recentTransactionsSection
+import com.example.accounting.presentation.theme.Radius
 import com.example.accounting.presentation.viewmodel.AccountingUiState
 
 /**
@@ -68,6 +79,13 @@ fun DashboardScreen(
      * Dashboard (Reports Center's own GST category still works too - this is additive, not a
      * replacement), matching [onViewGstSummary]'s exact `viewReport(...)` deep-link pattern. */
     onViewGstDashboard: () -> Unit,
+    /** "Quick Report" section (docs/CORRECTIONS_LOG.md) - one-tap shortcuts to the reports a
+     * business owner actually checks day-to-day, alongside the existing Receivables/Payables/P&L/
+     * GST cards above. Each is a real, already-implemented report - never a tile with no
+     * destination. */
+    onViewTrialBalance: () -> Unit,
+    onViewBalanceSheet: () -> Unit,
+    onViewCashFlow: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
@@ -96,9 +114,9 @@ fun DashboardScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 24.dp),
         contentPadding = PaddingValues(top = 12.dp, bottom = 80.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
             Column {
@@ -108,14 +126,20 @@ fun DashboardScreen(
                 // rolled Rows of QuickAction calls - same items, same order, same colors/icons.
                 QuickActions(
                     items = listOf(
-                        QuickActionSpec(if (isService) "Income" else "Sale", Icons.Default.ReceiptLong, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer) { onOpenCreateVoucher(VoucherType.SALES) },
+                        // "treat Sale as Invoice" (docs/CORRECTIONS_LOG.md) - plain business
+                        // language regardless of Inventory vs Non-Inventory mode; the destination
+                        // (onOpenCreateVoucher(VoucherType.SALES) -> CreateVoucherDialog/TradingForm)
+                        // already auto-adapts to item-level vs account-only based on the company's
+                        // own isInventoryEnabled setting - confirmed live on-device, never a second
+                        // routing decision made here.
+                        QuickActionSpec(if (isService) "Income" else "Invoice", Icons.Default.ReceiptLong, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer) { onOpenCreateVoucher(VoucherType.SALES) },
                         QuickActionSpec(if (isService) "Expenditure" else "Purchase", Icons.Default.ShoppingCart, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onOpenCreateVoucher(VoucherType.PURCHASE) },
                         QuickActionSpec("Receive", Icons.Default.CallReceived, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer) { onOpenCreateVoucher(VoucherType.RECEIPT) },
                         QuickActionSpec("Pay", Icons.Default.CallMade, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) { onOpenCreateVoucher(VoucherType.PAYMENT) }
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 QuickActions(
                     items = listOf(
                         QuickActionSpec("Transfer", Icons.Default.CompareArrows, MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer) { onOpenCreateVoucher(VoucherType.CONTRA) },
@@ -159,18 +183,70 @@ fun DashboardScreen(
             }
         }
 
-        recentTransactionsSection(
-            vouchers = uiState.vouchers.take(6),
-            onVoucherClick = onVoucherClick,
-            onViewAll = onViewAllDayBook
-        )
+        // Product correction (docs/CORRECTIONS_LOG.md) - "Recent Transactions" removed from the
+        // Dashboard; every transaction is already reachable via Day Book/Ledger statements/each
+        // module's own list (Sales/Purchases/Money), so this space is a real brand container
+        // instead of a duplicate transaction list. Relabeled "Reports" with the app logo restored
+        // (explicit follow-up) - "Ledger Prime" as a brand name now lives in the drawer instead.
+        item {
+            Card(
+                shape = Radius.shapeLg,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                border = DashboardCardBorder(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Image(
+                        painter = painterResource(id = com.example.R.drawable.ic_ledgerprime_brandmark),
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("Reports", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                }
+            }
+        }
+
+        item {
+            Column {
+                Text("Quick Report", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+                // Collapsed from two rows of three into one row of four (explicit "too much
+                // screen... make one line four column" follow-up) - Cash Flow and Day Book tiles
+                // dropped from this specific quick-launcher only; both stay reachable elsewhere
+                // (Cash Flow via Reports Center's Financial menu, Day Book via the Money tab's own
+                // entry point) - nothing was actually removed from the app. "Trading" deep-links to
+                // the same real Profit & Loss report - a Trading Account is the goods-trading
+                // section within P&L (Sales - COGS = Gross Profit), never a separate report of its
+                // own in this domain model. CMA Data/Project Report are deliberately not tiles here:
+                // CMA has real domain logic (domain/cma/CmaReportGenerator.kt) but no UI/ViewModel
+                // wiring at all yet, and Project Report does not exist anywhere in this codebase.
+                QuickActions(
+                    items = listOf(
+                        QuickActionSpec("Trading", Icons.Default.Assessment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
+                        QuickActionSpec("Profit & Loss", Icons.Default.TrendingUp, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
+                        QuickActionSpec("Balance Sheet", Icons.Default.AccountBalance, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewBalanceSheet),
+                        QuickActionSpec("Trial Balance", Icons.AutoMirrored.Filled.Assignment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewTrialBalance)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 
 @Composable
 fun VoucherSummaryCard(
     voucher: Voucher,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** Payment-status badge (Sale/Purchase only) - the outstanding paise for this voucher from
+     * [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId].
+     * `null` (every existing call site, unchanged) simply shows no badge - see
+     * [com.example.accounting.domain.invoice.InvoiceStatusEngine]. */
+    outstandingPaise: Long? = null
 ) {
     OutlinedCard(
         shape = RoundedCornerShape(12.dp),
@@ -209,10 +285,23 @@ fun VoucherSummaryCard(
                     )
                 }
             }
-            Text(
-                text = voucher.totalDebits.formatPlain(),
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = voucher.totalDebits.formatPlain(),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                )
+                if (outstandingPaise != null && (voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE)) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val status = com.example.accounting.domain.invoice.InvoiceStatusEngine.deriveStatus(
+                        voucherId = voucher.voucherId,
+                        isCancelled = voucher.isCancelled,
+                        totalAmountPaise = voucher.totalDebits.paise.coerceAtLeast(voucher.totalCredits.paise),
+                        outstandingPaise = outstandingPaise,
+                        dueDate = null
+                    )
+                    com.example.accounting.presentation.components.InvoiceStatusBadge(status)
+                }
+            }
         }
     }
 }

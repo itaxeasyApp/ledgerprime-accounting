@@ -16,6 +16,22 @@ enum class TemplateStatus { ACTIVE, ARCHIVED }
 enum class LogoPosition { TOP_LEFT, TOP_CENTER, TOP_RIGHT }
 
 /**
+ * The 5 built-in invoice PDF layouts (structural, not just color) - see
+ * [com.example.accounting.domain.rendering.InvoiceTemplatePresets] for each style's actual preset
+ * [TemplateVisualConfig], and [com.example.accounting.data.rendering.PdfDocumentRenderer] for the
+ * per-style drawing routine. A company's own custom [TemplateColors]/[TemplateTypography] edits
+ * still apply on top of whichever style is chosen - style decides structure (header banner vs
+ * plain, grid table vs ruled lines, logo placement), not colors/fonts.
+ */
+enum class InvoiceTemplateStyle(val displayName: String) {
+    CLASSIC("Classic"),
+    MODERN_BANNER("Modern Banner"),
+    MINIMAL("Minimal"),
+    BOXED_GRID("Boxed Grid"),
+    ELEGANT_SERIF("Elegant Serif")
+}
+
+/**
  * Purely presentational - must never be read by any accounting/GST/inventory calculation.
  * Hex strings (`"#RRGGBB"`), validated only for non-blankness by the repository layer.
  */
@@ -66,7 +82,10 @@ data class TemplateLayout(
 data class TemplateVisualConfig(
     val layout: TemplateLayout = TemplateLayout(),
     val typography: TemplateTypography = TemplateTypography(),
-    val colors: TemplateColors = TemplateColors()
+    val colors: TemplateColors = TemplateColors(),
+    /** Defaults to CLASSIC - byte-identical rendering to every template saved before this field
+     * existed (Moshi's Kotlin adapter fills the default for a JSON blob missing this key). */
+    val style: InvoiceTemplateStyle = InvoiceTemplateStyle.CLASSIC
 )
 
 /**

@@ -3,10 +3,19 @@ package com.example.accounting.presentation.components
 import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.unit.dp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -23,6 +32,23 @@ fun QrCodeImage(content: String, modifier: Modifier = Modifier, sizePx: Int = 51
     val bitmap = remember(content, sizePx) { encodeQrBitmap(content, sizePx) }
     if (bitmap != null) {
         Image(bitmap = bitmap.asImageBitmap(), contentDescription = "QR code", modifier = modifier)
+    }
+}
+
+/**
+ * Step 8 audit fix - the generated-barcode result dialog (MainAppScreen) content: a real,
+ * scannable [QrCodeImage] plus the raw payload text underneath, so a "Generate barcode" tap on a
+ * stock item is finally visible (it used to silently store a [com.example.accounting.domain.qrbarcode.BarcodeGenerationResult]
+ * in state that nothing ever read). Kept here, not inline in MainAppScreen, purely so this file's
+ * own imports (Alignment/Spacer/MaterialTheme/dp) cover it without adding those to that much
+ * larger file.
+ */
+@Composable
+fun GeneratedBarcodeContent(rawValue: String, modifier: Modifier = Modifier) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.fillMaxWidth()) {
+        QrCodeImage(content = rawValue, modifier = Modifier.size(180.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(rawValue, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

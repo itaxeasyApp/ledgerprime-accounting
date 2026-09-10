@@ -1,6 +1,7 @@
 package com.example.accounting.presentation.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,13 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.accounting.core.common.DrCr
 import com.example.accounting.data.local.dao.VoucherAttachmentRow
 import com.example.accounting.domain.accounting.Voucher
+import com.example.accounting.domain.accounting.VoucherBillSummary
+import com.example.accounting.domain.accounting.VoucherType
+import com.example.accounting.domain.document.DocumentType
+import com.example.accounting.domain.invoice.InvoiceStatusEngine
+import com.example.accounting.domain.rendering.DocumentData
+import com.example.accounting.domain.rendering.InvoiceSummaryCalculator
+import com.example.accounting.domain.rendering.TaxColumnMode
 
 /** Voucher types [onCorrectVoucher] supports. Contra/Journal are always a flat, unconditional
  * 2-line debit/credit voucher (no invoice allocation, no GST, no stock) - [CreateVoucherDialog]'s
@@ -106,7 +114,29 @@ fun VoucherDetailDialog(
     isAttaching: Boolean = false,
     removingAttachmentReferenceId: String? = null,
     onAttachClick: () -> Unit = {},
-    onRemoveAttachment: (VoucherAttachmentRow) -> Unit = {}
+    onRemoveAttachment: (VoucherAttachmentRow) -> Unit = {},
+    /** Payment-status badge (Sale/Purchase only) - see [InvoiceStatusEngine] and
+     * [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId].
+     * `null` (the default) hides the badge for a caller that doesn't wire it. */
+    outstandingPaise: Long? = null,
+    /** The company's own real GSTIN, for the Sale invoice-identity QR below - blank hides the QR
+     * section entirely rather than printing an incomplete/misleading one. Never a government IRN -
+     * this app has no e-invoicing API integration, so the QR only ever encodes the same real
+     * invoice number/date/amount/GSTIN already shown in this dialog, for the business's own
+     * scanning/lookup convenience. */
+    companyGstin: String = "",
+    /** "5 Invoice PDF Templates" task - opens the Invoice Preview screen (Sale/Purchase only).
+     * `null` (the default) hides the button for a caller that doesn't wire it. */
+    onPreviewInvoice: ((Voucher) -> Unit)? = null,
+    /** Product correction ("THIS APPLICATION IS NOT AN ERP") - real item-level Bill data for this
+     * voucher (Sale/Purchase only, when it has actual stock lines), from the exact same
+     * [AccountingRepository.assembleDocumentDataFromVoucher] Invoice Preview uses - never a second,
+     * independent calculation. `null` while loading or when it doesn't apply (see [billSummary]). */
+    documentData: DocumentData? = null,
+    /** Fallback plain-Bill summary (party/GST/total, no item breakdown) for every case
+     * [documentData] doesn't cover - an account-only Sale/Purchase, or any non-trading voucher type.
+     * Ignored when [documentData] is non-null. */
+    billSummary: VoucherBillSummary? = null
 ) {
     // Architecture correction - "Corrects X" (this voucher has a referenceVoucherId pointing at an
     // earlier one of the SAME type) / "Corrected by Y" (some other same-type voucher points back at
@@ -127,6 +157,11 @@ fun VoucherDetailDialog(
     // (never a same-voucher offsetting entry left behind), so it is irreversible in a way the old
     // "Delete & Reverse" (which at least left a visible, auditable trail) was not.
     var showDeleteConfirm by remember(voucher.voucherId) { mutableStateOf(false) }
+    // Product correction ("THIS APPLICATION IS NOT AN ERP", docs/CORRECTIONS_LOG.md) - the
+    // journal-line Debit/Credit table is no longer shown by default; it only appears once the user
+    // explicitly asks via "Advanced > View Accounting Entries" below. Always starts collapsed for a
+    // freshly-opened voucher.
+    var showAccountingEntries by remember(voucher.voucherId) { mutableStateOf(false) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -188,6 +223,16 @@ fun VoucherDetailDialog(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
+                            } else if (outstandingPaise != null && (voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE)) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                val status = InvoiceStatusEngine.deriveStatus(
+                                    voucherId = voucher.voucherId,
+                                    isCancelled = false,
+                                    totalAmountPaise = voucher.totalDebits.paise.coerceAtLeast(voucher.totalCredits.paise),
+                                    outstandingPaise = outstandingPaise,
+                                    dueDate = null
+                                )
+                                InvoiceStatusBadge(status)
                             }
                         }
                         if (!isEditingMetadata) {
@@ -196,6 +241,27 @@ fun VoucherDetailDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            // "automate ... received in bank or cash or via UPI" - a plain read of
+                            // Voucher.paymentMode, set automatically at entry time (Receive/Pay
+                            // Money) from which ledger + whether the UPI QR was shown; blank for
+                            // every voucher predating this field, so nothing shows for those.
+                            if (voucher.paymentMode.isNotBlank() &&
+                                (voucher.voucherType == VoucherType.RECEIPT || voucher.voucherType == VoucherType.PAYMENT)
+                            ) {
+                                val partyLine = voucher.items.firstOrNull {
+                                    if (voucher.voucherType == VoucherType.RECEIPT) it.type == DrCr.CREDIT else it.type == DrCr.DEBIT
+                                }
+                                val verb = if (voucher.voucherType == VoucherType.RECEIPT) "Received from" else "Paid to"
+                                Text(
+                                    text = buildString {
+                                        append(verb)
+                                        partyLine?.let { append(" ${it.ledgerName}") }
+                                        append(" via ${voucher.paymentMode}")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -287,66 +353,92 @@ fun VoucherDetailDialog(
                     Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                // Table Header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Particulars / Ledger", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1.8f))
-                    Text("Debit", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
-                    Text("Credit", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
-                }
+                // Product correction ("THIS APPLICATION IS NOT AN ERP") - default view is a plain
+                // business Bill (Party/Items/GST/Total), never the Debit/Credit journal table. The
+                // real double-entry postings are unchanged internally and stay reachable, just no
+                // longer shown by default - see the "Advanced" toggle below.
+                if (!showAccountingEntries) {
+                    BillSummarySection(voucher = voucher, documentData = documentData, billSummary = billSummary)
+                } else {
+                    // Table Header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Particulars / Ledger", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1.8f))
+                        Text("Debit", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                        Text("Credit", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                    }
 
-                HorizontalDivider()
+                    HorizontalDivider()
 
-                Column {
-                    voucher.items.forEach { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1.8f)) {
-                                Text(item.ledgerName, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                                if (item.narration.isNotBlank()) {
-                                    Text(item.narration, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column {
+                        voucher.items.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1.8f)) {
+                                    Text(item.ledgerName, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                    if (item.narration.isNotBlank()) {
+                                        Text(item.narration, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
+                                Text(
+                                    text = if (item.type == DrCr.DEBIT) item.amount.formatPlain() else "--",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = if (item.type == DrCr.CREDIT) item.amount.formatPlain() else "--",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
-                            Text(
-                                text = if (item.type == DrCr.DEBIT) item.amount.formatPlain() else "--",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = if (item.type == DrCr.CREDIT) item.amount.formatPlain() else "--",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                                modifier = Modifier.weight(1f)
-                            )
+                            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                         }
-                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    }
+
+                    HorizontalDivider(thickness = 2.dp)
+
+                    // Totals
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(2.4f))
+                        Text(voucher.totalDebits.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary), modifier = Modifier.weight(1f))
+                        Text(voucher.totalCredits.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary), modifier = Modifier.weight(1f))
                     }
                 }
 
-                HorizontalDivider(thickness = 2.dp)
-
-                // Totals
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Total", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(2.4f))
-                    Text(voucher.totalDebits.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary), modifier = Modifier.weight(1f))
-                    Text(voucher.totalCredits.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary), modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { showAccountingEntries = !showAccountingEntries }) {
+                        Text(if (showAccountingEntries) "Hide Accounting Entries" else "Advanced ▸ View Accounting Entries")
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
+
+                // "one barcode more ... on invoice" - a real QR encoding this Sale's own
+                // identifying facts (invoice number, date, amount, seller/buyer GSTIN), all
+                // already shown elsewhere in this same dialog - never a government e-invoice IRN
+                // (this app has no such API integration), just a scannable, offline way to pull up
+                // or verify this exact invoice later. Sale only, and only once the company's own
+                // GSTIN is known - an incomplete QR would be worse than none.
+                if (voucher.voucherType == VoucherType.SALES && !voucher.isCancelled && companyGstin.isNotBlank()) {
+                    InvoiceQrSection(voucher = voucher, companyGstin = companyGstin)
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
 
                 AttachmentSection(
                     attachments = attachments,
@@ -371,12 +463,17 @@ fun VoucherDetailDialog(
                     voucher.voucherType in VOUCHER_CORRECTION_ELIGIBLE_TYPES &&
                     (!isSaleOrPurchase || !isInventoryEnabled)
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Real-device QA fix - up to three OutlinedButtons (Delete/Correct/Preview &
+                    // Share) plus Close never fit on a narrow phone in one row; squeezing them all
+                    // into a single Modifier.weight(fill = false) + horizontalScroll row (the first
+                    // attempt) silently dropped the third button from layout entirely. Two simple
+                    // rows - a scrollable action-button row, Close on its own row below - avoids
+                    // that weight/scroll interaction and is far more predictable.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         // An already-cancelled voucher has nothing left to cancel - the repository's
                         // own idempotency guard already rejects a second call, but hiding the button
                         // here is the real fix: a cancelled voucher must never look like a live one
@@ -403,10 +500,21 @@ fun VoucherDetailDialog(
                                 Text("Correct Voucher")
                             }
                         }
+                        if (onPreviewInvoice != null && !voucher.isCancelled &&
+                            (voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE)
+                        ) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            androidx.compose.material3.OutlinedButton(onClick = { onPreviewInvoice(voucher) }) {
+                                Text("Preview & Share")
+                            }
+                        }
                     }
 
-                    Button(onClick = onDismiss) {
-                        Text("Close")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Button(onClick = onDismiss) {
+                            Text("Close")
+                        }
                     }
                 }
             }
@@ -436,6 +544,152 @@ fun VoucherDetailDialog(
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
             }
+        )
+    }
+}
+
+/**
+ * "one barcode more ... on invoice" - a real, locally-encoded QR ([QrCodeImage], zxing) over a
+ * plain, self-describing invoice-identity string built entirely from data already shown in this
+ * dialog: invoice number, date, amount, seller GSTIN, buyer GSTIN (when known). This is NOT a GST
+ * e-invoice IRN QR (that requires the government IRP API, which this app does not integrate with,
+ * per the app's honest-gateway rule) - it exists purely so this specific invoice can be scanned
+ * back up later (e.g. for a customer's own record, or the business's own filing), never sent
+ * anywhere or relied on by any accounting/GST calculation.
+ */
+@Composable
+private fun InvoiceQrSection(voucher: Voucher, companyGstin: String) {
+    var expanded by remember(voucher.voucherId) { mutableStateOf(false) }
+    val content = remember(voucher.voucherId, companyGstin) {
+        buildString {
+            append("INVOICE|NO:").append(voucher.voucherNumber)
+            append("|DATE:").append(voucher.date)
+            append("|AMT:").append(voucher.totalDebits.coerceMaxOf(voucher.totalCredits).formatPlain())
+            append("|SELLER_GSTIN:").append(companyGstin)
+            if (voucher.partyGstin.isNotBlank()) append("|BUYER_GSTIN:").append(voucher.partyGstin)
+        }
+    }
+    androidx.compose.material3.Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Invoice QR", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide" else "Show") }
+            }
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    QrCodeImage(content = content, modifier = Modifier.size(180.dp))
+                }
+            }
+        }
+    }
+}
+
+private fun com.example.accounting.core.common.Money.coerceMaxOf(other: com.example.accounting.core.common.Money) =
+    if (this.paise >= other.paise) this else other
+
+/**
+ * Product correction ("THIS APPLICATION IS NOT AN ERP") - the plain business Bill/Invoice a
+ * non-accountant recognizes: Party, Items/description, Qty/Rate/Discount only when applicable,
+ * GST, Total. Never "Ledger"/"Dr"/"Cr"/"Debit"/"Credit" - that table still exists, just behind the
+ * explicit "Advanced > View Accounting Entries" toggle in [VoucherDetailDialog].
+ *
+ * Prefers [documentData] (real item-level data - the exact same [DocumentData]/
+ * [InvoiceSummaryCalculator] Invoice Preview and the PDF both already use, so this view can never
+ * disagree with either) when present; otherwise falls back to [billSummary] (party/GST/total, no
+ * item breakdown - an account-only Sale/Purchase, or any non-trading voucher type); shows a plain
+ * loading line only if neither has arrived yet (the async load this dialog kicks off on open).
+ */
+@Composable
+private fun BillSummarySection(voucher: Voucher, documentData: DocumentData?, billSummary: VoucherBillSummary?) {
+    if (documentData != null) {
+        val summary = InvoiceSummaryCalculator.from(documentData)
+        val counterparty = if (documentData.documentType == DocumentType.PURCHASE_BILL) documentData.seller else documentData.buyer
+        val partyLabel = if (documentData.documentType == DocumentType.PURCHASE_BILL) "Supplier" else "Customer"
+
+        Text(partyLabel, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(counterparty.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+        if (counterparty.gstin.isNotBlank()) {
+            Text("GSTIN: ${counterparty.gstin}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)).padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Item / Service", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(2f))
+            Text("Amount", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+        }
+        HorizontalDivider()
+        documentData.items.forEach { line ->
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(line.description, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), modifier = Modifier.weight(2f))
+                    Text(line.lineTotal.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), modifier = Modifier.weight(1f))
+                }
+                val qtyRate = line.quantity?.let { "Qty ${"%.2f".format(it.rawValue / 1000.0)} x ${line.rate.formatPlain()}" } ?: "Rate ${line.rate.formatPlain()}"
+                val discount = if (line.discount.isPositive) "  Disc ${line.discount.formatPlain()}" else ""
+                val hsn = line.hsnSacCode.ifBlank { "-" }
+                Text(
+                    "HSN $hsn  $qtyRate$discount  GST ${line.gstRatePercent}%",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        BillTotalsRows("Taxable Amount", summary.taxableAmount.formatPlain())
+        when (summary.taxColumnMode) {
+            TaxColumnMode.CGST_SGST -> { BillTotalsRows("CGST", summary.cgst.formatPlain()); BillTotalsRows("SGST", summary.sgst.formatPlain()) }
+            TaxColumnMode.IGST -> BillTotalsRows("IGST", summary.igst.formatPlain())
+            TaxColumnMode.NONE -> {}
+        }
+        if (summary.cess.isPositive) BillTotalsRows("CESS", summary.cess.formatPlain())
+        HorizontalDivider(thickness = 2.dp, modifier = Modifier.padding(vertical = 6.dp))
+        BillTotalsRows("Total", summary.grandTotal.formatPlain(), emphasize = true)
+    } else if (billSummary != null) {
+        if (billSummary.partyLabel.isNotBlank()) {
+            Text(billSummary.partyLabel, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(billSummary.partyName, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+            Spacer(modifier = Modifier.height(10.dp))
+        }
+        billSummary.taxableAmount?.let { BillTotalsRows("Amount", it.formatPlain()) }
+        if (billSummary.hasGst) {
+            if (billSummary.cgst.isPositive) BillTotalsRows("CGST", billSummary.cgst.formatPlain())
+            if (billSummary.sgst.isPositive) BillTotalsRows("SGST", billSummary.sgst.formatPlain())
+            if (billSummary.igst.isPositive) BillTotalsRows("IGST", billSummary.igst.formatPlain())
+            if (billSummary.cess.isPositive) BillTotalsRows("CESS", billSummary.cess.formatPlain())
+        }
+        HorizontalDivider(thickness = 2.dp, modifier = Modifier.padding(vertical = 6.dp))
+        BillTotalsRows("Total", billSummary.totalAmount.formatPlain(), emphasize = true)
+    } else {
+        Text("Loading bill...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(modifier = Modifier.height(8.dp))
+        BillTotalsRows("Total", voucher.totalDebits.coerceMaxOf(voucher.totalCredits).formatPlain(), emphasize = true)
+    }
+}
+
+@Composable
+private fun BillTotalsRows(label: String, value: String, emphasize: Boolean = false) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            label,
+            style = if (emphasize) MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            value,
+            style = (if (emphasize) MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.bodyMedium)
+                .copy(fontFamily = FontFamily.Monospace),
+            color = if (emphasize) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
         )
     }
 }

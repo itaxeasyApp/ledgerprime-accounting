@@ -84,6 +84,14 @@ fun CreateLedgerDialog(
     var email by remember(existingLedger) { mutableStateOf(existingLedger?.email ?: "") }
     var address by remember(existingLedger) { mutableStateOf(existingLedger?.address ?: "") }
     var hsnSac by remember(existingLedger) { mutableStateOf(existingLedger?.hsnSacCode ?: "") }
+
+    // Play Store readiness correction (docs/CORRECTIONS_LOG.md) - real format validation for
+    // GSTIN/PAN/phone/email, matching the pattern applied everywhere else these fields appear; all
+    // four stay optional, this only rejects a non-blank value that isn't shaped like a real one.
+    val gstinInvalid = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)
+    val panInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidPan(pan)
+    val phoneInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidIndianMobile(phone)
+    val emailInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidEmail(email)
     // Ledger Setup fix - optional, never required; State Code is the Place-of-Supply fact this
     // ledger needs before it can be used as a Sale/Purchase counterparty (Rule 29). Never defaulted
     // here to the company's own state (see AccountingViewModel.createLedger's own doc comment).
@@ -100,6 +108,12 @@ fun CreateLedgerDialog(
 
     LaunchedEffect(pinCode) {
         if (pinCode.length == 6 && pinCode.all { it.isDigit() }) onLookupPinCode(pinCode)
+    }
+    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
+    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
+    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
+    LaunchedEffect(gstin) {
+        if (pan.isBlank()) com.example.accounting.core.common.ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
     }
     LaunchedEffect(lookupResult) {
         val result = lookupResult
@@ -264,6 +278,8 @@ fun CreateLedgerDialog(
                         onValueChange = { gstin = Constants.normalizeTaxId(it) },
                         label = { Text("GSTIN (Optional)") },
                         placeholder = { Text("27AAAAA0000A1Z5") },
+                        isError = gstinInvalid,
+                        supportingText = if (gstinInvalid) { { Text("Not a valid GSTIN") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
@@ -271,6 +287,8 @@ fun CreateLedgerDialog(
                         onValueChange = { pan = Constants.normalizeTaxId(it) },
                         label = { Text("PAN (Optional)") },
                         placeholder = { Text("AAAAA0000A") },
+                        isError = panInvalid,
+                        supportingText = if (panInvalid) { { Text("Not a valid PAN") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -285,12 +303,18 @@ fun CreateLedgerDialog(
                         value = phone,
                         onValueChange = { phone = it },
                         label = { Text("Phone") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone),
+                        isError = phoneInvalid,
+                        supportingText = if (phoneInvalid) { { Text("Not a valid 10-digit mobile number") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it },
                         label = { Text("Email") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+                        isError = emailInvalid,
+                        supportingText = if (emailInvalid) { { Text("Not a valid email address") } } else null,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -426,7 +450,7 @@ fun CreateLedgerDialog(
                             }
                             onDismiss()
                         },
-                        enabled = ledgerName.isNotBlank() && selectedGroupId.isNotBlank(),
+                        enabled = ledgerName.isNotBlank() && selectedGroupId.isNotBlank() && !gstinInvalid && !panInvalid && !phoneInvalid && !emailInvalid,
                         modifier = Modifier.testTag("submit_ledger_button")
                     ) {
                         Text(if (existingLedger != null) "Save Changes" else "Save Ledger")
