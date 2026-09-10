@@ -38,8 +38,14 @@ jobs:
           keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey \
             -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 
+      # --continue: a handful of known, pre-existing test failures (see docs/CORRECTIONS_LOG.md /
+      # this session's CI investigation) currently make testDebugUnitTest fail on every run: Gradle
+      # would otherwise abort before assembleDebug ever runs, so the APK - which builds cleanly on
+      # its own - never gets produced or uploaded. --continue runs both requested tasks regardless,
+      # so a debug APK is always available from this job even while those failures are open; the job
+      # still reports red overall (this doesn't hide the failing tests).
       - name: Unit tests + assembleDebug
-        run: ./gradlew testDebugUnitTest assembleDebug --console=plain
+        run: ./gradlew testDebugUnitTest assembleDebug --console=plain --continue
 
       - name: Upload test reports
         if: always()
@@ -50,7 +56,7 @@ jobs:
           retention-days: 14
 
       - name: Upload debug APK
-        if: success()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
