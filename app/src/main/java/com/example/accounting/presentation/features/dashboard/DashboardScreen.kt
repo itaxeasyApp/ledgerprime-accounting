@@ -1,6 +1,5 @@
 package com.example.accounting.presentation.features.dashboard
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -38,7 +37,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -183,32 +181,34 @@ fun DashboardScreen(
             }
         }
 
-        // Product correction (docs/CORRECTIONS_LOG.md) - "Recent Transactions" removed from the
-        // Dashboard; every transaction is already reachable via Day Book/Ledger statements/each
-        // module's own list (Sales/Purchases/Money), so this space is a real brand container
-        // instead of a duplicate transaction list. Relabeled "Reports" with the app logo restored
-        // (explicit follow-up) - "Ledger Prime" as a brand name now lives in the drawer instead.
-        item {
-            Card(
-                shape = Radius.shapeLg,
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                border = DashboardCardBorder(),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Image(
-                        painter = painterResource(id = com.example.R.drawable.ic_ledgerprime_brandmark),
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("Reports", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
-                }
-            }
-        }
+        // Disabled 2026-09-10 (explicit request) - this "Reports" brand card was redundant with
+        // both the bottom-nav Reports tab and the "Quick Report" section immediately below it, and
+        // left a dead gap on the Home dashboard (confirmed live on tablet). Commented out rather
+        // than deleted so the brand-container pattern is easy to bring back if a real dashboard
+        // header/brand slot is wanted later. Re-enabling requires restoring the
+        // `androidx.compose.foundation.Image` and `androidx.compose.ui.res.painterResource` imports
+        // at the top of this file.
+        // item {
+        //     Card(
+        //         shape = Radius.shapeLg,
+        //         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        //         border = DashboardCardBorder(),
+        //         modifier = Modifier.fillMaxWidth()
+        //     ) {
+        //         Row(
+        //             modifier = Modifier.fillMaxWidth().padding(14.dp),
+        //             verticalAlignment = Alignment.CenterVertically
+        //         ) {
+        //             Image(
+        //                 painter = painterResource(id = com.example.R.drawable.ic_ledgerprime_brandmark),
+        //                 contentDescription = null,
+        //                 modifier = Modifier.size(28.dp)
+        //             )
+        //             Spacer(modifier = Modifier.width(10.dp))
+        //             Text("Reports", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+        //         }
+        //     }
+        // }
 
         item {
             Column {
