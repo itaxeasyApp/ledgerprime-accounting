@@ -13,22 +13,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.accounting.presentation.components.SectionCard
+import com.example.accounting.presentation.theme.Brand
 import com.example.accounting.presentation.theme.Spacing
 
 /**
  * Play Store readiness pass - Legal/Support content reached only from the new nav Drawer
  * ([com.example.accounting.presentation.components.AppDrawerContent]), never a bottom-nav tab.
  *
- * [PUBLISHER_LEGAL_NAME]/[PUBLISHER_ADDRESS]/[SUPPORT_EMAIL]/[SUPPORT_PHONE] are all real,
- * confirmed publisher/contact details - "Itax Easy Pvt Ltd" is a registered organization with a
- * DUNS number (confirmed on its own Play Console developer account, separate from the GitHub
- * account this repo is pushed from).
+ * Publisher/contact strings now live in [Brand] (shared with [com.example.accounting.presentation.features.splash.SplashScreen]),
+ * all real, confirmed details - "Itax Easy Pvt Ltd" is a registered organization with a DUNS
+ * number (confirmed on its own Play Console developer account, separate from the GitHub account
+ * this repo is pushed from).
  */
-private const val APP_NAME = "LedgerPrime"
-private const val PUBLISHER_LEGAL_NAME = "Itax Easy Pvt Ltd"
-private const val PUBLISHER_ADDRESS = "G 41, Gandhi Nagar, Padav, Gwalior, Madhya Pradesh, India 474002"
-private const val SUPPORT_EMAIL = "info@itaxeasy.com"
-private const val SUPPORT_PHONE = "+91 9425113371"
+private const val APP_NAME = Brand.APP_NAME
+private const val PUBLISHER_LEGAL_NAME = Brand.PUBLISHER_LEGAL_NAME
+private const val PUBLISHER_ADDRESS = Brand.PUBLISHER_ADDRESS
+private const val SUPPORT_EMAIL = Brand.SUPPORT_EMAIL
+private const val SUPPORT_PHONE = Brand.SUPPORT_PHONE
 
 @Composable
 fun AboutScreen() {
