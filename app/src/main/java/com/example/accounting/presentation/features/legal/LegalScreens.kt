@@ -19,17 +19,16 @@ import com.example.accounting.presentation.theme.Spacing
  * Play Store readiness pass - Legal/Support content reached only from the new nav Drawer
  * ([com.example.accounting.presentation.components.AppDrawerContent]), never a bottom-nav tab.
  *
- * [PUBLISHER_LEGAL_NAME]/[PUBLISHER_ADDRESS] are placeholders - the user has confirmed this is a
- * registered organization (has a DUNS number) but the actual legal name/registered address were
- * not supplied yet. Deliberately left as an obvious bracketed placeholder rather than guessed,
- * since fabricating a publisher identity in a document meant to be legally accurate would be
- * worse than an honest gap - fill these in (and update [SUPPORT_EMAIL] if it should differ from
- * the account email) before this is published as the Play Console Privacy Policy URL.
+ * [PUBLISHER_LEGAL_NAME]/[PUBLISHER_ADDRESS]/[SUPPORT_EMAIL]/[SUPPORT_PHONE] are all real,
+ * confirmed publisher/contact details - "Itax Easy Pvt Ltd" is a registered organization with a
+ * DUNS number (confirmed on its own Play Console developer account, separate from the GitHub
+ * account this repo is pushed from).
  */
 private const val APP_NAME = "LedgerPrime"
-private const val PUBLISHER_LEGAL_NAME = "[Your registered organization's legal name]"
-private const val PUBLISHER_ADDRESS = "[Your organization's registered address]"
-private const val SUPPORT_EMAIL = "sadhgurufinance@gmail.com"
+private const val PUBLISHER_LEGAL_NAME = "Itax Easy Pvt Ltd"
+private const val PUBLISHER_ADDRESS = "G 41, Gandhi Nagar, Padav, Gwalior, Madhya Pradesh, India 474002"
+private const val SUPPORT_EMAIL = "info@itaxeasy.com"
+private const val SUPPORT_PHONE = "+91 9425113371"
 
 @Composable
 fun AboutScreen() {
@@ -72,6 +71,8 @@ fun SupportScreen() {
             SectionCard(title = "Contact") {
                 Text("For help, bug reports, or data questions, email:", style = MaterialTheme.typography.bodyMedium)
                 Text(SUPPORT_EMAIL, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+                Text("Or call:", style = MaterialTheme.typography.bodyMedium)
+                Text(SUPPORT_PHONE, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
             }
         }
         item {
@@ -162,7 +163,7 @@ private val privacyPolicySections = listOf(
     ),
     LegalSection(
         "Contact",
-        "Questions about this policy or your data: $SUPPORT_EMAIL. Published by $PUBLISHER_LEGAL_NAME, $PUBLISHER_ADDRESS."
+        "Questions about this policy or your data: $SUPPORT_EMAIL or $SUPPORT_PHONE. Published by $PUBLISHER_LEGAL_NAME, $PUBLISHER_ADDRESS."
     )
 )
 
@@ -198,6 +199,6 @@ private val termsSections = listOf(
     ),
     LegalSection(
         "Contact",
-        "$SUPPORT_EMAIL."
+        "$SUPPORT_EMAIL or $SUPPORT_PHONE."
     )
 )
