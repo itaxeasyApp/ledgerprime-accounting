@@ -87,5 +87,5 @@ cd app && ./gradlew.bat testDebugUnitTest --console=plain
 - **`applicationId` != the Kotlin package.** The manifest's `.MainActivity` resolves against
   `namespace = "com.example"` (build.gradle.kts), giving activity class
   `com.example.MainActivity` - but `adb install`/`am start` need the `applicationId`,
-  `com.aistudio.accounting.prodpk` (also from build.gradle.kts). The launch component is
-  `com.aistudio.accounting.prodpk/com.example.MainActivity` (already baked into `driver.sh`).
+  `com.ledgerprime.app` (also from build.gradle.kts). The launch component is
+  `com.ledgerprime.app/com.example.MainActivity` (already baked into `driver.sh`).

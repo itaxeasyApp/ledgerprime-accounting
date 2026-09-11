@@ -29,7 +29,7 @@ export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/../../../.."
 [ -f settings.gradle.kts ] || { echo "could not find repo root (settings.gradle.kts)" >&2; exit 1; }
 
-APP_ID="com.aistudio.accounting.prodpk"
+APP_ID="com.ledgerprime.app"
 MAIN_ACTIVITY="$APP_ID/com.example.MainActivity"
 APK="app/build/outputs/apk/debug/app-debug.apk"
 SCREENSHOT_DIR="screenshots"
