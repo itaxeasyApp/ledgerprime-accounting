@@ -707,6 +707,21 @@ private fun BackupSyncStep(
     onCloudSyncLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("Sign out of Cloud Sync?") },
+            text = { Text("Your books stay right here on this device either way - signing out only turns off backup/sync until you sign back in.") },
+            confirmButton = {
+                TextButton(onClick = { showLogoutConfirm = false; onCloudSyncLogout() }) { Text("Sign Out") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -748,7 +763,7 @@ private fun BackupSyncStep(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Signed in", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
                         }
-                        TextButton(onClick = onCloudSyncLogout) { Text("Sign Out") }
+                        TextButton(onClick = { showLogoutConfirm = true }) { Text("Sign Out") }
                     }
                 } else {
                     // Phone/OTP login (Week 1, Play Store update plan) - a dedicated full page
