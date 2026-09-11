@@ -68,6 +68,17 @@ data class AuthTokenResponseDto(
 @JsonClass(generateAdapter = true)
 data class ApiErrorDto(val code: String, val message: String)
 
+/** Phone/OTP login (Week 1, Play Store update plan) - mirrors the server's OtpRequestRequest/
+ * OtpVerifyRequest/OtpRequestResponse schemas field-for-field. */
+@JsonClass(generateAdapter = true)
+data class OtpRequestRequestDto(val phone: String)
+
+@JsonClass(generateAdapter = true)
+data class OtpRequestResponseDto(val expiresInSeconds: Long)
+
+@JsonClass(generateAdapter = true)
+data class OtpVerifyRequestDto(val phone: String, val code: String)
+
 /**
  * Retrofit interface for the server-side Python Accounting REST API (Phase 6). Deliberately
  * minimal on the mutation side: the ONLY way this app creates/cancels accounting data on the
@@ -91,6 +102,12 @@ interface AccountingApiService {
 
     @POST("auth/logout")
     suspend fun logout(@Body request: RefreshRequestDto): Response<Unit>
+
+    @POST("auth/otp/request")
+    suspend fun requestOtp(@Body request: OtpRequestRequestDto): Response<OtpRequestResponseDto>
+
+    @POST("auth/otp/verify")
+    suspend fun verifyOtp(@Body request: OtpVerifyRequestDto): Response<AuthTokenResponseDto>
 
     @POST("sync/outbox/batch")
     suspend fun syncOutboxBatch(

@@ -33,6 +33,38 @@ class AuthRepository(
         }
     }
 
+    override suspend fun requestOtp(phone: String): Result<OtpRequestResult> {
+        return try {
+            val response = apiClient.apiService.requestOtp(OtpRequestRequestDto(phone))
+            val body = response.body()
+            if (response.isSuccessful && body != null) {
+                Result.success(OtpRequestResult(body.expiresInSeconds))
+            } else {
+                Result.failure(Exception("Could not send code: ${response.code()} ${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun verifyOtp(phone: String, code: String): Result<AuthTokenResponse> {
+        return try {
+            val response = apiClient.apiService.verifyOtp(OtpVerifyRequestDto(phone, code))
+            val body = response.body()
+            if (response.isSuccessful && body != null) {
+                secureStorage.setAuthToken(body.accessToken)
+                secureStorage.setRefreshToken(body.refreshToken)
+                Result.success(
+                    AuthTokenResponse(body.accessToken, body.refreshToken, body.expiresInSeconds, body.tokenType)
+                )
+            } else {
+                Result.failure(Exception("That code is invalid or has expired: ${response.code()} ${response.message()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     override suspend fun refreshToken(refreshToken: String): Result<AuthTokenResponse> {
         return try {
             val response = apiClient.apiService.refreshToken(RefreshRequestDto(refreshToken))

@@ -709,8 +709,17 @@ fun MainAppScreen(
                             onTriggerSync = { viewModel.triggerSync() },
                             onUpdateAccountingConfiguration = { mode, type -> viewModel.updateAccountingConfiguration(mode, type) },
                             isCloudSyncLoggedIn = uiState.isCloudSyncLoggedIn,
-                            onCloudSyncLogin = { email, password -> viewModel.loginCloudSync(email, password) },
+                            onOpenLogin = { viewModel.navigateTo(AppRoute.Login) },
                             onCloudSyncLogout = { viewModel.logoutCloudSync() }
+                        )
+
+                        is AppRoute.Login -> com.example.accounting.presentation.features.auth.LoginScreen(
+                            uiState = uiState,
+                            onRequestOtp = { phone -> viewModel.requestOtpCloudSync(phone) },
+                            onVerifyOtp = { phone, code -> viewModel.verifyOtpCloudSync(phone, code) },
+                            onCancelOtp = { viewModel.cancelOtpLogin() },
+                            onBack = { viewModel.navigateTo(AppRoute.SettingsAndSync) },
+                            onLoggedIn = { viewModel.navigateTo(AppRoute.SettingsAndSync) }
                         )
 
                         is AppRoute.Sales -> SalesScreen(

@@ -19,9 +19,30 @@ class User(Base):
     __tablename__ = "users"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True)
-    email: Mapped[str] = mapped_column(String, unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String)
+    # Phone/OTP login (Week 1) - nullable because a pre-existing email/password user has none;
+    # unique but not `index=True` here (the migration adds its own explicit index - see the
+    # run-server skill's documented 0005 duplicate-index gotcha for why the two must never both
+    # declare the same index).
+    email: Mapped[str | None] = mapped_column(String, unique=True, index=True, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    # Nullable: a phone/OTP-only user (Week 1) never sets a password at all.
+    hashed_password: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class OtpCode(Base):
+    """Phone/OTP login (Week 1, Play Store update plan) - a short-lived, hashed, attempt-limited
+    code per phone number. Never stores the plaintext code (same bcrypt hashing as passwords, via
+    the same hash_password/verify_password helpers - one hashing scheme, not two)."""
+    __tablename__ = "otp_codes"
+
+    otp_id: Mapped[str] = mapped_column(String, primary_key=True)
+    phone: Mapped[str] = mapped_column(String, index=True)
+    code_hash: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[int] = mapped_column(Integer)
 
 

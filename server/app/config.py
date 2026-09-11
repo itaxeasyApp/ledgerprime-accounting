@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     jwt_refresh_token_expire_days: int = 30
     environment: str = "development"
 
+    # Phone/OTP login (Week 1, Play Store update plan). "console" (default) logs the code instead
+    # of sending a real SMS - safe for local/dev use with zero vendor setup; a real deployment sets
+    # otp_sms_provider to a real gateway's name once one is chosen (see app/infrastructure/sms/).
+    otp_sms_provider: str = "console"
+    otp_expiry_seconds: int = 300
+    otp_max_attempts: int = 5
+    otp_resend_cooldown_seconds: int = 60
+    # The 11-character app signature hash Android's SMS Retriever API needs appended to the SMS
+    # body to auto-detect and auto-fill it (see AppSignatureHelper on the Android side for how this
+    # is computed) - blank until that's wired up; OTP SMS still sends fine without it, just without
+    # auto-read.
+    android_sms_retriever_hash: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

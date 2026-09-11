@@ -17,3 +17,16 @@ class AuthTokenResponse(BaseModel):
     refreshToken: str
     expiresInSeconds: int
     tokenType: str = "Bearer"
+
+
+class OtpRequestRequest(BaseModel):
+    phone: str
+
+
+class OtpRequestResponse(BaseModel):
+    expiresInSeconds: int
+
+
+class OtpVerifyRequest(BaseModel):
+    phone: str
+    code: str

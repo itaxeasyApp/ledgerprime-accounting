@@ -42,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.example.accounting.domain.company.AccountingMode
 import com.example.accounting.domain.company.BusinessType
@@ -110,7 +109,7 @@ fun SettingsAndSyncScreen(
     onTriggerSync: () -> Unit,
     onUpdateAccountingConfiguration: (AccountingMode?, BusinessType?) -> Unit = { _, _ -> },
     isCloudSyncLoggedIn: Boolean = false,
-    onCloudSyncLogin: (String, String) -> Unit = { _, _ -> },
+    onOpenLogin: () -> Unit = {},
     onCloudSyncLogout: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -264,7 +263,7 @@ fun SettingsAndSyncScreen(
             onBack = { step = SettingsStep.Root },
             onTriggerSync = onTriggerSync,
             isCloudSyncLoggedIn = isCloudSyncLoggedIn,
-            onCloudSyncLogin = onCloudSyncLogin,
+            onOpenLogin = onOpenLogin,
             onCloudSyncLogout = onCloudSyncLogout,
             modifier = modifier
         )
@@ -704,7 +703,7 @@ private fun BackupSyncStep(
     onBack: () -> Unit,
     onTriggerSync: () -> Unit,
     isCloudSyncLoggedIn: Boolean,
-    onCloudSyncLogin: (String, String) -> Unit,
+    onOpenLogin: () -> Unit,
     onCloudSyncLogout: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -752,18 +751,10 @@ private fun BackupSyncStep(
                         TextButton(onClick = onCloudSyncLogout) { Text("Sign Out") }
                     }
                 } else {
-                    var email by remember { mutableStateOf("") }
-                    var password by remember { mutableStateOf("") }
-                    OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = password, onValueChange = { password = it }, label = { Text("Password") },
-                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Button(onClick = { onCloudSyncLogin(email, password) }, enabled = email.isNotBlank() && password.isNotBlank()) {
-                        Text("Sign In")
-                    }
+                    // Phone/OTP login (Week 1, Play Store update plan) - a dedicated full page
+                    // (see presentation/features/auth/LoginScreen.kt), not an inline email/password
+                    // form here anymore.
+                    Button(onClick = onOpenLogin) { Text("Sign In") }
                 }
             }
         }

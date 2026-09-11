@@ -122,6 +122,9 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
+  // Phone/OTP login (Week 1) - SmsRetriever, no SEND_SMS/READ_SMS permission needed at all (see
+  // data/auth/SmsRetrieverManager.kt).
+  implementation(libs.play.services.auth)
   implementation(libs.retrofit)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.zxing.core)

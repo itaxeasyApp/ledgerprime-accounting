@@ -24,6 +24,10 @@ sealed class AppRoute(val path: String, val title: String) {
      * route means only this screen's own header shows. */
     object GstDashboard : AppRoute("#gst-dashboard", "GST Dashboard")
     object SettingsAndSync : AppRoute("#settings-sync", "Settings")
+    /** Phone/OTP Cloud Sync login (Week 1, Play Store update plan) - a dedicated full-page screen,
+     * not the small inline form Settings used to have, reached from the Cloud Sync card's "Sign
+     * In" button. */
+    object Login : AppRoute("#login", "Sign In")
 
     object Sales : AppRoute("#sales", "Sales")
     object Purchases : AppRoute("#purchases", "Purchases")

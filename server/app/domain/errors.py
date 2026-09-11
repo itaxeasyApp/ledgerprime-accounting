@@ -160,3 +160,16 @@ class SubscriptionAlreadyExists(AppError):
     has a subscription row for this financial year; use the renew path instead of create."""
     code = "SUBSCRIPTION_ALREADY_EXISTS"
     status_code = 409
+
+
+# ==================== Phone/OTP login (Week 1, Play Store update plan) ====================
+class OtpRateLimited(AppError):
+    """A request for a new OTP arrived while an unexpired, unconsumed one already exists for this
+    phone - never send a second SMS within the same short window."""
+    code = "OTP_RATE_LIMITED"
+    status_code = 429
+
+
+class OtpInvalidOrExpired(AppError):
+    code = "OTP_INVALID_OR_EXPIRED"
+    status_code = 400

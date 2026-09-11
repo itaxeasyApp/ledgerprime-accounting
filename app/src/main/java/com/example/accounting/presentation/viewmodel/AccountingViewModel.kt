@@ -161,6 +161,12 @@ data class AccountingUiState(
     val outstandingInvoices: List<OutstandingInvoice> = emptyList(),
     val gstFilingPeriods: List<GstFilingPeriod> = emptyList(),
     val isCloudSyncLoggedIn: Boolean = false,
+    /** Phone/OTP login (Week 1, Play Store update plan) - set once [AccountingViewModel.requestOtpCloudSync]
+     * succeeds, so the Login screen can advance from "enter phone" to "enter code" and start the
+     * SMS Retriever auto-read listener. Cleared on success/cancel/logout. */
+    val otpPendingPhone: String? = null,
+    val otpRequestInFlight: Boolean = false,
+    val otpVerifyInFlight: Boolean = false,
 
     // ==== Phase 7J UI additions ====
     val parties: List<Party> = emptyList(),
@@ -290,6 +296,18 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     private val schedulerPort: SchedulerPort = WorkManagerSchedulerPort(application)
     private val authRepository = com.example.accounting.core.network.AuthRepository(application)
 
+    init {
+        // Phone/OTP login (Week 1) - debug-only: prints this build's SMS Retriever app signature
+        // hash so it can be put into the server's ANDROID_SMS_RETRIEVER_HASH setting. Debug and
+        // release builds sign with different certs, so this value is DIFFERENT for a release APK -
+        // re-run this once against a release build before wiring OTP auto-fill for production.
+        if (com.example.BuildConfig.DEBUG) {
+            com.example.accounting.data.auth.AppSignatureHelper(application).getAppSignatures().forEach {
+                android.util.Log.d("SmsRetrieverHash", "App signature hash for OTP auto-fill: $it")
+            }
+        }
+    }
+
     // ==== Phase 7J UI: application-service layer (Phase 7J-B, frozen) - every new screen calls
     // through these, never AccountingDao/AccountingRepository directly, except where a thin
     // facade doesn't yet exist for an already-established repository call (matching this
@@ -393,6 +411,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         refreshGstAutomationNotifications()
                     }
                     is AppRoute.SettingsAndSync -> { /* reached from Profile - keep whatever tab was active */ }
+                    is AppRoute.Login -> { /* reached from Settings' Cloud Sync card - keep whatever tab was active */ }
                     is AppRoute.LedgerStatement -> { /* keep whatever tab was active (Home or Reports) */ }
                     is AppRoute.Parties -> { /* keep whatever tab was active (Sales or Purchases) */ }
                     is AppRoute.Profile -> { /* top-bar entry point - keep whatever tab was active */ }
@@ -729,9 +748,46 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     fun logoutCloudSync() {
         viewModelScope.launch {
             authRepository.logout()
-            _uiState.update { it.copy(isCloudSyncLoggedIn = false) }
+            _uiState.update { it.copy(isCloudSyncLoggedIn = false, otpPendingPhone = null) }
             emitMessage("Signed out of cloud sync")
         }
+    }
+
+    /** Phone/OTP login (Week 1) - requests a code be sent to [phone]; on success advances
+     * [AccountingUiState.otpPendingPhone] so the Login screen shows the code-entry step and starts
+     * listening for SMS Retriever auto-fill. */
+    fun requestOtpCloudSync(phone: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(otpRequestInFlight = true) }
+            val result = authRepository.requestOtp(phone)
+            _uiState.update { it.copy(otpRequestInFlight = false) }
+            if (result.isSuccess) {
+                _uiState.update { it.copy(otpPendingPhone = phone) }
+                emitMessage("Code sent to $phone")
+            } else {
+                emitMessage("Could not send code: ${result.exceptionOrNull()?.message ?: "Unknown error"}")
+            }
+        }
+    }
+
+    /** [code] - either typed by the user or auto-filled by SMS Retriever. */
+    fun verifyOtpCloudSync(phone: String, code: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(otpVerifyInFlight = true) }
+            val result = authRepository.verifyOtp(phone, code)
+            _uiState.update { it.copy(otpVerifyInFlight = false) }
+            if (result.isSuccess) {
+                _uiState.update { it.copy(isCloudSyncLoggedIn = true, otpPendingPhone = null) }
+                emitMessage("Signed in - cloud sync enabled")
+            } else {
+                emitMessage("Sign-in failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}")
+            }
+        }
+    }
+
+    /** Back-navigation from the code-entry step to the phone-entry step. */
+    fun cancelOtpLogin() {
+        _uiState.update { it.copy(otpPendingPhone = null) }
     }
 
     fun createCompany(

@@ -13,7 +13,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.base import Base, get_db, make_engine
+from app.infrastructure.sms.provider import OtpSmsProvider, get_otp_provider
 from app.main import app
+
+
+class CapturingOtpProvider(OtpSmsProvider):
+    """Test double for OTP SMS - records every (phone, message) instead of sending anything real,
+    so a test can read back the actual code without scraping stdout."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def send(self, phone: str, message: str) -> None:
+        self.sent.append((phone, message))
 
 
 @pytest_asyncio.fixture
@@ -34,8 +46,13 @@ async def db_session(db_engine) -> AsyncSession:
         yield session
 
 
+@pytest.fixture
+def otp_provider() -> CapturingOtpProvider:
+    return CapturingOtpProvider()
+
+
 @pytest_asyncio.fixture
-async def client(db_engine):
+async def client(db_engine, otp_provider: CapturingOtpProvider):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     session_factory = async_sessionmaker(bind=db_engine, expire_on_commit=False, class_=AsyncSession)
@@ -45,6 +62,7 @@ async def client(db_engine):
             yield session
 
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_otp_provider] = lambda: otp_provider
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test/api/v1") as ac:
         yield ac
