@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
@@ -402,23 +405,26 @@ fun CreateVoucherDialog(
         // effect inside a Dialog's separate window (see CreateLedgerDialog's fuller note).
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
+        // Mobile Workflow Correction - a major, complete accounting workflow must read as a real
+        // mobile screen, not a card floating over a dimmed dashboard. Full-bleed Surface (no
+        // rounded corners, no width/height margin) - the exact same shape [QuickInvoiceEntryScreen]
+        // ("New Sale Invoice", the reference pattern) already uses; still a Dialog window
+        // mechanically (so it dismisses/stacks the same way every other overlay in this app does),
+        // it now fills the entire display instead of a 94%x92% card.
         Surface(
-            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier
-                .fillMaxWidth(0.94f)
-                // Real-device QA fix - this Surface previously had no height bound, so
-                // `weight(1f, fill = false)` on the scrollable body below (inside an
-                // effectively unbounded-height Column) couldn't actually cap anything: for a
-                // tall form (e.g. an item-based Sale/Purchase with the GST Pricing toggle and
-                // live CGST/SGST/Total GST/Round Off breakdown), the whole dialog just grew
-                // past the screen, pushing "Post to Ledger" underneath the on-screen
-                // navigation bar - visible but untappable. Capping the Surface itself is what
-                // makes that weight meaningful, so the footer always stays on-screen.
-                .fillMaxHeight(0.92f)
-                .padding(vertical = 16.dp)
+            modifier = Modifier.fillMaxSize()
         ) {
-            Column(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+            // Real-device QA finding (see QuickInvoiceEntryScreen's fuller note) - with
+            // decorFitsSystemWindows = false, a raw Dialog window's fillMaxSize() measures against
+            // the full edge-to-edge window, not the visible area between the status and navigation
+            // bars; systemBarsPadding() alone still measured ZERO bottom inset on this OEM's
+            // 3-button nav (MIUI/HyperOS), which pushes a footer relying only on
+            // navigationBarsPadding() almost entirely off the physical screen. An explicit 48dp
+            // floor - Android's own standard 3-button nav bar height - is added on top as a
+            // deterministic fallback; systemBarsPadding() is kept too for gesture-nav devices where
+            // it may correctly report a non-zero inset, stacking harmlessly as extra margin.
+            Column(modifier = Modifier.fillMaxWidth().fillMaxHeight().systemBarsPadding().padding(bottom = 48.dp)) {
                 // Hoisted out of the scrollable body below - also needed by the fixed footer's
                 // Post button (`enabled = isReady && ...`), which now lives outside that scroll area.
                 val isReady = when {
@@ -436,10 +442,13 @@ fun CreateVoucherDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
                     Column {
                         Text(
                             text = "New Accounting Voucher",
@@ -450,9 +459,6 @@ fun CreateVoucherDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
                 HorizontalDivider()

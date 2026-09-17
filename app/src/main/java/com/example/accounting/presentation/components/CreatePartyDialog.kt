@@ -4,19 +4,20 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -103,8 +104,6 @@ fun CreatePartyDialog(
 ) {
     var displayName by remember { mutableStateOf("") }
     var entityType by remember { mutableStateOf(PartyEntityType.BUSINESS) }
-    // null = UNKNOWN (Rule 30 Section 2) - never defaulted to REGISTERED or UNREGISTERED.
-    var gstRegistrationStatus by remember { mutableStateOf<GstRegistrationStatus?>(null) }
     var gstin by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
@@ -141,49 +140,66 @@ fun CreatePartyDialog(
 
     val roleLabel = if (role == PartyRole.CUSTOMER) "Customer" else "Supplier"
     val isBusiness = entityType == PartyEntityType.BUSINESS
-    // GSTIN is only ever "required" for a Business explicitly marked Registered (Rule 30 Section 3)
-    // - never for Individual (Section 4), never for Unregistered/Unknown.
-    val gstinRequired = isBusiness && gstRegistrationStatus == GstRegistrationStatus.REGISTERED
+    // User correction: "if person having gstin no then only he is registered if not then
+    // unregistered there is nothing like unknown on sale invoice" - GST Registration is no longer
+    // a free-standing manual choice with a third "Unknown" state; it's derived purely from whether
+    // a GSTIN was entered. An Individual never carries a registration status at all (Rule 30
+    // Section 4 - unchanged), matching the domain model's own null-means-not-applicable meaning.
+    val gstRegistrationStatus = if (isBusiness) {
+        if (gstin.isNotBlank()) GstRegistrationStatus.REGISTERED else GstRegistrationStatus.UNREGISTERED
+    } else null
     val gstinFormatInvalid = !GSTRules.isValidGSTIN(gstin)
-    val gstinMissing = gstinRequired && gstin.isBlank()
     // Play Store readiness correction - phone/email previously had zero format validation (unlike
     // GSTIN above). Both stay optional (blank is valid, matches every other optional field here);
     // this only rejects a non-blank value that isn't shaped like a real phone/email.
     val phoneFormatInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
     val emailFormatInvalid = !ContactFieldValidation.isValidEmail(email)
-    val canSubmit = displayName.isNotBlank() && !gstinFormatInvalid && !gstinMissing && !phoneFormatInvalid && !emailFormatInvalid
+    val canSubmit = displayName.isNotBlank() && !gstinFormatInvalid && !phoneFormatInvalid && !emailFormatInvalid
 
+    // Mobile Workflow Correction - Add/Edit Supplier and Add/Edit Customer are major workflows, not
+    // small popups, so this reads as a real mobile screen: full-bleed Dialog(usePlatformDefaultWidth
+    // = false) + fillMaxSize() Surface, same recipe as [QuickInvoiceEntryScreen] ("New Sale
+    // Invoice", the reference pattern) and [CreateVoucherDialog].
     // decorFitsSystemWindows = false - required for navigationBarsPadding() below to have any
     // effect inside a Dialog's separate window (see CreateLedgerDialog's fuller note).
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth(0.94f)
+            modifier = Modifier.fillMaxSize()
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            // Real-device QA finding (see QuickInvoiceEntryScreen's fuller note) - with
+            // decorFitsSystemWindows = false, a raw Dialog window's fillMaxSize() measures against
+            // the full edge-to-edge window, not the visible area between the status and navigation
+            // bars; systemBarsPadding() alone still measured ZERO bottom inset on this OEM's
+            // 3-button nav (MIUI/HyperOS), which pushed the footer almost entirely off the physical
+            // screen. An explicit 48dp floor - Android's own standard 3-button nav bar height - is
+            // added on top as a deterministic fallback; systemBarsPadding() is kept too for
+            // gesture-nav devices where it may correctly report a non-zero inset, stacking
+            // harmlessly as a bit of extra margin.
+            Column(modifier = Modifier.fillMaxSize().systemBarsPadding().padding(bottom = 48.dp)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Spacing.lg - Spacing.xs, vertical = 16.dp),
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Add $roleLabel", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onRequestContactImport) {
-                            Icon(Icons.Default.ContactPhone, contentDescription = "Import from Contacts")
-                        }
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add $roleLabel", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold))
+                    }
+                    IconButton(onClick = onRequestContactImport) {
+                        Icon(Icons.Default.ContactPhone, contentDescription = "Import from Contacts")
                     }
                 }
                 HorizontalDivider()
 
             Column(
                 modifier = Modifier
-                    .weight(1f, fill = false)
+                    .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(Spacing.lg - Spacing.xs)
@@ -205,12 +221,7 @@ fun CreatePartyDialog(
                     )
                     FilterChip(
                         selected = entityType == PartyEntityType.INDIVIDUAL,
-                        onClick = {
-                            entityType = PartyEntityType.INDIVIDUAL
-                            // GST Registration is a Business-only concept in this form - clear it
-                            // so switching back to Business never carries over a stale choice.
-                            gstRegistrationStatus = null
-                        },
+                        onClick = { entityType = PartyEntityType.INDIVIDUAL },
                         label = { Text("Individual") }
                     )
                 }
@@ -219,63 +230,27 @@ fun CreatePartyDialog(
                 if (isBusiness) {
                     Text("GST Registration", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                     Spacer(modifier = Modifier.height(Spacing.xs))
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
-                    ) {
-                        FilterChip(
-                            selected = gstRegistrationStatus == GstRegistrationStatus.REGISTERED,
-                            onClick = { gstRegistrationStatus = GstRegistrationStatus.REGISTERED },
-                            label = { Text("Registered") }
-                        )
-                        FilterChip(
-                            selected = gstRegistrationStatus == GstRegistrationStatus.UNREGISTERED,
-                            onClick = {
-                                gstRegistrationStatus = GstRegistrationStatus.UNREGISTERED
-                                // Never fabricate a GSTIN for a party just marked Unregistered.
-                                gstin = ""
-                            },
-                            label = { Text("Unregistered") }
-                        )
-                        FilterChip(
-                            selected = gstRegistrationStatus == null,
-                            onClick = { gstRegistrationStatus = null },
-                            label = { Text("Unknown") }
+                    // Derived, never a separate manual choice - see gstRegistrationStatus above.
+                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (gstRegistrationStatus == GstRegistrationStatus.REGISTERED) "Registered - GSTIN entered below" else "Unregistered - no GSTIN entered",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
                         )
                     }
                     Spacer(modifier = Modifier.height(Spacing.sm))
-
-                    when (gstRegistrationStatus) {
-                        GstRegistrationStatus.REGISTERED -> {
-                            FormField(
-                                value = gstin,
-                                onValueChange = {
-                                    gstin = Constants.normalizeTaxId(it)
-                                    if (gstin.length >= 2) stateCode = gstin.take(2)
-                                },
-                                label = "GSTIN",
-                                supportingText = when {
-                                    gstinMissing -> "Required for a GST-registered business"
-                                    gstinFormatInvalid -> "Not a valid GSTIN"
-                                    else -> "Required for a GST-registered business"
-                                },
-                                isError = gstinMissing || gstinFormatInvalid,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(Spacing.sm))
-                        }
-                        null -> {
-                            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-                                Text(
-                                    "GST registration status is unresolved for this $roleLabel - it cannot be used in a GST-relevant transaction until this is set.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(10.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(Spacing.sm))
-                        }
-                        else -> { /* UNREGISTERED - no GSTIN field requirement (Rule 30 Section 6) */ }
-                    }
+                    FormField(
+                        value = gstin,
+                        onValueChange = {
+                            gstin = Constants.normalizeTaxId(it)
+                            if (gstin.length >= 2) stateCode = gstin.take(2)
+                        },
+                        label = "GSTIN",
+                        supportingText = if (gstinFormatInvalid) "Not a valid GSTIN" else "Leave blank if this $roleLabel isn't GST-registered",
+                        isError = gstinFormatInvalid,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(Spacing.sm))
                 } else {
                     // Individual - GSTIN optional, never required (Rule 30 Section 4).
                     FormField(
@@ -367,6 +342,22 @@ fun CreatePartyDialog(
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                // Always-visible State/Country line - the State Code field's own supportingText
+                // above already resolves the same name, but as small gray hint text under an
+                // otherwise-empty field it's easy to miss entirely on a fresh form. This restates
+                // the identical, already-derived value (Constants.GST_STATE_CODES[stateCode] -
+                // never a second lookup) in a clearly labeled row every time. Country is a plain
+                // fixed label, not a form field - this app is India-only (GSTIN/PAN, Indian GST
+                // state codes throughout), and neither Party nor its linked Ledger has a country
+                // column in the database (only the Company's own Business/Individual profile does,
+                // for an unrelated purpose) - showing a fixed "India" here is honest display text,
+                // not a new persisted field or a schema change.
+                Text(
+                    text = "State: ${Constants.GST_STATE_CODES[stateCode] ?: "-- (enter State Code above)"}  |  Country: India",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
 
                 HorizontalDivider()

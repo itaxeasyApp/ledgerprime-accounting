@@ -95,6 +95,12 @@ fun ReportsCenterScreen(
      * the user on the generic category menu a Dashboard card used to always land on. */
     deepLinkReportKey: String? = null,
     onDeepLinkConsumed: () -> Unit = {},
+    /** Week 3 - Sales/Purchase Register voucher drill-down. Reuses the exact same
+     * "hand the tapped Voucher to the caller" contract [SalesScreen]/[PurchasesScreen]/
+     * [ChartOfAccountsScreen]'s ledger statement already use, so the caller (MainAppScreen) opens
+     * the one existing [com.example.accounting.presentation.components.VoucherDetailDialog] -
+     * never a second voucher view/edit surface. */
+    onVoucherClick: (Voucher) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var category by remember { mutableStateOf<ReportCategory?>(null) }
@@ -139,7 +145,7 @@ fun ReportsCenterScreen(
 
         when (category) {
             ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport, onRefreshReport, initialReportKey)
-            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, initialReportKey)
+            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, initialReportKey, onVoucherClick)
             ReportCategory.ACCOUNTS -> AccountsCategory(uiState, onOpenDayBook, onOpenAllLedgers)
             ReportCategory.GST -> GstCategory(uiState, gstReturnActions, initialReportKey)
             ReportCategory.ANALYSIS -> AnalysisCategory(uiState)
@@ -227,7 +233,7 @@ private fun CashFlowView(report: CashFlowReport?) {
 }
 
 @Composable
-private fun SalesPurchaseCategory(uiState: AccountingUiState, initialReportKey: String? = null) {
+private fun SalesPurchaseCategory(uiState: AccountingUiState, initialReportKey: String? = null, onVoucherClick: (Voucher) -> Unit = {}) {
     var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(listOf("Sales Register" to true, "Purchase Register" to true, "Outstanding Receivables" to true, "Outstanding Payables" to true)) { reportKey = it }
@@ -236,8 +242,8 @@ private fun SalesPurchaseCategory(uiState: AccountingUiState, initialReportKey: 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         BackRow(reportKey!!, onBack = { reportKey = null })
         when (reportKey) {
-            "Sales Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.SALES })
-            "Purchase Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.PURCHASE })
+            "Sales Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.SALES }, onVoucherClick)
+            "Purchase Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.PURCHASE }, onVoucherClick)
             "Outstanding Receivables" -> OutstandingList(uiState.receivablesReport)
             "Outstanding Payables" -> OutstandingList(uiState.payablesReport)
         }
@@ -523,11 +529,11 @@ private fun OutstandingList(report: OutstandingReport?) {
 }
 
 @Composable
-private fun VoucherRegisterList(vouchers: List<Voucher>) {
+private fun VoucherRegisterList(vouchers: List<Voucher>, onVoucherClick: (Voucher) -> Unit = {}) {
     if (vouchers.isEmpty()) { EmptyReportState(); return }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
         items(vouchers.sortedByDescending { it.date }, key = { it.voucherId }) { voucher ->
-            VoucherSummaryCard(voucher = voucher, onClick = {})
+            VoucherSummaryCard(voucher = voucher, onClick = { onVoucherClick(voucher) })
         }
     }
 }

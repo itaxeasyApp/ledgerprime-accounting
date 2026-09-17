@@ -587,4 +587,36 @@ class Gstr1FoundationTestSuite {
         val gr = allReturns.first()
         assertTrue(gr.status == GstReturnStatus.READY || gr.status == GstReturnStatus.VALIDATION_FAILED || gr.status == GstReturnStatus.DRAFT)
     }
+
+    // ==========================================
+    // Phase 7J audit, Section 9 (GST-mismatch UX audit) - regression tests for the confirmed
+    // defect: GstReturnDashboardScreen's GstErrorDetailsScreen rendered only the generic per-CODE
+    // label (e.g. "Invalid GSTIN") and discarded Gstr1Validator's own specific `.message` entirely -
+    // worst for a return-level issue (voucherId == null), which additionally got no "Fix Now"
+    // button, so the bare label was the *only* information shown. The UI fix (rendering
+    // issue.message) isn't independently unit-testable (Compose, Robolectric-blocked in this
+    // sandbox) - these tests instead regression-guard the data it now depends on: that every issue
+    // Gstr1Validator produces actually carries a real, non-generic, field-specific message, not just
+    // a bare code, so a future change to the validator can't silently regress the UI fix by making
+    // messages blank again.
+    // ==========================================
+    @Test
+    fun t29_Validator_CompositionScheme_MessageExplainsWhyNotJustTheCode() {
+        val issues = Gstr1Validator.validate(com.example.accounting.domain.taxation.gstreturn.Gstr1ReturnData("G", "202604"), emptyList(), emptyMap(), companyScheme = GstScheme.COMPOSITION)
+        val issue = issues.first { it.code == "SCHEME_DOES_NOT_FILE_GSTR1" }
+        // Return-level issue - this is exactly the case that previously had zero "Fix Now" button
+        // and, pre-fix, zero message shown at all beyond the generic label.
+        assertEquals(null, issue.voucherId)
+        assertTrue("message must be real prose, not blank/just the code", issue.message.length > "SCHEME_DOES_NOT_FILE_GSTR1".length)
+        assertTrue("message must explain the actual reason (Composition files GSTR-4, not GSTR-1)", issue.message.contains("Composition") && issue.message.contains("GSTR-4"))
+    }
+
+    @Test
+    fun t30_Validator_InvalidPlaceOfSupply_MessageNamesTheExactBadValueAndVoucher() {
+        val txn = gt("V-POS-BAD", "LED_L", "27AAPFU0939F1ZV", "99", SupplyType.INTER_STATE)
+        val issues = Gstr1Validator.validate(com.example.accounting.domain.taxation.gstreturn.Gstr1ReturnData("G", "202604"), listOf(txn), emptyMap())
+        val issue = issues.first { it.code == "INVALID_PLACE_OF_SUPPLY" }
+        assertEquals("V-POS-BAD", issue.voucherId)
+        assertTrue("message must name the exact invalid state code entered, not a generic label", issue.message.contains("'99'"))
+    }
 }

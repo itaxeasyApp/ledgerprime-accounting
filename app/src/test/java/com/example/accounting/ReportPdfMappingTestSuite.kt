@@ -11,6 +11,8 @@ import com.example.accounting.domain.reports.BalanceSheetReport
 import com.example.accounting.domain.reports.DayBookEntryStatus
 import com.example.accounting.domain.reports.DayBookReport
 import com.example.accounting.domain.reports.DayBookRow
+import com.example.accounting.domain.reports.LedgerStatementReport
+import com.example.accounting.domain.reports.LedgerStatementRow
 import com.example.accounting.domain.reports.ProfitAndLossReport
 import com.example.accounting.domain.reports.TrialBalanceReport
 import com.example.accounting.domain.reports.TrialBalanceRow
@@ -134,5 +136,57 @@ class ReportPdfMappingTestSuite {
         val data = report.toPdfData()
         assertEquals(report.totalLiabilities.formatPlain(), data.totalsRow!![1])
         assertEquals(report.totalAssets.formatPlain(), data.totalsRow!![3])
+    }
+
+    /** Week 3 - Ledger Report professional output. Column order is Date/Particulars/Voucher
+     * Type/Voucher No./Debit/Credit/Balance, an explicit Opening Balance row leads the table, and
+     * Company/Financial Year (passed in - [LedgerStatementReport] itself carries neither) appear
+     * in the subtitle alongside the Ledger name. */
+    @Test
+    fun ledgerStatement_toPdfData_hasOpeningRowVoucherTypeColumnAndHeaderContext() {
+        val report = LedgerStatementReport(
+            ledgerId = "LED_1", ledgerName = "Acme Traders",
+            openingBalance = Money.fromPaise(500_00L), openingType = DrCr.DEBIT,
+            rows = listOf(
+                LedgerStatementRow("V1", "SL-0001", VoucherType.SALES, LocalDate.of(2026, 4, 5), "Being goods sold", debitAmount = Money.fromPaise(100_00L), creditAmount = Money.ZERO, runningBalance = Money.fromPaise(600_00L), balanceType = DrCr.DEBIT)
+            ),
+            totalDebit = Money.fromPaise(100_00L), totalCredit = Money.ZERO,
+            closingBalance = Money.fromPaise(600_00L), closingType = DrCr.DEBIT
+        )
+
+        val data = report.toPdfData(companyName = "Test Co", financialYearLabel = "Financial Year: 2026-27")
+
+        assertEquals(listOf("Date", "Particulars", "Voucher Type", "Voucher No.", "Debit", "Credit", "Balance"), data.columnHeaders)
+        assertTrue("Subtitle must carry the company name", data.subtitle.contains("Test Co"))
+        assertTrue("Subtitle must carry the financial year", data.subtitle.contains("2026-27"))
+        // Row 0 is the synthetic Opening Balance row; row 1 is the first real transaction.
+        assertEquals("Opening Balance", data.rows[0][1])
+        assertEquals("${report.openingBalance.formatPlain()} ${report.openingType.code}", data.rows[0][6])
+        assertEquals(VoucherType.SALES.displayName, data.rows[1][2])
+        assertEquals("SL-0001", data.rows[1][3])
+        assertEquals(setOf(4, 5, 6), data.rightAlignColumnIndices)
+    }
+
+    @Test
+    fun ledgerStatement_toPdfData_cumulativeDebitCreditAreRunningSumsOfOwnRows_neverRecalculated() {
+        val report = LedgerStatementReport(
+            ledgerId = "LED_1", ledgerName = "Acme Traders",
+            openingBalance = Money.ZERO, openingType = DrCr.DEBIT,
+            rows = listOf(
+                LedgerStatementRow("V1", "SL-0001", VoucherType.SALES, LocalDate.of(2026, 4, 5), "Sale 1", debitAmount = Money.fromPaise(100_00L), creditAmount = Money.ZERO, runningBalance = Money.fromPaise(100_00L), balanceType = DrCr.DEBIT),
+                LedgerStatementRow("V2", "RC-0001", VoucherType.RECEIPT, LocalDate.of(2026, 4, 10), "Receipt 1", debitAmount = Money.ZERO, creditAmount = Money.fromPaise(40_00L), runningBalance = Money.fromPaise(60_00L), balanceType = DrCr.DEBIT)
+            ),
+            totalDebit = Money.fromPaise(100_00L), totalCredit = Money.fromPaise(40_00L),
+            closingBalance = Money.fromPaise(60_00L), closingType = DrCr.DEBIT
+        )
+
+        val spec = report.toPdfData().pageBreakCarryForward!!
+
+        // Index 0 = opening row (no transaction yet), 1 = after V1, 2 = after V1+V2.
+        assertEquals(Money.ZERO.formatPlain(), spec.cumulativeDebitFormatted[0])
+        assertEquals(Money.fromPaise(100_00L).formatPlain(), spec.cumulativeDebitFormatted[1])
+        assertEquals(Money.fromPaise(100_00L).formatPlain(), spec.cumulativeDebitFormatted[2])
+        assertEquals(Money.ZERO.formatPlain(), spec.cumulativeCreditFormatted[1])
+        assertEquals(Money.fromPaise(40_00L).formatPlain(), spec.cumulativeCreditFormatted[2])
     }
 }

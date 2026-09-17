@@ -23,7 +23,12 @@ object GstReturnApplicability {
         when (scheme) {
             GstScheme.REGULAR -> listOf(
                 GstReturnApplicabilityRule(GstReturnType.GSTR1, filingFrequency),
-                GstReturnApplicabilityRule(GstReturnType.GSTR3B, filingFrequency)
+                GstReturnApplicabilityRule(GstReturnType.GSTR3B, filingFrequency),
+                // Phase 8 - GSTR-9 now has a real builder (Gstr9ReturnBuilder); promoted from
+                // visibleReturns-only ("coming soon") to actionable. Always ANNUAL regardless of
+                // this company's own GSTR-1/3B filingFrequency - GSTR-9 is statutorily a yearly
+                // return, never monthly/quarterly, so it does not vary with QRMP.
+                GstReturnApplicabilityRule(GstReturnType.GSTR9, GstReturnPeriodicity.ANNUALLY)
             )
             GstScheme.COMPOSITION -> listOf(
                 GstReturnApplicabilityRule(GstReturnType.CMP08, GstReturnPeriodicity.QUARTERLY),

@@ -75,7 +75,18 @@ fun ProfileWizardScreen(
     ) -> Unit,
     onPickLogo: () -> Unit,
     onPickSignature: () -> Unit,
-    onFinish: () -> Unit,
+    /** Audit fix - previously `() -> Unit`, so Finish only ever navigated back to [ProfileScreen]
+     * without ever creating a [com.example.accounting.domain.company.Company] (a brand-new install
+     * has none yet). [onSave] only ever writes the [BusinessProfile] record, a display/branding
+     * concept - it was never the thing that seeds a Company's standard Groups/default Ledgers, so
+     * completing every step of this wizard and tapping Finish silently left the app with zero
+     * ledgers and zero parties creatable ("Set up your business first."), no error shown anywhere.
+     * Carries the same fields [onSave] already collects so the caller can create-if-missing without
+     * racing [onSave]'s own async persistence. */
+    onFinish: (
+        businessName: String, legalName: String, address: String, pinCode: String,
+        city: String, state: String, phone: String, email: String, gstin: String, pan: String
+    ) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var step by remember { mutableStateOf(ProfileWizardStep.BUSINESS_INFO) }
@@ -309,7 +320,11 @@ fun ProfileWizardScreen(
                 modifier = Modifier.weight(1f),
                 onClick = {
                     saveProgress()
-                    if (step == ProfileWizardStep.REVIEW) onFinish() else step = ProfileWizardStep.entries[step.ordinal + 1]
+                    if (step == ProfileWizardStep.REVIEW) {
+                        onFinish(businessName, legalName, address, pinCode, city, state, phone, email, gstin, pan)
+                    } else {
+                        step = ProfileWizardStep.entries[step.ordinal + 1]
+                    }
                 }
             )
         }

@@ -7,17 +7,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -164,36 +166,39 @@ fun VoucherDetailDialog(
     var showAccountingEntries by remember(voucher.voucherId) { mutableStateOf(false) }
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        // Mobile Workflow Correction - Voucher Detail is a major workflow (view + edit metadata +
+        // delete + correct + preview + attachments), not a small confirmation, so it must read as a
+        // proper mobile screen rather than a card floating over a dimmed dashboard. Same full-bleed
+        // Dialog(usePlatformDefaultWidth = false) + fillMaxSize() Surface [QuickInvoiceEntryScreen]
+        // ("New Sale Invoice", the reference pattern) and [CreateVoucherDialog] already use - still a
+        // Dialog window mechanically, but now a real full screen visually, with a fixed top app bar
+        // (back/type/number/status/Edit) instead of that header scrolling away with the content.
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .padding(vertical = 16.dp)
+            modifier = Modifier.fillMaxSize()
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    // The line-items table below used to sit in a LazyColumn sized with
-                    // Modifier.weight(1f, fill = false) inside this non-scrolling Column - once the
-                    // narration/correction-link banner/attachments/buttons around it already filled
-                    // the dialog's bounded height (routine on a phone screen), Column's weight
-                    // distribution had zero space left to give the only weighted child, so the
-                    // table silently rendered zero rows even though voucher.items (and the Total
-                    // row's correct sum below it) were never empty. Scrolling the whole dialog
-                    // instead guarantees every section - including the table - always gets the
-                    // space it actually needs.
-                    .verticalScroll(rememberScrollState())
-            ) {
-                // Header
+            // Real-device QA finding (see QuickInvoiceEntryScreen's fuller note) - with
+            // decorFitsSystemWindows = false, a raw Dialog window's fillMaxSize() measures against
+            // the full edge-to-edge window, not the visible area between the status and navigation
+            // bars. systemBarsPadding() keeps the fixed Top App Bar below the status bar and an
+            // explicit 48dp floor (Android's own standard 3-button nav bar height) keeps the
+            // bottom-of-scroll "Close" button reachable on this OEM's 3-button nav (MIUI/HyperOS),
+            // where systemBarsPadding() alone measured ZERO bottom inset.
+            Column(modifier = Modifier.fillMaxSize().systemBarsPadding().padding(bottom = 48.dp)) {
+                // Top App Bar - fixed, never scrolls away, matching every other converted workflow
+                // screen's convention (back navigation always reachable).
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
@@ -264,22 +269,37 @@ fun VoucherDetailDialog(
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (onUpdateVoucherMetadata != null && !voucher.isCancelled && !isEditingMetadata) {
-                            IconButton(onClick = {
-                                editedNarration = voucher.narration
-                                editedReference = voucher.referenceNumber
-                                isEditingMetadata = true
-                            }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit narration/reference")
-                            }
-                        }
-                        IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                    // Trailing action - Edit only. Close/dismiss now lives solely in the Back arrow
+                    // above (Top App Bar convention), never a second redundant dismiss icon.
+                    if (onUpdateVoucherMetadata != null && !voucher.isCancelled && !isEditingMetadata) {
+                        IconButton(onClick = {
+                            editedNarration = voucher.narration
+                            editedReference = voucher.referenceNumber
+                            isEditingMetadata = true
+                        }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit narration/reference")
                         }
                     }
                 }
+                HorizontalDivider()
 
+                // Main Content - normal vertical scrolling, matching every other converted
+                // workflow screen. The line-items table below used to sit in a LazyColumn sized
+                // with Modifier.weight(1f, fill = false) inside a non-scrolling Column - once the
+                // narration/correction-link banner/attachments/buttons around it already filled the
+                // available height (routine on a phone screen), Column's weight distribution had
+                // zero space left to give the only weighted child, so the table silently rendered
+                // zero rows even though voucher.items (and the Total row's correct sum below it)
+                // were never empty. Scrolling this whole section instead guarantees every part -
+                // including the table - always gets the space it actually needs.
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                 Spacer(modifier = Modifier.height(14.dp))
 
                 if (isEditingMetadata) {
@@ -516,6 +536,7 @@ fun VoucherDetailDialog(
                             Text("Close")
                         }
                     }
+                }
                 }
             }
         }

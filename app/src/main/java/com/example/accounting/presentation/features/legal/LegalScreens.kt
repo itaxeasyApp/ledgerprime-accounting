@@ -96,7 +96,7 @@ fun PrivacyPolicyScreen() {
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         item { Text("Privacy Policy", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)) }
-        item { Text("Last updated: [date this is published]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("Last updated: September 11, 2026", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(privacyPolicySections) { section ->
             SectionCard(title = section.heading) {
                 Text(section.body, style = MaterialTheme.typography.bodyMedium)
@@ -112,7 +112,7 @@ fun TermsAndConditionsScreen() {
         verticalArrangement = Arrangement.spacedBy(Spacing.sm)
     ) {
         item { Text("Terms & Conditions", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)) }
-        item { Text("Last updated: [date this is published]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("Last updated: September 11, 2026", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(termsSections) { section ->
             SectionCard(title = section.heading) {
                 Text(section.body, style = MaterialTheme.typography.bodyMedium)
@@ -138,14 +138,19 @@ private val privacyPolicySections = listOf(
         "The app requests Internet and Network State access only, used for the optional Cloud Sync " +
             "feature and to check connectivity. It does not request Camera, Contacts, SMS, Location, " +
             "Storage, or Microphone permissions. Receipt photos for scanning use Android's Photo " +
-            "Picker, which does not grant the app broad access to your photo library."
+            "Picker, which does not grant the app broad access to your photo library. Phone/OTP " +
+            "login reads the one auto-fill SMS via Android's SMS Retriever API, which is " +
+            "permission-free by design - it never requests SEND_SMS or READ_SMS."
     ),
     LegalSection(
         "Third-party services",
-        "The app does not show ads and does not use third-party analytics or advertising SDKs. " +
-            "[If Firebase App Check/other Google services remain enabled at publish time, list them " +
-            "and what they're used for here - currently present in the project but not yet wired to " +
-            "any feature.]"
+        "The app does not show ads and does not use third-party advertising SDKs. It uses a small " +
+            "number of Google/Firebase services strictly to run its own features: Firebase " +
+            "Crashlytics (anonymous crash/error reports, to fix bugs), Google Play Services SMS " +
+            "Retriever (auto-fills the OTP login code, reads no other messages), and Google ML Kit " +
+            "Text Recognition (reads text from a receipt photo you choose entirely on your device - " +
+            "the image is never uploaded anywhere). None of these share your accounting data with " +
+            "advertisers or any other third party."
     ),
     LegalSection(
         "Data retention & deletion",

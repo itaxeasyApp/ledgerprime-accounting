@@ -29,14 +29,18 @@ import com.example.accounting.core.common.Money
  */
 @Composable
 fun SalesSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Sales", amount = amount, subtitle = "",
+    // "container width height are different... two are small" - StatCard skips the subtitle
+    // line entirely (no reserved height) when blank, so Sales/Purchases rendered visibly shorter
+    // than every other Business Snapshot card. "Tap to view" matches Cash/Bank's own wording -
+    // same kind of drill-down card - restoring the grid's uniform card height.
+    title = "Sales", amount = amount, subtitle = "Tap to view",
     icon = Icons.Default.ReceiptLong, iconTint = MaterialTheme.colorScheme.primary,
     modifier = modifier.clickable(onClick = onClick)
 )
 
 @Composable
 fun PurchaseSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Purchases", amount = amount, subtitle = "",
+    title = "Purchases", amount = amount, subtitle = "Tap to view",
     icon = Icons.Default.ShoppingCart, iconTint = MaterialTheme.colorScheme.primary,
     modifier = modifier.clickable(onClick = onClick)
 )
@@ -60,14 +64,14 @@ fun PaymentSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> 
  * previously never displayed anywhere (only the net `surplusOrDeficit` was shown). */
 @Composable
 fun IncomeSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Income", amount = amount, subtitle = "",
+    title = "Income", amount = amount, subtitle = "Tap to view",
     icon = Icons.Default.ArrowDownward, iconTint = MaterialTheme.colorScheme.secondary,
     modifier = modifier.clickable(onClick = onClick)
 )
 
 @Composable
 fun ExpenditureSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Expenditure", amount = amount, subtitle = "",
+    title = "Expenditure", amount = amount, subtitle = "Tap to view",
     icon = Icons.Default.ArrowUpward, iconTint = MaterialTheme.colorScheme.error,
     modifier = modifier.clickable(onClick = onClick)
 )

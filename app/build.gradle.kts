@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+  alias(libs.plugins.firebase.crashlytics)
 }
 
 android {
@@ -17,6 +18,9 @@ android {
     applicationId = "com.ledgerprime.app"
     minSdk = 24
     targetSdk = 36
+    // Week 3 (release engineering): confirmed intentional, not a leftover placeholder - this is
+    // genuinely the first Play Store submission. Bump both together for every release after this
+    // one (versionCode must strictly increase per upload; versionName is the user-facing string).
     versionCode = 1
     versionName = "1.0"
 
@@ -42,9 +46,16 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
+      // Crashlytics needs a real Firebase project (google-services.json, still not supplied - see
+      // Brand.kt/SplashScreen.kt's Phone Auth note) to upload native/JVM mapping symbols. Until
+      // then, leave upload off so a release build doesn't fail trying to reach Firebase.
+      configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+        mappingFileUploadEnabled = false
+      }
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
   }
@@ -116,6 +127,10 @@ dependencies {
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
   implementation(libs.firebase.appcheck.recaptcha)
+  // Week 3 (release engineering) - crash reporting. Wired now so it activates the moment a real
+  // google-services.json lands (same blocker as Phone Auth - see AppSignatureHelper.kt).
+  implementation(libs.firebase.crashlytics)
+  implementation(libs.firebase.analytics)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

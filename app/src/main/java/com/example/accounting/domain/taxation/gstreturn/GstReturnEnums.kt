@@ -29,7 +29,11 @@ enum class GstReturnType { GSTR1, GSTR3B, GSTR4, CMP08, GSTR9, GSTR9C }
  * month (Regular's default). For a REGULAR company this mirrors
  * [com.example.accounting.domain.company.Company.gstFilingFrequency]; COMPOSITION is always
  * QUARTERLY under GSTR-4. */
-enum class GstReturnPeriodicity { MONTHLY, QUARTERLY }
+enum class GstReturnPeriodicity {
+    MONTHLY, QUARTERLY,
+    /** Phase 8 - GSTR-9 only; statutorily always a full financial year, never monthly/quarterly. */
+    ANNUALLY
+}
 
 /** [com.example.accounting.domain.taxation.gst.GstFilingPeriod] already exists for compliance-period
  * *locking*; this is a distinct concern - how THIS return is being prepared/filed. */

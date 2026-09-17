@@ -1091,3 +1091,82 @@ code outside `presentation/`/`ui/theme/`, each a pure delegation or pure aggrega
   Subscription screen itself, a real OCR implementation, Fund Flow, CMA, live-camera QR/barcode
   scanning (item barcode *generation* was added; a dedicated scan-to-match screen was not), Excel
   import, GSTR/ITR filing, any change to a frozen engine.
+
+## Phase 7J - FREEZE (2026-09-11)
+
+Phase 7J UI (above) shipped without the independent audit this project requires before a phase is
+considered complete - real, substantial work continued on top of it across several sessions (an
+informal "Corrections" track: `docs/CORRECTIONS_README.md`/`docs/CORRECTIONS_LOG.md` - business
+identity display, single-navigation layout, contextual OCR entry points, a plain-Bill default
+voucher view, contacts import/favorites, and a 2026-09-09 "THIS APPLICATION IS NOT AN ERP"
+product-identity directive of 18 numbered sections) plus a large `a53870d` "Phase 7J audit"
+hardening commit (voucher soft-cancel, Groups Tree hierarchy rendering, OCR/import display fixes) -
+none of it threaded back into this changelog's own phase-freeze discipline until now. Reconciled in
+this session:
+
+- **Working-tree audit**: every file modified/untracked at reconciliation time was traced to its
+  origin. None belonged to Phase 7J or to the separately-already-committed GSTR-1/Phase 8A work
+  (`958a376` onward) - both were fully committed already. The uncommitted pile was entirely later,
+  unrelated "Week 1-3" Play Store-readiness work (release engineering, PDF/Excel/CSV export polish,
+  dashboard UI redesign, a Business-Setup-Wizard company-creation bug fix) - left untouched
+  throughout this reconciliation, per explicit instruction.
+- **First independent audit (fresh-context agent, no implementation history) - verdict NOT-YET.**
+  Tests and spot-checked 7J UI screens were solid, but two sections of the 2026-09-09 directive's
+  own execution plan - the only two touching financial correctness rather than cosmetics - were
+  confirmed still unexecuted, exactly as the log's own text had warned ("do not assume any of
+  section 1-18's fixes are already in place"):
+  - **Section 2 - voucher/invoice duplication audit.** Real, confirmed defect found on
+    investigation (not hypothetical): `AccountingRepository.postVoucher`'s `idempotencyKey`
+    defaulted to a fresh random UUID on every call, and most callers (`postVoucherDraft` included -
+    the same path OCR-sourced drafts post through) never overrode it, so `VoucherPostingEngine.post`'s
+    own idempotent-replay guard never actually triggered on a retry. Since each retry also rebuilt
+    its `JournalItemEntity` list with blank-then-fresh-UUID `itemId`s, `OnConflictStrategy.REPLACE`
+    on the voucher header masked nothing - a retried post (dialog dismissed and reopened mid-write,
+    not just a double-tap the UI's existing `isSubmitting` flags already caught) silently doubled the
+    real ledger-balance impact behind what still looked like one voucher row.
+  - **Section 9 - GST-mismatch UX audit.** `Gstr1Validator` already computed a real, specific
+    message per issue (exact GSTIN/ledger/voucher id and why it's wrong), but
+    `GstReturnDashboardScreen`'s `GstErrorDetailsScreen` discarded it in favor of a generic per-code
+    label - worst for a return-level issue (`voucherId == null`, e.g. a Composition-scheme company
+    that can't file GSTR-1 at all), which additionally got no "Fix Now" button, leaving the bare
+    label as the user's only information.
+- **Fixes** (confirmed defects only, no redesign, per explicit instruction): a new
+  `postVoucherMutex` (`kotlinx.coroutines.sync.Mutex`) now wraps `postVoucher`'s entire body,
+  serializing overlapping calls to the single authoritative posting path;
+  `AccountingViewModel.postVoucherDraft` now posts with a stable, draft-id-derived
+  `"DRAFT_${draftId}"` key instead of the previous keyless default - together closing both the
+  concurrent-retry and the sequential-retry-after-reopen cases for the draft/OCR path.
+  `GstErrorDetailsScreen` now renders `issue.message` beneath the existing code label for every
+  issue, per-voucher or return-level alike - no new navigation, no new screen. New regression tests:
+  `Phase2TestSuite.testPostVoucherAtomic_IdempotentReplay_WithFreshItemIds_DoesNotDuplicateJournalItemsOrLedgerEffect`
+  (same idempotencyKey, freshly-regenerated itemIds - the exact pre-fix failure mode - asserts
+  neither the ledger balance nor the journal-item count doubles) and
+  `Gstr1FoundationTestSuite.t29_Validator_CompositionScheme_MessageExplainsWhyNotJustTheCode`/
+  `t30_Validator_InvalidPlaceOfSupply_MessageNamesTheExactBadValueAndVoucher` (assert the validator's
+  messages are real, specific prose, not blank or code-only). Manual one-shot entry
+  (`postQuickVoucher` and similar) was deliberately left on its existing UI-level `isSubmitting`
+  guard only - it has no persisted draft/source id to derive a stable key from without inventing new
+  persisted state, which would be a redesign, not a fix; documented as an accepted, narrower residual
+  risk rather than silently left unmentioned.
+- **Second independent audit (fresh-context agent, no context from the fix work) - verdict FREEZE.**
+  Independently confirmed: the mutex wraps the true full critical section with no early-return
+  bypass and no re-entrancy/deadlock path (`postVoucher`'s only internal callers - recurring-voucher
+  and invoice posting - never call it from within itself); `postVoucherDraft` is genuinely the sole
+  production call site depending on the fixed default; both new duplication-audit assertions pass;
+  CSV/JSON import reconfirmed to create only Party/Ledger/StockItem, never a Voucher, so it was
+  correctly out of scope all along, not silently ignored. `Gstr1Validation.kt`'s messages
+  independently confirmed specific and non-generic; both new GST-message tests confirmed to pass and
+  to test what they claim. One minor, non-blocking residual both audits agree on: a GSTIN-type
+  error's new message explains *why* it's wrong but not explicitly *where* to fix it (the Party's own
+  ledger, not the voucher) - noted, not treated as a fresh blocker.
+- **Verification**: `testDebugUnitTest` - 751 tests, 5 failed (the same accepted baseline:
+  `ExampleRobolectricTest`, `GreetingScreenshotTest`, `Phase7FRecurringVoucherPostingTest`,
+  `Phase7JBVoucherPostingTest`, `SuspenseControlArchitectureTest`, all
+  `UnsupportedOperationException at DefaultSdkProvider.java:170` - a sandbox limitation, not a code
+  regression), zero new failures; 3 new tests included and passing. `assembleDebug`: BUILD
+  SUCCESSFUL. Live device verification was not possible this session (no device connected at
+  reconciliation time) - recorded honestly rather than skipped silently, matching this project's own
+  established disclosure convention for every prior UI-adjacent phase.
+- **Verdict: Phase 7J is COMPLETE and FROZEN.** No further Phase 7J code changes are in scope. The
+  GSTR-1/Phase 8A work already committed (`958a376` onward) was independently reconfirmed cleanly
+  separable from Phase 7J's own UI throughout this reconciliation and is unaffected.

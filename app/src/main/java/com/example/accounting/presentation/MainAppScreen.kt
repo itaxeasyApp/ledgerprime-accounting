@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -21,10 +23,10 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,6 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.Voucher
@@ -59,7 +62,6 @@ import com.example.accounting.presentation.components.CreateLedgerDialog
 import com.example.accounting.presentation.components.CreatePartyDialog
 import com.example.accounting.presentation.components.CreateStockItemDialog
 import com.example.accounting.presentation.components.CreateVoucherDialog
-import com.example.accounting.presentation.components.OcrReviewDialog
 import com.example.accounting.presentation.components.VoucherDetailDialog
 import com.example.accounting.presentation.features.dashboard.DashboardScreen
 import com.example.accounting.presentation.features.datatools.DataToolsScreen
@@ -187,6 +189,21 @@ fun MainAppScreen(
         }
     }
 
+    // Product Identity directive's "exact navigation to fix it" rule - a Sale/Purchase blocked
+    // because its party has no State (see AccountingViewModel's postTradingDocument/
+    // postAccountOnlyTradingDocument) opens that exact party's own ledger straight into the
+    // existing edit dialog, the same one the Chart of Accounts/Parties screens' pencil icon
+    // already opens - no new screen, just an additional way in triggered by the block itself.
+    LaunchedEffect(Unit) {
+        viewModel.gstBlockedLedgerFixTarget.collectLatest { ledger ->
+            if (ledger != null) {
+                editingLedger = ledger
+                isCreateLedgerOpen = true
+                viewModel.clearGstBlockedLedgerFixTarget()
+            }
+        }
+    }
+
     // Storage Access Framework picker for CSV/JSON import - zero new manifest entries needed.
     val openDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -230,6 +247,35 @@ fun MainAppScreen(
     val launchDocumentScan: (OcrDocumentType) -> Unit = { type ->
         pendingScanDocumentType = type
         documentPhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+    // Camera capture (user-supplied, Phase E) - a second image source alongside the gallery Photo
+    // Picker above, feeding the exact same scanDocument pipeline. TakePicture() needs a pre-created
+    // destination file/Uri (unlike PickVisualMedia, which hands back its own) - reuses the same
+    // FileProvider authority ShareAdapter/attachments already have registered; file_paths.xml's
+    // cache-path "." already covers this cacheDir file, so no new provider-paths entry is needed.
+    var pendingCameraCaptureFile by remember { mutableStateOf<File?>(null) }
+    val cameraCaptureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val file = pendingCameraCaptureFile
+        if (success && file != null) {
+            viewModel.scanDocument(file, pendingScanDocumentType)
+        }
+    }
+    val launchCameraCapture: (OcrDocumentType) -> Unit = { type ->
+        pendingScanDocumentType = type
+        val file = File(context.cacheDir, "camera_scan_${System.currentTimeMillis()}.jpg")
+        pendingCameraCaptureFile = file
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, com.example.accounting.data.rendering.ShareAdapter.FILE_PROVIDER_AUTHORITY, file)
+        cameraCaptureLauncher.launch(uri)
+    }
+    // Dashboard OCR workflow (user-supplied correction, real navigation destinations - see
+    // AppRoute.OcrScan/OcrResult) - once a scan finishes and lastOcrExtraction becomes non-null,
+    // auto-advance to the shared OcrResult screen regardless of which entry point (Dashboard or
+    // one of the contextual Sales/Purchases/Profile/Money pickers) started it - one reusable review
+    // step, never a duplicate per entry point.
+    androidx.compose.runtime.LaunchedEffect(uiState.lastOcrExtraction) {
+        if (uiState.lastOcrExtraction != null && uiState.currentRoute !is AppRoute.OcrResult) {
+            viewModel.navigateTo(AppRoute.OcrResult)
+        }
     }
 
     // Phase 7J UI fix: Android Photo Picker for barcode/QR scans - `scanBarcodeImage` already
@@ -372,69 +418,100 @@ fun MainAppScreen(
                 // bar on every device/screen size - phone or tablet - never a NavigationRail. A
                 // width-based rail switch was tried and explicitly rejected by the user (it read
                 // as "the bottom bar moved to the side" on a tablet, not as good tablet support).
-                Column {
-                    // NavigationBar reserves its own bottom system-nav-bar inset (correct,
-                    // needed on gesture-nav devices) - on a 3-button-nav device that reserved
-                    // strip has no visual boundary from the tappable row above it, so the whole
-                    // bottom area reads as one abnormally tall block ("bottom bar too high").
-                    // This divider marks where the actual nav bar ends.
-                    AppDivider()
-                    if (uiState.currentRoute is AppRoute.GstDashboard) {
-                        // The GST Dashboard's own bottom nav (matches the reference image),
-                        // swapped in for the main app's Home/Sales/Purchase/Money/Reports bar
-                        // only while this route is active - see AppRoute.GstDashboard's KDoc.
-                        NavigationBar {
-                            NavigationBarItem(
-                                selected = uiState.gstActiveBottomTab == "Dashboard",
-                                onClick = { viewModel.requestGstBottomNav("Dashboard") },
-                                icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
-                                label = { Text("Dashboard", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                            )
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = { viewModel.viewReport("Sales Register") },
-                                icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Invoices") },
-                                label = { Text("Invoices", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                            )
-                            NavigationBarItem(
-                                selected = uiState.gstActiveBottomTab == "Returns",
-                                onClick = { viewModel.requestGstBottomNav("Returns") },
-                                icon = { Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = "Returns") },
-                                label = { Text("Returns", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                            )
-                            NavigationBarItem(
-                                selected = false,
-                                onClick = { viewModel.navigateTo(AppRoute.Reports) },
-                                icon = { Icon(Icons.Default.Assessment, contentDescription = "Reports") },
-                                label = { Text("Reports", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                            )
-                            NavigationBarItem(
-                                selected = uiState.gstActiveBottomTab == "More",
-                                onClick = { viewModel.requestGstBottomNav("More") },
-                                icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
-                                label = { Text("More", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
-                            )
-                        }
-                    } else {
-                        NavigationBar {
-                            navItems.forEach { item ->
+                //
+                // OCR workflow correction - the main Home/Sales/Purchase/Money/Reports bar is
+                // hidden entirely while inside the OcrScan/OcrResult full-screen workflow (real
+                // navigation destinations, not a Dialog) and reappears automatically on Back/Save,
+                // same as it already does for every other route - no navigation-state bookkeeping
+                // needed beyond just not rendering this Column at all while either route is active.
+                if (uiState.currentRoute !is AppRoute.OcrScan && uiState.currentRoute !is AppRoute.OcrResult) {
+                    Column {
+                        // NavigationBar reserves its own bottom system-nav-bar inset (correct,
+                        // needed on gesture-nav devices) - on a 3-button-nav device that reserved
+                        // strip has no visual boundary from the tappable row above it, so the whole
+                        // bottom area reads as one abnormally tall block ("bottom bar too high").
+                        // This divider marks where the actual nav bar ends.
+                        AppDivider()
+                        if (uiState.currentRoute is AppRoute.GstDashboard) {
+                            // The GST Dashboard's own bottom nav (matches the reference image),
+                            // swapped in for the main app's Home/Sales/Purchase/Money/Reports bar
+                            // only while this route is active - see AppRoute.GstDashboard's KDoc.
+                            NavigationBar {
                                 NavigationBarItem(
-                                    selected = uiState.selectedTab == item.tab,
-                                    onClick = { viewModel.selectTab(item.tab) },
-                                    icon = { Icon(item.icon, contentDescription = item.label) },
-                                    label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
-                                    modifier = Modifier.testTag(item.tag)
+                                    selected = uiState.gstActiveBottomTab == "Dashboard",
+                                    onClick = { viewModel.requestGstBottomNav("Dashboard") },
+                                    icon = { Icon(Icons.Default.Dashboard, contentDescription = "Dashboard") },
+                                    label = { Text("Dashboard", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
                                 )
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = { viewModel.viewReport("Sales Register") },
+                                    icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Invoices") },
+                                    label = { Text("Invoices", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = uiState.gstActiveBottomTab == "Returns",
+                                    onClick = { viewModel.requestGstBottomNav("Returns") },
+                                    icon = { Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = "Returns") },
+                                    label = { Text("Returns", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = false,
+                                    onClick = { viewModel.navigateTo(AppRoute.Reports) },
+                                    icon = { Icon(Icons.Default.Assessment, contentDescription = "Reports") },
+                                    label = { Text("Reports", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                                NavigationBarItem(
+                                    selected = uiState.gstActiveBottomTab == "More",
+                                    onClick = { viewModel.requestGstBottomNav("More") },
+                                    icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
+                                    label = { Text("More", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) }
+                                )
+                            }
+                        } else {
+                            NavigationBar {
+                                navItems.forEach { item ->
+                                    NavigationBarItem(
+                                        selected = uiState.selectedTab == item.tab,
+                                        onClick = { viewModel.selectTab(item.tab) },
+                                        icon = { Icon(item.icon, contentDescription = item.label) },
+                                        label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
+                                        modifier = Modifier.testTag(item.tag)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             },
-            // The generic center-bottom-bar scan FAB was retired entirely
-            // (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) - every scan type
-            // now has a contextual entry point on the screen it belongs to (Sales/Purchases/
-            // Profile/Money), so there is nothing left for a generic popup to offer.
-            snackbarHost = { SnackbarHost(snackbarHostState) }
+            // Bottom-nav OCR button (user-supplied reference design, explicit re-add) - the
+            // generic center-bottom-bar scan FAB was retired once before
+            // (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) in favor of
+            // contextual per-screen entry points; those stay exactly as they are - this is an
+            // additional, explicitly requested global entry point, not a replacement. Scaffold's
+            // own floatingActionButton/floatingActionButtonPosition slots (rather than a manually
+            // offset Box inside the bottomBar lambda) are what correctly let this button visually
+            // float above/overlap the NavigationBar without being clipped by the bottomBar's own
+            // layout bounds. Hidden on the GST Dashboard route, which has its own distinct bottom
+            // bar with no equivalent button in the reference design.
+            floatingActionButton = {
+                if (uiState.currentRoute !is AppRoute.GstDashboard &&
+                    uiState.currentRoute !is AppRoute.OcrScan &&
+                    uiState.currentRoute !is AppRoute.OcrResult
+                ) {
+                    androidx.compose.material3.FloatingActionButton(
+                        onClick = { viewModel.navigateTo(AppRoute.OcrScan) },
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.offset(y = 28.dp).size(52.dp)
+                    ) {
+                        Icon(Icons.Default.DocumentScanner, contentDescription = "Scan (OCR)")
+                    }
+                }
+            },
+            floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
+            snackbarHost = { com.example.accounting.presentation.components.StandardToastHost(snackbarHostState) }
         ) { paddingValues ->
             Row(
                 modifier = Modifier
@@ -552,6 +629,7 @@ fun MainAppScreen(
                             onViewTrialBalance = { viewModel.viewReport("Trial Balance") },
                             onViewBalanceSheet = { viewModel.viewReport("Balance Sheet") },
                             onViewCashFlow = { viewModel.viewReport("Cash Flow") },
+                            onOpenLedgers = { viewModel.navigateTo(AppRoute.ChartOfAccounts) },
                             onOpenCash = { viewModel.navigateTo(AppRoute.Money) },
                             onOpenBank = { viewModel.navigateTo(AppRoute.Money) },
                             onOpenSales = { viewModel.navigateTo(AppRoute.Sales) },
@@ -560,6 +638,49 @@ fun MainAppScreen(
                             onAddSupplier = { createPartyRole = PartyRole.SUPPLIER },
                             onAddItem = { isCreateStockItemOpen = true }
                         )
+
+                        // Dashboard OCR workflow (user-supplied correction) - real navigation
+                        // destinations, not a Dialog. OcrScan's own onSelectType calls straight
+                        // into launchDocumentScan, the exact same trigger every contextual scan
+                        // entry point (Sales/Purchases/Profile/Money) already uses - no new scan
+                        // pipeline. OcrResult is the one shared review/edit screen every entry
+                        // point (not just Dashboard's) lands on once extraction completes.
+                        is AppRoute.OcrScan -> com.example.accounting.presentation.features.ocr.OcrScanScreen(
+                            onPickFromGallery = { type -> launchDocumentScan(type) },
+                            onCapturePhoto = { type -> launchCameraCapture(type) }
+                        )
+
+                        is AppRoute.OcrResult -> {
+                            val extraction = uiState.lastOcrExtraction
+                            if (extraction == null) {
+                                // Reached with no extraction to show (e.g. Back navigated here
+                                // after the draft was already applied/cleared) - bounce back rather
+                                // than render a blank screen.
+                                LaunchedEffect(Unit) { viewModel.navigateBack() }
+                            } else {
+                                com.example.accounting.presentation.features.ocr.OcrResultScreen(
+                                    extraction = extraction,
+                                    sourceImagePath = uiState.lastOcrSourceImagePath,
+                                    onImageEdited = { newPath -> viewModel.updateOcrSourceImagePath(newPath) },
+                                    onApplyOcrProfileDraft = { name, pan ->
+                                        viewModel.applyOcrProfileDraft(name, pan)
+                                        viewModel.navigateBack()
+                                    },
+                                    onApplyOcrBusinessProfileDraft = { businessName, gstin ->
+                                        viewModel.applyOcrBusinessProfileDraft(businessName, gstin)
+                                        viewModel.navigateBack()
+                                    },
+                                    onOpenOcrPendingReviews = {
+                                        viewModel.clearOcrExtraction()
+                                        viewModel.navigateTo(AppRoute.Money)
+                                    },
+                                    onDismiss = {
+                                        viewModel.clearOcrExtraction()
+                                        viewModel.navigateBack()
+                                    }
+                                )
+                            }
+                        }
 
                         is AppRoute.DayBook -> DayBookScreen(
                             uiState = uiState,
@@ -650,7 +771,8 @@ fun MainAppScreen(
                             onRefreshReport = { viewModel.refreshFinancialReports() },
                             gstReturnActions = gstReturnActions,
                             deepLinkReportKey = uiState.reportsDeepLink,
-                            onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() }
+                            onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() },
+                            onVoucherClick = { selectedVoucherDetail = it }
                         )
 
                         is AppRoute.GstDashboard -> GstReturnDashboardView(
@@ -832,7 +954,37 @@ fun MainAppScreen(
                             },
                             onPickLogo = { logoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onPickSignature = { signaturePickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            onFinish = { viewModel.navigateTo(AppRoute.Profile) }
+                            // Audit fix - Finish previously only navigated back, never creating a
+                            // Company (see ProfileWizardScreen's onFinish doc comment). A brand-new
+                            // install has no Company yet, so this is the one real "first business"
+                            // creation path a new user actually takes (the prominent card on
+                            // Profile, not the buried "+ Add Company" under Company & Sync) - create
+                            // one now, from the exact data this wizard just collected, the same way
+                            // CreateCompanyDialog already does below. Never runs again once a
+                            // Company exists (re-finishing the wizard to update branding must not
+                            // spawn a second Company).
+                            onFinish = { businessName, legalName, address, pinCode, city, state, phone, email, gstin, pan ->
+                                if (uiState.currentCompany == null) {
+                                    val stateCode = gstin.take(2).takeIf { it.length == 2 && it.all(Char::isDigit) }
+                                        ?: com.example.accounting.core.common.Constants.stateCodeForName(state)
+                                        ?: ""
+                                    viewModel.createCompany(
+                                        name = businessName,
+                                        tradeName = legalName.ifBlank { businessName },
+                                        gstin = gstin,
+                                        pan = pan,
+                                        stateCode = stateCode,
+                                        address = address,
+                                        email = email,
+                                        phone = phone,
+                                        pinCode = pinCode,
+                                        // Already in the wizard - don't let createCompany's own
+                                        // post-creation redirect send us straight back into it.
+                                        andEnterWizard = false
+                                    )
+                                }
+                                viewModel.navigateTo(AppRoute.Profile)
+                            }
                         )
 
                         is AppRoute.Subscription -> SubscriptionScreen(
@@ -900,11 +1052,11 @@ fun MainAppScreen(
             onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode ->
                 viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode)
             },
-            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn ->
-                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn)
+            onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn, pricingMode, cessRate ->
+                viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn, pricingMode = pricingMode, cessRatePercent = cessRate)
             },
-            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn ->
-                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn)
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn, pricingMode, cessRate ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn, pricingMode = pricingMode, cessRatePercent = cessRate)
             }
         )
     } else if (isCreateVoucherOpen) {
@@ -1093,16 +1245,6 @@ fun MainAppScreen(
             },
             title = { Text(item?.name?.let { "Barcode - $it" } ?: "Barcode") },
             text = { com.example.accounting.presentation.components.GeneratedBarcodeContent(generation.payload.rawValue) }
-        )
-    }
-
-    uiState.lastOcrExtraction?.let { extraction ->
-        OcrReviewDialog(
-            extraction = extraction,
-            onApplyOcrProfileDraft = { name, pan -> viewModel.applyOcrProfileDraft(name, pan) },
-            onApplyOcrBusinessProfileDraft = { businessName, gstin -> viewModel.applyOcrBusinessProfileDraft(businessName, gstin) },
-            onOpenOcrPendingReviews = { viewModel.clearOcrExtraction(); viewModel.navigateTo(AppRoute.Money) },
-            onDismiss = { viewModel.clearOcrExtraction() }
         )
     }
 

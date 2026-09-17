@@ -43,6 +43,14 @@ sealed class AppRoute(val path: String, val title: String) {
     object DataTools : AppRoute("#data-tools", "Import & Scan")
     data class Search(val query: String = "") : AppRoute("#search/$query", "Search")
 
+    // Dashboard OCR workflow (user-supplied correction) - real navigation destinations, never a
+    // Dialog/popup for this major workflow. OcrScan is the document/scan-type picker (reached from
+    // the Dashboard's OCR button); OcrResult is the single shared review/edit step every scan entry
+    // point across the app (Dashboard, Sales, Purchases, Profile, Money) lands on once extraction
+    // completes - one reusable screen, never a duplicate per entry point.
+    object OcrScan : AppRoute("#ocr-scan", "Scan Document")
+    object OcrResult : AppRoute("#ocr-result", "Scan Result")
+
     // Legal + Support drawer (Play Store readiness) - reached only from the new nav Drawer, never
     // a bottom-nav tab, matching every other secondary route's own convention.
     object About : AppRoute("#about", "About")
@@ -67,6 +75,8 @@ sealed class AppRoute(val path: String, val title: String) {
                 hash == "#profile-wizard" -> ProfileWizard
                 hash == "#subscription" -> Subscription
                 hash == "#data-tools" -> DataTools
+                hash == "#ocr-scan" -> OcrScan
+                hash == "#ocr-result" -> OcrResult
                 hash == "#about" -> About
                 hash == "#privacy-policy" -> PrivacyPolicy
                 hash == "#terms" -> TermsAndConditions

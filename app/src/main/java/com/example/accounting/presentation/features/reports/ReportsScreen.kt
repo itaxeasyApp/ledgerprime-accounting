@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Receipt
@@ -303,24 +302,22 @@ fun TrialBalanceView(report: TrialBalanceReport?) {
     }
 }
 
-/** Always-visible Balanced/Out-of-Balance status strip - Total Debit, Total Credit and the exact
- * Difference are shown regardless of outcome (never only surfaced on failure), so a bookkeeper can
- * see at a glance both that the books balance AND the actual figures behind that fact. */
+/** Out-of-Balance alert strip - shown ONLY when the Trial Balance genuinely fails to balance, so
+ * a real data-integrity problem (Debit != Credit) stays visible with its exact Difference. The
+ * "Balanced" success badge that used to render here unconditionally was removed (Week 3 UI
+ * cleanup) - a Trial Balance's own Debit/Credit Total row already shows the matching figures, so a
+ * separate "Balanced" label added no information, only visual noise, on the overwhelmingly common
+ * balanced case. */
 @Composable
 private fun TrialBalanceStatusStrip(report: TrialBalanceReport) {
-    val (bg, fg, label) = if (report.isBalanced) {
-        Triple(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, "Balanced")
-    } else {
-        Triple(MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer, "Out of Balance")
-    }
+    if (report.isBalanced) return
+    val bg = MaterialTheme.colorScheme.errorContainer
+    val fg = MaterialTheme.colorScheme.onErrorContainer
     Surface(shape = RoundedCornerShape(10.dp), color = bg, modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = if (report.isBalanced) Icons.Default.CheckCircle else Icons.Default.Warning,
-                    contentDescription = null, tint = fg, modifier = Modifier.size(18.dp)
-                )
-                Text(label, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = fg, modifier = Modifier.weight(1f).padding(start = 6.dp))
+                Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+                Text("Out of Balance", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = fg, modifier = Modifier.weight(1f).padding(start = 6.dp))
             }
             Spacer(modifier = Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -328,13 +325,11 @@ private fun TrialBalanceStatusStrip(report: TrialBalanceReport) {
                 Column { Text("Total Credit", style = MaterialTheme.typography.labelSmall, color = fg); Text(report.totalClosingCredit.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace), color = fg) }
                 Column { Text("Difference", style = MaterialTheme.typography.labelSmall, color = fg); Text(report.difference.formatPlain(), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace), color = fg) }
             }
-            if (!report.isBalanced) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "Review recent entries - this most often means an opening balance was entered on one side only.",
-                    style = MaterialTheme.typography.bodySmall, color = fg
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Review recent entries - this most often means an opening balance was entered on one side only.",
+                style = MaterialTheme.typography.bodySmall, color = fg
+            )
         }
     }
 }

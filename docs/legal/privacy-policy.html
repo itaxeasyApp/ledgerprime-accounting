@@ -1,0 +1,227 @@
+<title>LedgerPrime Legal</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --ground: #FAF9F6;
+    --surface: #FFFFFF;
+    --surface-tint: #EDE9FE;
+    --text: #1F1B24;
+    --text-muted: #4A4453;
+    --border: #DDD5E8;
+    --accent: #4C1D95;
+    --accent-light: #7C3AED;
+    --focus: #7C3AED;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #16121C;
+      --surface: #221D2B;
+      --surface-tint: #2E1F4D;
+      --text: #F1EEF7;
+      --text-muted: #C4BBD4;
+      --border: #3A3247;
+      --accent: #B7A2F0;
+      --accent-light: #9F7AEA;
+      --focus: #B7A2F0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #16121C;
+    --surface: #221D2B;
+    --surface-tint: #2E1F4D;
+    --text: #F1EEF7;
+    --text-muted: #C4BBD4;
+    --border: #3A3247;
+    --accent: #B7A2F0;
+    --accent-light: #9F7AEA;
+    --focus: #B7A2F0;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+
+  header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .mark {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(155deg, var(--accent-light), var(--accent));
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px;
+    flex-shrink: 0;
+  }
+  .brandname { font-family: 'Fraunces', serif; font-weight: 600; font-size: 20px; letter-spacing: 0.01em; }
+  .tagline { font-size: 13px; color: var(--text-muted); margin: 2px 0 0 48px; }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: clamp(28px, 6vw, 38px);
+    text-wrap: balance;
+    margin: 36px 0 4px;
+  }
+  .updated { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
+
+  nav.tabs {
+    display: flex; gap: 4px; border-bottom: 1px solid var(--border);
+    margin-bottom: 32px; position: sticky; top: 0; background: var(--ground);
+    padding-top: 8px; z-index: 2;
+  }
+  nav.tabs button {
+    font: inherit; font-size: 14px; font-weight: 500; color: var(--text-muted);
+    background: none; border: none; border-bottom: 2px solid transparent;
+    padding: 10px 4px; margin-right: 20px; cursor: pointer;
+  }
+  nav.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+
+  section.doc { display: none; }
+  section.doc.active { display: block; }
+
+  article.section { padding: 22px 0; border-top: 1px solid var(--border); }
+  article.section:first-of-type { border-top: none; padding-top: 0; }
+  article.section h2 {
+    font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; margin: 0 0 8px;
+  }
+  article.section p { margin: 0; color: var(--text); max-width: 62ch; }
+  article.section .num {
+    display: inline-block; font-variant-numeric: tabular-nums; font-size: 12px;
+    color: var(--accent); font-weight: 600; letter-spacing: 0.04em; margin-bottom: 6px;
+  }
+
+  .callout {
+    background: var(--surface-tint); border-radius: 12px; padding: 16px 18px;
+    font-size: 14px; color: var(--text); margin: 28px 0;
+  }
+  .callout b { color: var(--accent); }
+
+  footer {
+    margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
+    font-size: 13px; color: var(--text-muted);
+  }
+  footer .pub { color: var(--text); font-weight: 500; margin-bottom: 2px; }
+  footer .contact { margin-top: 10px; }
+  footer .contact a { font-weight: 500; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="mark">L</div>
+    <div>
+      <div class="brandname">LedgerPrime</div>
+    </div>
+  </header>
+  <p class="tagline">Smart Accounting, Simplified</p>
+
+  <h1>Legal</h1>
+  <p class="updated">Last updated: September 11, 2026</p>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-target="privacy" id="tab-privacy">Privacy Policy</button>
+    <button role="tab" aria-selected="false" data-target="terms" id="tab-terms">Terms &amp; Conditions</button>
+  </nav>
+
+  <section class="doc active" id="privacy" role="tabpanel" aria-labelledby="tab-privacy">
+    <article class="section">
+      <span class="num">01</span>
+      <h2>What we collect</h2>
+      <p>LedgerPrime is offline-first: the accounting data you enter (companies, ledgers, vouchers, customers/suppliers, GST figures) is stored locally on your device using an encrypted local database. We do not collect this data ourselves unless you explicitly turn on Cloud Sync, in which case it is sent to our sync server solely so your own devices can stay in sync &mdash; it is never sold, shared with advertisers, or used for any purpose other than providing the app's own features to you.</p>
+    </article>
+    <article class="section">
+      <span class="num">02</span>
+      <h2>Permissions</h2>
+      <p>The app requests Internet and Network State access only, used for the optional Cloud Sync feature and to check connectivity. It does not request Camera, Contacts, SMS, Location, Storage, or Microphone permissions. Receipt photos for scanning use Android's Photo Picker, which does not grant the app broad access to your photo library. Phone/OTP login reads the one auto-fill SMS via Android's SMS Retriever API, which is permission-free by design &mdash; it never requests SEND_SMS or READ_SMS.</p>
+    </article>
+    <article class="section">
+      <span class="num">03</span>
+      <h2>Third-party services</h2>
+      <p>The app does not show ads and does not use third-party advertising SDKs. It uses a small number of Google/Firebase services strictly to run its own features: Firebase Crashlytics (anonymous crash/error reports, to fix bugs), Google Play Services SMS Retriever (auto-fills the OTP login code, reads no other messages), and Google ML Kit Text Recognition (reads text from a receipt photo you choose entirely on your device &mdash; the image is never uploaded anywhere). None of these share your accounting data with advertisers or any other third party.</p>
+    </article>
+    <article class="section">
+      <span class="num">04</span>
+      <h2>Data retention &amp; deletion</h2>
+      <p>Your data stays on your device until you delete it yourself, or (if Cloud Sync is enabled) until you request deletion by contacting us at info@itaxeasy.com.</p>
+    </article>
+    <article class="section">
+      <span class="num">05</span>
+      <h2>Children's privacy</h2>
+      <p>This app is a business accounting tool and is not directed at children. We do not knowingly collect data from children.</p>
+    </article>
+    <article class="section">
+      <span class="num">06</span>
+      <h2>Changes to this policy</h2>
+      <p>If this policy changes, the updated version will be published here with a new "Last updated" date.</p>
+    </article>
+    <article class="section">
+      <span class="num">07</span>
+      <h2>Contact</h2>
+      <p>Questions about this policy or your data: info@itaxeasy.com or +91 9425113371. Published by Itax Easy Pvt Ltd, G 41, Gandhi Nagar, Padav, Gwalior, Madhya Pradesh, India 474002.</p>
+    </article>
+  </section>
+
+  <section class="doc" id="terms" role="tabpanel" aria-labelledby="tab-terms">
+    <article class="section">
+      <span class="num">01</span>
+      <h2>Acceptance</h2>
+      <p>By using LedgerPrime, you agree to these terms. If you don't agree, please don't use the app.</p>
+    </article>
+    <article class="section">
+      <span class="num">02</span>
+      <h2>What the app does &mdash; and doesn't do</h2>
+      <p>LedgerPrime helps you record and organize your own business's accounting and GST data, and prepare GST return figures/JSON files. It does not file GST returns, ITR, or any other return with any government authority on your behalf &mdash; GSTR JSON files it produces must be uploaded by you (or your tax professional) directly on the official GST portal. It is a record-keeping and preparation tool, not a substitute for professional tax/legal advice.</p>
+    </article>
+    <article class="section">
+      <span class="num">03</span>
+      <h2>Your responsibility</h2>
+      <p>You are responsible for the accuracy of the data you enter and for meeting your own statutory filing obligations and deadlines. Itax Easy Pvt Ltd is not liable for penalties, interest, or losses arising from incorrect data entry, missed filings, or reliance on the app in place of professional advice.</p>
+    </article>
+    <article class="section">
+      <span class="num">04</span>
+      <h2>Your data</h2>
+      <p>Your accounting data belongs to you. See the Privacy Policy for how it is stored and, if you opt into Cloud Sync, how it is synced.</p>
+    </article>
+    <article class="section">
+      <span class="num">05</span>
+      <h2>Changes</h2>
+      <p>We may update these terms as the app evolves; continued use after an update means you accept the revised terms.</p>
+    </article>
+    <article class="section">
+      <span class="num">06</span>
+      <h2>Contact</h2>
+      <p>info@itaxeasy.com or +91 9425113371.</p>
+    </article>
+  </section>
+
+  <div class="callout">
+    <b>Note for reviewers:</b> LedgerPrime is offline-first &mdash; all bookkeeping data is stored locally on-device by default. Cloud Sync, SMS auto-fill for OTP login, and receipt-scan text recognition are opt-in features described above.
+  </div>
+
+  <footer>
+    <div class="pub">Itax Easy Pvt Ltd</div>
+    <div>G 41, Gandhi Nagar, Padav, Gwalior, Madhya Pradesh, India 474002</div>
+    <div class="contact"><a href="mailto:info@itaxeasy.com">info@itaxeasy.com</a> &nbsp;&middot;&nbsp; +91 9425113371</div>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var buttons = document.querySelectorAll('nav.tabs button');
+    var panels = { privacy: document.getElementById('privacy'), terms: document.getElementById('terms') };
+    function select(target) {
+      buttons.forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.target === target)); });
+      Object.keys(panels).forEach(function (k) { panels[k].classList.toggle('active', k === target); });
+      try { history.replaceState(null, '', '#' + target); } catch (e) {}
+    }
+    buttons.forEach(function (b) { b.addEventListener('click', function () { select(b.dataset.target); }); });
+    var hash = (location.hash || '').replace('#', '');
+    if (hash === 'terms') select('terms');
+  })();
+</script>

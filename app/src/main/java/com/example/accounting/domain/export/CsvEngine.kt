@@ -1,6 +1,9 @@
 package com.example.accounting.domain.export
 
 import com.example.accounting.domain.taxation.gstreturn.Gstr1ReturnData
+import com.example.accounting.domain.taxation.gstreturn.Gstr3bReturnData
+import com.example.accounting.domain.taxation.gstreturn.Gstr3bTaxSummary
+import com.example.accounting.domain.taxation.gstreturn.Gstr9ReturnData
 
 /**
  * A generic, report/DTO-agnostic CSV engine (Phase 7E, Section 8/9) - distinct from and never
@@ -16,6 +19,11 @@ object CsvEngine {
      * `toCsvRow()`/`toCsvRows()` extension, never hand-rolled string concatenation. */
     fun write(headers: List<String>, rows: List<List<String?>>): String {
         val sb = StringBuilder()
+        // Week 2 (Play Store update plan, "pdf excel csv in a proper professional manner") - same
+        // UTF-8 BOM fix as domain.rendering.CsvExporter, same reasoning: these exports carry
+        // Unicode ledger/party names (this file's own doc comment: "Handles ... Unicode") and are
+        // routinely opened directly in Excel, not just machine-reimported.
+        sb.append(0xFEFF.toChar())
         sb.append(headers.joinToString(",") { field(it) }).append("\r\n")
         for (row in rows) {
             sb.append(row.joinToString(",") { field(it) }).append("\r\n")
@@ -250,6 +258,81 @@ fun Gstr1ReturnData.toCsvRows(): List<List<String?>> {
             "DOC_ISSUED", row.natureOfDocument, row.seriesFrom, null, row.seriesTo, null, null, null,
             null, null, null, null, null, null, null, "${row.totalCount}/${row.cancelledCount}/${row.netIssued}"
         )
+    }
+    return rows
+}
+
+/**
+ * Phase 8 - GSTR-3B's own flat, one-row-per-statutory-line CSV shape, same "section" discriminator
+ * convention as [Gstr1ReturnData.toCsvHeaders] - a summary return has far fewer rows (no per-invoice
+ * detail), so this is a much shorter table than GSTR-1's own.
+ */
+fun Gstr3bReturnData.toCsvHeaders(): List<String> = listOf(
+    "section", "posStateCode", "taxableValuePaise", "igstPaise", "cgstPaise", "sgstPaise", "cessPaise"
+)
+
+fun Gstr3bReturnData.toCsvRows(): List<List<String?>> {
+    val rows = mutableListOf<List<String?>>()
+    fun row(section: String, s: Gstr3bTaxSummary, pos: String? = null) {
+        rows += listOf(section, pos, s.taxableValue.paise.toString(), s.igst.paise.toString(), s.cgst.paise.toString(), s.sgst.paise.toString(), s.cess.paise.toString())
+    }
+    row("3.1(a) TAXABLE_OUTWARD", outward.taxableOutward)
+    row("3.1(b) ZERO_RATED_OUTWARD", outward.zeroRatedOutward)
+    row("3.1(c) NIL_EXEMPT_OUTWARD", outward.nilExemptOutward)
+    row("3.1(d) REVERSE_CHARGE_INWARD", outward.reverseChargeInward)
+    rows += listOf("3.1(e) NON_GST_OUTWARD", null, outward.nonGstOutward.paise.toString(), null, null, null, null)
+    interStateUnregistered.forEach { r ->
+        rows += listOf("3.2 INTER_STATE_UNREGISTERED", r.posStateCode, r.taxableValue.paise.toString(), r.igst.paise.toString(), null, null, null)
+    }
+    row("4A ITC_INWARD_RCM", itc.available.inwardReverseCharge)
+    row("4A ITC_ALL_OTHER", itc.available.allOtherItc)
+    row("4B ITC_REVERSED", itc.reversedItc)
+    row("4C NET_ITC", itc.netItc)
+    row("4D ITC_INELIGIBLE", itc.ineligibleItc)
+    rows += listOf("5 EXEMPT_INWARD_FROM_COMPOSITION", null, exemptInward.fromComposition.paise.toString(), null, null, null, null)
+    rows += listOf("5 EXEMPT_INWARD_FROM_OTHERS", null, exemptInward.fromOthers.paise.toString(), null, null, null, null)
+    val cash = estimatedCashLiability
+    rows += listOf("6.1 ESTIMATED_CASH_LIABILITY", null, null, cash.igst.paise.toString(), cash.cgst.paise.toString(), cash.sgst.paise.toString(), cash.cess.paise.toString())
+    return rows
+}
+
+/**
+ * Phase 8 - GSTR-9's own flat CSV shape, same "section" discriminator convention. HSN summaries
+ * (Table 17/18) reuse the same columns as the tax-summary rows - "hsnSacCode" doubles as the row
+ * label there, matching this file's existing "irrelevant columns simply blank" precedent.
+ */
+fun Gstr9ReturnData.toCsvHeaders(): List<String> = listOf(
+    "section", "label", "hsnSacCode", "gstRatePercent", "taxableValuePaise", "igstPaise", "cgstPaise", "sgstPaise", "cessPaise"
+)
+
+fun Gstr9ReturnData.toCsvRows(): List<List<String?>> {
+    val rows = mutableListOf<List<String?>>()
+    fun row(section: String, label: String, s: com.example.accounting.domain.taxation.gstreturn.Gstr3bTaxSummary) {
+        rows += listOf(section, label, null, null, s.taxableValue.paise.toString(), s.igst.paise.toString(), s.cgst.paise.toString(), s.sgst.paise.toString(), s.cess.paise.toString())
+    }
+    row("4 OUTWARD", "B2C", outward.b2c)
+    row("4 OUTWARD", "B2B", outward.b2b)
+    rows += listOf("4 OUTWARD", "ZERO_RATED_EXPORTS", null, null, outward.zeroRatedExports.paise.toString(), null, null, null, null)
+    row("4 OUTWARD", "INWARD_REVERSE_CHARGE", outward.inwardReverseCharge)
+    row("4 OUTWARD", "CREDIT_NOTES_ISSUED", outward.creditNotesIssued)
+    row("4 OUTWARD", "SUBTOTAL", outward.subtotal)
+    row("4 OUTWARD", "NET_TAX_PAYABLE", outward.netTaxPayable)
+    rows += listOf("5 EXEMPT_OUTWARD", "ZERO_RATED_WITHOUT_TAX", null, null, exemptOutward.zeroRatedWithoutTax.paise.toString(), null, null, null, null)
+    rows += listOf("5 EXEMPT_OUTWARD", "NIL_RATED", null, null, exemptOutward.nilRated.paise.toString(), null, null, null, null)
+    rows += listOf("5 EXEMPT_OUTWARD", "EXEMPTED", null, null, exemptOutward.exempted.paise.toString(), null, null, null, null)
+    row("6 ITC", "TOTAL_ITC_AVAILED", itc.totalItcAvailed)
+    row("6 ITC", "ITC_ON_INWARD_REVERSE_CHARGE", itc.itcOnInwardReverseCharge)
+    taxPaid.forEach { r ->
+        rows += listOf("9 TAX_PAID", r.head, null, null, null, null, null, null, null)
+        rows += listOf("9 TAX_PAID", "${r.head}_PAYABLE", null, null, r.taxPayable.paise.toString(), null, null, null, null)
+        rows += listOf("9 TAX_PAID", "${r.head}_PAID_THROUGH_ITC", null, null, r.paidThroughItc.paise.toString(), null, null, null, null)
+        rows += listOf("9 TAX_PAID", "${r.head}_PAID_IN_CASH", null, null, r.paidInCash.paise.toString(), null, null, null, null)
+    }
+    hsnOutward.forEach { h ->
+        rows += listOf("17 HSN_OUTWARD", null, h.hsnSacCode, h.gstRatePercent.toString(), h.taxableValue.paise.toString(), h.igst.paise.toString(), h.cgst.paise.toString(), h.sgst.paise.toString(), h.cess.paise.toString())
+    }
+    hsnInward.forEach { h ->
+        rows += listOf("18 HSN_INWARD", null, h.hsnSacCode, h.gstRatePercent.toString(), h.taxableValue.paise.toString(), h.igst.paise.toString(), h.cgst.paise.toString(), h.sgst.paise.toString(), h.cess.paise.toString())
     }
     return rows
 }

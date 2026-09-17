@@ -202,6 +202,56 @@ class Phase2TestSuite {
         assertEquals(1, dao.getOutboxItemsByCompany(companyId, 100).count { it.idempotencyKey == "IK-REPLAY" })
     }
 
+    /**
+     * Phase 7J audit, Section 2 (duplicate-posting risk) - regression test for the real, confirmed
+     * defect the audit found: [AccountingRepository.postVoucher] built a fresh, blank-then-
+     * auto-generated `itemId` for every [JournalItemEntity] on every call (`postVoucherDraft`/
+     * `postQuickVoucher` both did this), so `OnConflictStrategy.REPLACE` on the *voucher header*
+     * never caught a retried post - the second attempt's journal lines had brand-new primary keys
+     * and were inserted as pure additions alongside the first attempt's, doubling the actual ledger
+     * balance impact even though the voucher header row itself looked unchanged (only one row,
+     * silently REPLACEd). The fix that matters is entirely on the caller side (a stable,
+     * draft-id-derived `idempotencyKey` instead of the previous fresh-random-UUID-per-call default -
+     * see `AccountingViewModel.postVoucherDraft`) - this test proves the *mechanism* that fix relies
+     * on: [VoucherPostingEngine.post]'s idempotent-replay guard (item 0 above) short-circuits before
+     * ever reaching journal-item insertion, so a stable key alone is sufficient protection
+     * regardless of whether the retried call's item objects are the exact same instances or freshly
+     * rebuilt with different itemIds - exactly what a real retry from a dismissed-and-reopened
+     * screen looks like.
+     */
+    @Test
+    fun testPostVoucherAtomic_IdempotentReplay_WithFreshItemIds_DoesNotDuplicateJournalItemsOrLedgerEffect() = runBlocking {
+        val dao = FakeAccountingDao()
+        dao.insertLedger(ledger("LED_CASH", 500_000L, DrCr.DEBIT))
+        dao.insertLedger(ledger("LED_RENT", 0L, DrCr.DEBIT))
+
+        val voucherId = "VCH_P2_021"
+        val voucher = voucherEntity(voucherId, "PMT-2026-0021", VoucherType.PAYMENT, 150_000L)
+
+        // First attempt - real itemIds.
+        VoucherPostingEngine.post(
+            dao, voucher,
+            listOf(item(voucherId, "LED_RENT", DrCr.DEBIT, 150_000L, 1), item(voucherId, "LED_CASH", DrCr.CREDIT, 150_000L, 2)),
+            "IK-REPLAY-FRESH-ITEMS", "TESTER"
+        )
+        val cashAfterFirst = dao.getLedgerById(companyId, "LED_CASH")!!.currentBalancePaise
+        val itemCountAfterFirst = dao.getJournalItemsForVoucherSync(voucherId).size
+
+        // Simulate exactly what a caller that rebuilds its JournalItem list from scratch on retry
+        // produced pre-fix: same idempotencyKey (this is the fix), but brand-new itemIds (this is
+        // what made the old, keyless-default behavior double the ledger effect).
+        VoucherPostingEngine.post(
+            dao, voucher,
+            listOf(item(voucherId, "LED_RENT", DrCr.DEBIT, 150_000L, 1), item(voucherId, "LED_CASH", DrCr.CREDIT, 150_000L, 2)),
+            "IK-REPLAY-FRESH-ITEMS", "TESTER"
+        )
+        val cashAfterReplay = dao.getLedgerById(companyId, "LED_CASH")!!.currentBalancePaise
+        val itemCountAfterReplay = dao.getJournalItemsForVoucherSync(voucherId).size
+
+        assertEquals("Ledger balance must not double even when the retry rebuilds its items with fresh ids", cashAfterFirst, cashAfterReplay)
+        assertEquals("Journal item rows must not double on a same-idempotencyKey retry with fresh itemIds", itemCountAfterFirst, itemCountAfterReplay)
+    }
+
     // ==========================================
     // 4. CANCELLATION - AUDITABLE SOFT-CANCEL (Step 3 live-device fix: a hard-delete here silently
     // let a cancelled voucher's number be reissued to a different real transaction - reproduced on

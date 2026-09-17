@@ -83,8 +83,28 @@ documented-extension-point pattern as Cash Flow's Investing/Financing Activities
 Store publishing requirements, a UI rule (no Toast, use the existing Snackbar pattern), and a
 requirement that inventory features be gated by the existing `AccountingMode` (found unconditional
 today on both the Android UI and Python API) are all recorded as forward-looking notes, not
-implemented. Not yet independently audited or frozen. Actual Phase 7J UI screens remain gated
-behind that audit, same as every prior phase.
+implemented.
+
+**Phase 7J - COMPLETE + FROZEN (2026-09-11).** The 7J UI installment (Business Cockpit Dashboard,
+Sales/Purchases/Money/Reports Center/Profile/Subscription/Data Tools/Search - see
+`docs/30_CHANGELOG.md`'s "Phase 7J UI" entry) sat unaudited for several sessions while a separate,
+informal "Corrections" effort (`docs/CORRECTIONS_LOG.md`/`CORRECTIONS_README.md`) hardened it -
+business identity display, navigation layout, OCR entry points, a plain-Bill default voucher view,
+and a 2026-09-09 "not an ERP" product-identity directive. Two independent, fresh-context audits ran
+against that combined state: the first (verdict NOT-YET) found the directive's own Section 2
+(voucher/invoice duplication risk across create/OCR/import/retry paths) and Section 9 (GST-mismatch
+UX - what/why/how-to-fix) still open, unexecuted despite the log itself warning not to assume they
+were done. Both were then closed as real, confirmed-defect fixes (not a redesign): `AccountingRepository.postVoucher`
+now serializes through a `postVoucherMutex`, and `postVoucherDraft` now posts with a stable,
+draft-id-derived idempotency key instead of a fresh-random-UUID-per-call default - closing a real
+gap where a retried post (dialog dismissed and reopened mid-write, not just a double-tap) could
+silently double the ledger balance impact behind what looked like one, REPLACEd voucher row.
+`GstErrorDetailsScreen` now surfaces `Gstr1Validator`'s own specific per-issue message (exact
+GSTIN/ledger/voucher and why it's wrong) instead of discarding it for a generic per-code label -
+closing the gap where a return-level issue (no voucherId, e.g. Composition-scheme-can't-file-GSTR-1)
+showed no guidance at all. A second independent audit re-verified both fixes against the real code
+and a fresh test run and returned **verdict FREEZE** - see `docs/30_CHANGELOG.md`'s "Phase 7J -
+FREEZE" entry for the full evidence trail.
 
 Phase 8A, Part 1 & 2 - GSTR-1 Foundation: the real, statutorily-named GSTR-1 tables
 (`domain/taxation/gstreturn/Gstr1Models.kt`, `Gstr1ReturnBuilder.kt`, `Gstr1Validation.kt`,

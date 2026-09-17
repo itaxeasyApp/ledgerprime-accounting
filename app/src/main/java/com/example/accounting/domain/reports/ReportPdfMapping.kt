@@ -1,5 +1,6 @@
 package com.example.accounting.domain.reports
 
+import com.example.accounting.domain.rendering.PageBreakCarryForward
 import com.example.accounting.domain.rendering.TabularReportData
 
 /**
@@ -86,24 +87,67 @@ fun BalanceSheetReport.toPdfData(): TabularReportData = TabularReportData(
  * figures the on-screen [com.example.accounting.presentation.features.ledgers.LedgerStatementDetailView]
  * already shows. Empty (zero-transaction) ledgers produce a valid rows-less [TabularReportData] -
  * [TabularPdfRenderer] already renders "No data for this period." for that case, same as every
- * other report. */
-fun LedgerStatementReport.toPdfData(): TabularReportData = TabularReportData(
-    title = "Ledger Statement",
-    subtitle = "$ledgerName - Opening: ${openingBalance.formatPlain()} ${openingType.code}",
-    columnHeaders = listOf("Date", "Voucher No.", "Particulars", "Debit", "Credit", "Balance"),
-    rows = rows.map {
+ * other report.
+ *
+ * Week 3 (Ledger Report professional output) - [companyName]/[financialYearLabel] are passed in
+ * (not stored on [LedgerStatementReport] itself) since that model has neither field and adding
+ * them would mean re-plumbing every existing caller of [com.example.accounting.data.repository.AccountingRepository.generateLedgerStatement]
+ * for a print-only concern; both default to blank so an existing caller with no context to give
+ * still gets a valid PDF, just without that header line. Adds the Voucher Type column, an explicit
+ * Opening Balance row (debit/credit cells blank - it is a carried balance, not a transaction), and
+ * the per-row cumulative Debit/Credit totals [TabularPdfRenderer] needs to draw correct
+ * Carried-Over/Brought-Forward rows on a page break - plain running sums of each row's own
+ * already-known debit/credit amount, never a new calculation. */
+fun LedgerStatementReport.toPdfData(companyName: String = "", financialYearLabel: String = ""): TabularReportData {
+    val subtitleParts = listOfNotNull(
+        companyName.ifBlank { null },
+        financialYearLabel.ifBlank { null },
+        "Ledger: $ledgerName"
+    )
+    val openingRow = listOf("", "Opening Balance", "", "", "", "", "${openingBalance.formatPlain()} ${openingType.code}")
+    val transactionRows = rows.map {
         listOf(
-            it.date.toString(), it.voucherNumber, it.particulars,
+            it.date.toString(), it.particulars, it.voucherType.displayName, it.voucherNumber,
             it.debitAmount.formatPlain(), it.creditAmount.formatPlain(),
             "${it.runningBalance.formatPlain()} ${it.balanceType.code}"
         )
-    },
-    totalsRow = listOf(
-        "", "", "Closing Balance",
-        totalDebit.formatPlain(), totalCredit.formatPlain(),
-        "${closingBalance.formatPlain()} ${closingType.code}"
+    }
+    val allRows = listOf(openingRow) + transactionRows
+
+    var cumulativeDebitPaise = 0L
+    var cumulativeCreditPaise = 0L
+    val cumulativeDebit = mutableListOf<String>()
+    val cumulativeCredit = mutableListOf<String>()
+    cumulativeDebit += com.example.accounting.core.common.Money.ZERO.formatPlain() // opening row contributes nothing
+    cumulativeCredit += com.example.accounting.core.common.Money.ZERO.formatPlain()
+    rows.forEach {
+        cumulativeDebitPaise += it.debitAmount.paise
+        cumulativeCreditPaise += it.creditAmount.paise
+        cumulativeDebit += com.example.accounting.core.common.Money.fromPaise(cumulativeDebitPaise).formatPlain()
+        cumulativeCredit += com.example.accounting.core.common.Money.fromPaise(cumulativeCreditPaise).formatPlain()
+    }
+
+    return TabularReportData(
+        title = "Ledger Statement",
+        subtitle = subtitleParts.joinToString(" - "),
+        columnHeaders = listOf("Date", "Particulars", "Voucher Type", "Voucher No.", "Debit", "Credit", "Balance"),
+        rows = allRows,
+        totalsRow = listOf(
+            "", "Closing Balance", "", "",
+            totalDebit.formatPlain(), totalCredit.formatPlain(),
+            "${closingBalance.formatPlain()} ${closingType.code}"
+        ),
+        rightAlignColumnIndices = setOf(4, 5, 6),
+        pageBreakCarryForward = PageBreakCarryForward(
+            particularsColumnIndex = 1,
+            debitColumnIndex = 4,
+            creditColumnIndex = 5,
+            balanceColumnIndex = 6,
+            cumulativeDebitFormatted = cumulativeDebit,
+            cumulativeCreditFormatted = cumulativeCredit
+        )
     )
-)
+}
 
 fun DayBookReport.toPdfData(): TabularReportData = TabularReportData(
     title = "Day Book",

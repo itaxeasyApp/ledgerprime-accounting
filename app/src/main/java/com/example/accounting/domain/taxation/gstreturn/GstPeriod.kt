@@ -43,11 +43,17 @@ data class GstPeriod(
     val fyCode: String,
     val fyStartCalendarYear: Int,
     val quarter: GstQuarter,
-    val month: Int? = null
+    val month: Int? = null,
+    /** Phase 8 - GSTR-9 is statutorily an ANNUAL return, never monthly/quarterly, so it does not fit
+     * the (Quarter, optional Month) shape every prior return type used. Defaults `false` (zero
+     * behavior change for every pre-existing caller); [quarter]/[month] are still required by this
+     * class's shape but become inert placeholders when `true` - [dateRange]/[periodKey] both switch
+     * to the whole financial year instead. */
+    val isAnnual: Boolean = false
 ) {
     init {
         require(month == null || month in 1..12) { "month must be 1-12 or null, was $month" }
-        require(month == null || month in quarter.months) {
+        require(isAnnual || month == null || month in quarter.months) {
             "month $month does not belong to quarter ${quarter.label} (${quarter.months})"
         }
     }
@@ -57,15 +63,20 @@ data class GstPeriod(
         get() = month?.let { if (it >= 4) fyStartCalendarYear else fyStartCalendarYear + 1 }
 
     val periodKey: String
-        get() = if (month != null) {
-            "$monthCalendarYear${month.toString().padStart(2, '0')}"
-        } else {
-            "$fyCode-${quarter.label}"
+        get() = when {
+            isAnnual -> fyCode
+            month != null -> "$monthCalendarYear${month.toString().padStart(2, '0')}"
+            else -> "$fyCode-${quarter.label}"
         }
 
     /** The real calendar date range this period covers, for `fromDate <= transactionDate <= toDate`
-     * filtering - never approximated from display labels. */
+     * filtering - never approximated from display labels. [isAnnual] spans the whole financial year
+     * (fixed Apr 1 - Mar 31, the same assumption [GstQuarter]'s own fixed month lists already make),
+     * regardless of [quarter]/[month]'s inert placeholder values. */
     fun dateRange(): ClosedRange<LocalDate> {
+        if (isAnnual) {
+            return LocalDate.of(fyStartCalendarYear, 4, 1)..LocalDate.of(fyStartCalendarYear + 1, 3, 31)
+        }
         val months = month?.let { listOf(it) } ?: quarter.months
         val first = months.first()
         val last = months.last()
@@ -79,7 +90,7 @@ data class GstPeriod(
     companion object {
         /** Resolves the calendar year a [FinancialYear] starts in directly from its real
          * [FinancialYear.startDate] - never parsed back out of the display [FinancialYear.fyCode]. */
-        fun of(fy: FinancialYear, quarter: GstQuarter, month: Int? = null): GstPeriod =
-            GstPeriod(fy.financialYearId, fy.fyCode, fy.startDate.year, quarter, month)
+        fun of(fy: FinancialYear, quarter: GstQuarter, month: Int? = null, isAnnual: Boolean = false): GstPeriod =
+            GstPeriod(fy.financialYearId, fy.fyCode, fy.startDate.year, quarter, month, isAnnual)
     }
 }

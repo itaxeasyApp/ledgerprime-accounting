@@ -278,7 +278,7 @@ private fun formatFileSize(bytes: Long): String = when {
  * (OCR/document scanning consuming the same durable source asset) - deliberately not built further
  * than this single bounded-decode utility in this slice.
  */
-private fun decodeBoundedBitmap(path: String, maxDimensionPx: Int): Bitmap? {
+internal fun decodeBoundedBitmap(path: String, maxDimensionPx: Int): Bitmap? {
     return try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(path, bounds)

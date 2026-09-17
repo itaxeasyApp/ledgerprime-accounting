@@ -61,6 +61,14 @@ internal data class LineFormState(
      * like a real invoice's Discount column. Blank/0 is byte-identical to before this field
      * existed. See [com.example.accounting.domain.trading.TradingLineInput.discountPercent]. */
     val discountInput: String = "",
+    /** Sub-phase C (Phase 7J GST Integration) - per-line Cess rate %, same manual-entry shape as
+     * [discountInput] (no `StockItem.cessRatePercent` field exists to default this from - adding
+     * one would be a schema change, out of this sub-phase's "UI/data wiring only" scope). Blank/0
+     * is byte-identical to before this field existed. See
+     * [com.example.accounting.domain.trading.TradingLineInput.cessRatePercent], which already
+     * accepted a real rate end-to-end (calculation, posting, duty ledger) before this UI existed -
+     * only the input surface was missing. */
+    val cessRateInput: String = "",
     val supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
     /** Rule 31 (Purchase/RCM Foundation) - only meaningful on a Purchase line with
      * [supplyNature] == NORMAL; [VoucherLineItemCard] only offers the control in that case. */
@@ -125,6 +133,11 @@ internal fun TradingForm(
     onGstRateChange: (String) -> Unit = {},
     hsnSacInput: String = "",
     onHsnSacChange: (String) -> Unit = {},
+    /** Sub-phase C (Phase 7J GST Integration) - Account-Only's manual CESS rate, same shape as
+     * [gstRateInput]/[hsnSacInput] above (no item to source it from). Blank/0 is byte-identical to
+     * before this field existed. */
+    cessRateInput: String = "",
+    onCessRateChange: (String) -> Unit = {},
     /** Centralized GST engine - whole-document GST Inclusive/Exclusive pricing (see
      * [GstPricingMode]). Defaults to EXCLUSIVE, byte-identical to every Sale/Purchase before this
      * toggle existed. Applied identically here (live preview) and in
@@ -172,14 +185,53 @@ internal fun TradingForm(
     }
 
     val selectedPartyLedger = ledgersMap[partyLedgerId]
+
+    // Phase 7J GST Integration, Sub-phase A - the selected party's real GST identity, inline,
+    // never a popup/Toast/separate screen. Derived from the ledger's own real gstin field the
+    // exact same way CreatePartyDialog now derives it (GSTIN present -> Registered, blank ->
+    // Unregistered - never a stored/stale third "Unknown" state), so this can never disagree with
+    // what CreatePartyDialog itself would show for the same party. Display only - does not gate
+    // posting (that stays exactly as it is today; only the Place of Supply check below does that).
+    if (selectedPartyLedger != null) {
+        val partyGstin = selectedPartyLedger.gstin.trim()
+        val partyIsRegistered = partyGstin.isNotBlank()
+        val partyGstinInvalid = partyIsRegistered && !GSTRules.isValidGSTIN(partyGstin)
+        Spacer(modifier = Modifier.height(8.dp))
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = if (partyGstinInvalid) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(10.dp)) {
+                Text(
+                    if (partyIsRegistered) "GST Registration: Registered" else "GST Registration: Unregistered",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = if (partyGstinInvalid) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (partyIsRegistered) {
+                    Text(
+                        if (partyGstinInvalid) {
+                            "GSTIN: $partyGstin - not a valid GSTIN, fix it on this ${if (isSale) "customer" else "supplier"}'s ledger"
+                        } else {
+                            "GSTIN: $partyGstin"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (partyGstinInvalid) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
     // Rule 29 (Place of Supply): never silently guess a tax split when the party has no state on
     // file - warn here, and the per-line GST preview below skips the breakdown entirely rather than
     // showing a number computed against a fallback. Posting itself is also blocked for this same
-    // reason (see AccountingViewModel.postTradingDocument / AccountingRepository.postGstOnlySale).
-    // D1a: an ACCOUNT_ONLY posting never computes GST, so Place of Supply is irrelevant to it -
-    // showing this banner ("...before this can be posted") would be misleading since posting is
-    // never actually blocked on it for this company mode.
-    val placeOfSupplyMissing = isInventoryEnabled && partyLedgerId.isNotBlank() && selectedPartyLedger?.stateCode.isNullOrBlank()
+    // reason (see AccountingViewModel.postTradingDocument / postAccountOnlyTradingDocument - both
+    // gate on the exact same condition this mirrors: item mode always, Account-Only only once GST
+    // actually applies (gstApplicable && a non-zero rate is selected) - an Account-Only posting
+    // with No GST selected never computes tax, so Place of Supply is genuinely irrelevant to it).
+    val placeOfSupplyMissing = partyLedgerId.isNotBlank() && selectedPartyLedger?.stateCode.isNullOrBlank() &&
+        (isInventoryEnabled || (gstApplicable && (gstRateInput.toDoubleOrNull() ?: 0.0) > 0.0))
     if (placeOfSupplyMissing) {
         Spacer(modifier = Modifier.height(8.dp))
         Surface(
@@ -245,6 +297,8 @@ internal fun TradingForm(
         )
         if (gstApplicable) {
             Spacer(modifier = Modifier.height(10.dp))
+            GstPricingModeRow(pricingMode = pricingMode, onPricingModeChange = onPricingModeChange)
+            Spacer(modifier = Modifier.height(10.dp))
             Text("GST Rate", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
             Spacer(modifier = Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -257,7 +311,8 @@ internal fun TradingForm(
                     )
                 }
             }
-            if ((gstRateInput.toDoubleOrNull() ?: 0.0) > 0.0) {
+            val accountOnlyGstRate = gstRateInput.toDoubleOrNull() ?: 0.0
+            if (accountOnlyGstRate > 0.0) {
                 Spacer(modifier = Modifier.height(10.dp))
                 OutlinedTextField(
                     value = hsnSacInput,
@@ -265,26 +320,62 @@ internal fun TradingForm(
                     label = { Text("HSN/SAC Code (Optional)") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                // Sub-phase C (Phase 7J GST Integration) - same manual-rate shape as the item-mode
+                // per-line CESS field (no StockItem/account-only equivalent classification exists
+                // to default this from), same "on top of GST, not backed out of Inclusive" rule.
+                Spacer(modifier = Modifier.height(10.dp))
+                val cessRateInputTrimmed = cessRateInput.trim()
+                val accountOnlyCessRateInvalid = cessRateInputTrimmed.isNotBlank() &&
+                    (cessRateInputTrimmed.toDoubleOrNull() == null || cessRateInputTrimmed.toDouble() < 0.0)
+                OutlinedTextField(
+                    value = cessRateInput,
+                    onValueChange = onCessRateChange,
+                    label = { Text("CESS % (Optional, over and above GST)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = accountOnlyCessRateInvalid,
+                    supportingText = if (accountOnlyCessRateInvalid) { { Text("Enter a valid CESS rate (0 or more)") } } else null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Sub-phase B (Phase 7J GST Integration) - same GstCalculationEngine call the
+                // item-mode preview below makes (calculateDetailed), same Inclusive/Exclusive
+                // backout GSTRules.extractTaxableFromInclusive already provides - never a second
+                // tax formula. Skipped while placeOfSupplyMissing, same rule as item mode: never
+                // show a split computed against a guessed Place of Supply.
+                if (!placeOfSupplyMissing && selectedPartyLedger != null) {
+                    val rawAmount = Money.parse(amountInput.ifBlank { "0" })
+                    if (rawAmount.isPositive) {
+                        val accountOnlyTaxable = if (pricingMode == GstPricingMode.INCLUSIVE) {
+                            GSTRules.extractTaxableFromInclusive(rawAmount, accountOnlyGstRate)
+                        } else {
+                            rawAmount
+                        }
+                        val accountOnlyCessRate = (cessRateInputTrimmed.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+                        val accountOnlyBreakdown = GstCalculationEngine.calculateDetailed(
+                            GstTransactionFacts(
+                                taxableAmount = accountOnlyTaxable,
+                                gstRatePercent = accountOnlyGstRate,
+                                supplierStateCode = companyStateCode,
+                                placeOfSupply = selectedPartyLedger.stateCode,
+                                supplyNature = GstSupplyNature.NORMAL,
+                                cessRatePercent = accountOnlyCessRate
+                            )
+                        )
+                        TradingTotalsSummary(
+                            taxable = accountOnlyBreakdown.taxableAmount,
+                            cgst = accountOnlyBreakdown.cgstAmount,
+                            sgst = accountOnlyBreakdown.sgstAmount,
+                            igst = accountOnlyBreakdown.igstAmount,
+                            cess = accountOnlyBreakdown.cessAmount
+                        )
+                    }
+                }
             }
         }
         return
     }
 
     Spacer(modifier = Modifier.height(10.dp))
-    Text("GST Pricing", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
-    Spacer(modifier = Modifier.height(4.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        androidx.compose.material3.FilterChip(
-            selected = pricingMode == GstPricingMode.EXCLUSIVE,
-            onClick = { onPricingModeChange(GstPricingMode.EXCLUSIVE) },
-            label = { Text("Exclusive of GST", fontSize = 12.sp) }
-        )
-        androidx.compose.material3.FilterChip(
-            selected = pricingMode == GstPricingMode.INCLUSIVE,
-            onClick = { onPricingModeChange(GstPricingMode.INCLUSIVE) },
-            label = { Text("Inclusive of GST", fontSize = 12.sp) }
-        )
-    }
+    GstPricingModeRow(pricingMode = pricingMode, onPricingModeChange = onPricingModeChange)
 
     Spacer(modifier = Modifier.height(12.dp))
     Row(
@@ -314,6 +405,7 @@ internal fun TradingForm(
     var runningCgst = Money.ZERO
     var runningSgst = Money.ZERO
     var runningIgst = Money.ZERO
+    var runningCess = Money.ZERO
 
     lines.forEachIndexed { index, line ->
         val item = itemsMap[line.itemId]
@@ -329,6 +421,14 @@ internal fun TradingForm(
         } else {
             netLineAmount
         }
+        // Sub-phase C (Phase 7J GST Integration) - Cess is computed on the same already-extracted
+        // taxable value as GST (GstCalculationEngine.calculateDetailed's own cess formula), never
+        // backed out of the Inclusive amount a second way - TradingWorkflowEngine.lineAmounts
+        // follows this exact same order (extract taxable from GST rate only, then Cess on that).
+        val cessRateInput = line.cessRateInput.trim()
+        val cessRateInvalid = cessRateInput.isNotBlank() && (cessRateInput.toDoubleOrNull() == null || cessRateInput.toDouble() < 0.0)
+        val cessRatePercent = (cessRateInput.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+        var lineCessAmount = Money.ZERO
 
         if (item != null && !placeOfSupplyMissing) {
             // UI-06: mirrors exactly what TradingWorkflowEngine.build() will compute at posting
@@ -342,13 +442,16 @@ internal fun TradingForm(
                     gstRatePercent = item.gstRatePercent,
                     supplierStateCode = companyStateCode,
                     placeOfSupply = selectedPartyLedger?.stateCode ?: "",
-                    supplyNature = line.supplyNature
+                    supplyNature = line.supplyNature,
+                    cessRatePercent = cessRatePercent
                 )
             )
             runningTaxable += breakdown.taxableAmount
             runningCgst += breakdown.cgstAmount
             runningSgst += breakdown.sgstAmount
             runningIgst += breakdown.igstAmount
+            runningCess += breakdown.cessAmount
+            lineCessAmount = breakdown.cessAmount
         }
 
         VoucherLineItemCard(
@@ -357,6 +460,8 @@ internal fun TradingForm(
             item = item,
             lineTaxable = lineTaxable,
             discountPercent = discountPercent,
+            cessAmount = lineCessAmount,
+            cessRateInvalid = cessRateInvalid,
             stockItems = stockItems,
             canRemove = lines.size > 1,
             onLineChange = { updated -> onLinesChange(lines.toMutableList().also { it[index] = updated }) },
@@ -369,7 +474,30 @@ internal fun TradingForm(
             taxable = runningTaxable,
             cgst = runningCgst,
             sgst = runningSgst,
-            igst = runningIgst
+            igst = runningIgst,
+            cess = runningCess
+        )
+    }
+}
+
+/** GST Inclusive/Exclusive pricing choice - Sub-phase B (Phase 7J GST Integration) extracted this
+ * out of [TradingForm]'s item-mode-only body unchanged (same two `FilterChip`s, same labels) so
+ * the identical markup can also be shown from the Account-Only branch above, without copy-pasting
+ * the `Text`/`Row`/`FilterChip` block a second time. */
+@Composable
+private fun GstPricingModeRow(pricingMode: GstPricingMode, onPricingModeChange: (GstPricingMode) -> Unit) {
+    Text("GST Pricing", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+    Spacer(modifier = Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        androidx.compose.material3.FilterChip(
+            selected = pricingMode == GstPricingMode.EXCLUSIVE,
+            onClick = { onPricingModeChange(GstPricingMode.EXCLUSIVE) },
+            label = { Text("Exclusive of GST", fontSize = 12.sp) }
+        )
+        androidx.compose.material3.FilterChip(
+            selected = pricingMode == GstPricingMode.INCLUSIVE,
+            onClick = { onPricingModeChange(GstPricingMode.INCLUSIVE) },
+            label = { Text("Inclusive of GST", fontSize = 12.sp) }
         )
     }
 }
@@ -383,6 +511,11 @@ private fun VoucherLineItemCard(
     item: StockItem?,
     lineTaxable: Money,
     discountPercent: Double = 0.0,
+    /** Sub-phase C (Phase 7J GST Integration) - the same parsed/validated rate [TradingForm]
+     * already computed for this line's GST breakdown, passed down purely for display (never
+     * re-parsed here) so the card's own summary text can never disagree with the running totals. */
+    cessAmount: Money = Money.ZERO,
+    cessRateInvalid: Boolean = false,
     stockItems: List<StockItem>,
     canRemove: Boolean,
     onLineChange: (LineFormState) -> Unit,
@@ -477,14 +610,32 @@ private fun VoucherLineItemCard(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                // Sub-phase C (Phase 7J GST Integration) - Cess only ever applies on a Taxable
+                // (NORMAL) line, same rule GST itself already follows here (no tax on Zero Rated/
+                // Exempt/Nil Rated) - "when applicable" from a line with no per-item Cess
+                // classification (no StockItem.cessRatePercent field exists) means a manual rate,
+                // shown only where it could ever mean something.
+                if (line.supplyNature == GstSupplyNature.NORMAL) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = line.cessRateInput,
+                        onValueChange = { onLineChange(line.copy(cessRateInput = it)) },
+                        label = { Text("CESS %${if (item.gstRatePercent <= 0.0) " (Optional)" else " (Optional, over and above GST)"}") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = cessRateInvalid,
+                        supportingText = if (cessRateInvalid) { { Text("Enter a valid CESS rate (0 or more)") } } else null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 val discountSuffix = if (discountPercent > 0.0) " (after ${discountPercent.let { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }}% discount)" else ""
+                val cessSuffix = if (cessAmount.isPositive) " + CESS ${cessAmount.formatPlain()}" else ""
                 Text(
                     text = if (line.supplyNature == GstSupplyNature.NORMAL) {
                         if (line.chargeType == GstChargeType.REVERSE_CHARGE) {
-                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}% (Reverse Charge - self-assessed, not billed by supplier) - HSN ${item.hsnCode.ifBlank { "-" }}"
+                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}%$cessSuffix (Reverse Charge - self-assessed, not billed by supplier) - HSN ${item.hsnCode.ifBlank { "-" }}"
                         } else {
-                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}% - HSN ${item.hsnCode.ifBlank { "-" }}"
+                            "Amount ${lineTaxable.formatPlain()}$discountSuffix - GST ${item.gstRatePercent}%$cessSuffix - HSN ${item.hsnCode.ifBlank { "-" }}"
                         }
                     } else {
                         "Amount ${lineTaxable.formatPlain()}$discountSuffix - ${item.gstRatePercent}% GST (${line.supplyNature.displayLabel} - no tax charged) - HSN ${item.hsnCode.ifBlank { "-" }}"
@@ -505,8 +656,11 @@ private fun VoucherLineItemCard(
  * this is no longer an approximation.
  */
 @Composable
-private fun TradingTotalsSummary(taxable: Money, cgst: Money, sgst: Money, igst: Money) {
-    val totalTax = cgst + sgst + igst
+private fun TradingTotalsSummary(taxable: Money, cgst: Money, sgst: Money, igst: Money, cess: Money = Money.ZERO) {
+    // Sub-phase C (Phase 7J GST Integration) - Cess folds into Total GST/Round Off/Grand Total
+    // exactly as TradingWorkflowEngine's own rawTotal already does (taxableTotal + cgstTotal +
+    // sgstTotal + igstTotal + cessTotal) - this preview can never disagree with what actually posts.
+    val totalTax = cgst + sgst + igst + cess
     val roundOff = RoundOffEngine.roundInvoiceTotal(taxable + totalTax)
     Spacer(modifier = Modifier.height(4.dp))
     Card(
@@ -535,6 +689,12 @@ private fun TradingTotalsSummary(taxable: Money, cgst: Money, sgst: Money, igst:
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("IGST:", style = MaterialTheme.typography.bodySmall)
                     Text(igst.formatPlain(), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            if (cess.isPositive) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("CESS:", style = MaterialTheme.typography.bodySmall)
+                    Text(cess.formatPlain(), style = MaterialTheme.typography.bodySmall)
                 }
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

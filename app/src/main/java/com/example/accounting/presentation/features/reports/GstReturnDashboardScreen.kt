@@ -570,7 +570,9 @@ private fun GstPeriodRow(
         GstDropdownField(
             label = "Filing Frequency",
             displayValue = if (frequency == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly",
-            options = GstReturnPeriodicity.entries,
+            // Phase 8 - GstReturnPeriodicity gained ANNUALLY (GSTR-9 only, never a real company-
+            // level filing-frequency choice) - .entries would otherwise offer it here too.
+            options = listOf(GstReturnPeriodicity.MONTHLY, GstReturnPeriodicity.QUARTERLY),
             optionLabel = { if (it == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly" },
             // Only stages the change - the caller (GstSettingsStep) confirms it behind the existing
             // "no live gst.gov.in connection" warning dialog before actually applying it, so this
@@ -772,13 +774,18 @@ private fun GstReturnDetailsStep(
     // CMP-08 (quarterly statement-cum-challan) and GSTR-4 (annual, but modeled quarterly-cadence
     // here alongside CMP-08 since this app doesn't yet model an annual periodicity) are never
     // filed against the company's own Regular-scheme Monthly/QRMP choice - that setting only ever
-    // applies to GSTR-1/GSTR-3B.
-    val periodicity = if (returnType == GstReturnType.GSTR4 || returnType == GstReturnType.CMP08) GstReturnPeriodicity.QUARTERLY else frequency
+    // applies to GSTR-1/GSTR-3B. Phase 8 - GSTR-9 is always ANNUALLY, never following either the
+    // company's own filing frequency or GSTR-4/CMP-08's quarterly cadence.
+    val periodicity = when (returnType) {
+        GstReturnType.GSTR9 -> GstReturnPeriodicity.ANNUALLY
+        GstReturnType.GSTR4, GstReturnType.CMP08 -> GstReturnPeriodicity.QUARTERLY
+        else -> frequency
+    }
     var quarter by remember { mutableStateOf(GstQuarter.ofMonth(LocalDate.now().monthValue)) }
     var month by remember { mutableStateOf<Int?>(if (periodicity == GstReturnPeriodicity.MONTHLY) LocalDate.now().monthValue else null) }
     var filingMode by remember { mutableStateOf(GstFilingMode.OFFLINE) }
     val fy = uiState.currentFinancialYear
-    val range = fy?.let { runCatching { com.example.accounting.domain.taxation.gstreturn.GstPeriod.of(it, quarter, month).dateRange() }.getOrNull() }
+    val range = fy?.let { runCatching { com.example.accounting.domain.taxation.gstreturn.GstPeriod.of(it, quarter, month, isAnnual = periodicity == GstReturnPeriodicity.ANNUALLY).dateRange() }.getOrNull() }
     var gstinVerifyMessage by remember { mutableStateOf<String?>(null) }
     var verifyingGstin by remember { mutableStateOf(false) }
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -826,21 +833,27 @@ private fun GstReturnDetailsStep(
                 }
             }
             item { SectionCard(title = "Financial Year") { Text(uiState.currentFinancialYear?.fyCode ?: "Not set", style = MaterialTheme.typography.bodyLarge) } }
-            item {
-                SectionCard(title = "Quarter") {
-                    ChoiceRow(GstQuarter.entries, quarter, { it.label }) { quarter = it; if (periodicity == GstReturnPeriodicity.MONTHLY) month = it.months.first() }
-                }
-            }
-            if (periodicity == GstReturnPeriodicity.MONTHLY) {
+            // Phase 8 - GSTR-9 is the whole financial year already selected above; a Quarter/Month
+            // picker would be meaningless (there is no partial-year GSTR-9), so it's skipped
+            // entirely for this one return type - the same "hide what doesn't apply" precedent
+            // MONTHLY vs QUARTERLY's own conditional Month picker right below already sets.
+            if (periodicity != GstReturnPeriodicity.ANNUALLY) {
                 item {
-                    SectionCard(title = "Return Period (Month)") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            quarter.months.chunked(3).forEach { row -> ChoiceRow(row, month, { monthLabel(it) }) { month = it } }
+                    SectionCard(title = "Quarter") {
+                        ChoiceRow(GstQuarter.entries, quarter, { it.label }) { quarter = it; if (periodicity == GstReturnPeriodicity.MONTHLY) month = it.months.first() }
+                    }
+                }
+                if (periodicity == GstReturnPeriodicity.MONTHLY) {
+                    item {
+                        SectionCard(title = "Return Period (Month)") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                quarter.months.chunked(3).forEach { row -> ChoiceRow(row, month, { monthLabel(it) }) { month = it } }
+                            }
                         }
                     }
                 }
             }
-            item { SectionCard(title = "Filing Frequency") { Text(if (periodicity == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly", style = MaterialTheme.typography.bodyLarge) } }
+            item { SectionCard(title = "Filing Frequency") { Text(if (periodicity == GstReturnPeriodicity.ANNUALLY) "Annually" else if (periodicity == GstReturnPeriodicity.QUARTERLY) "Quarterly" else "Monthly", style = MaterialTheme.typography.bodyLarge) } }
             item {
                 SectionCard(title = "Filing Mode") {
                     ChoiceRow(GstFilingMode.entries, filingMode, { it.name }) { filingMode = it }
@@ -1437,6 +1450,19 @@ private fun sectionLabel(key: String): String = when (key) {
     "ITC_RCM" -> "4A ITC (Reverse Charge)"
     "SUMMARY" -> "Return Summary"
     "TURNOVER_SUMMARY" -> "Turnover Summary"
+    // Phase 8 - GSTR-3B's real, statutorily-numbered sections (Gstr3bReturnBuilder).
+    "OUTWARD_3_1" -> "3.1 Outward Supplies & RCM Liability"
+    "INTER_STATE_UNREG_3_2" -> "3.2 Inter-State to Unregistered"
+    "ITC_4" -> "4 Eligible ITC"
+    "EXEMPT_INWARD_5" -> "5 Exempt/Nil/Non-GST Inward"
+    "ESTIMATED_CASH_LIABILITY_6_1" -> "6.1 Estimated Cash Liability"
+    // Phase 8 - GSTR-9's real, statutorily-numbered sections (Gstr9ReturnBuilder).
+    "OUTWARD_4" -> "4 Outward & Inward RCM Supplies"
+    "EXEMPT_OUTWARD_5" -> "5 Outward Supplies (Tax Not Payable)"
+    "ITC_6" -> "6 ITC Availed"
+    "TAX_PAID_9" -> "9 Tax Paid"
+    "HSN_OUTWARD_17" -> "17 HSN Summary (Outward)"
+    "HSN_INWARD_18" -> "18 HSN Summary (Inward)"
     else -> key
 }
 
@@ -1462,6 +1488,17 @@ private fun sectionDescription(key: String): String = when (key) {
     "ITC_RCM" -> "Input tax credit on reverse-charge purchases"
     "SUMMARY" -> "Aggregate turnover for this period"
     "TURNOVER_SUMMARY" -> "Aggregate turnover for this quarter - composition tax rate depends on business category, not yet computed here"
+    "OUTWARD_3_1" -> "Taxable/zero-rated/nil/exempt outward supplies and this company's own reverse-charge liability"
+    "INTER_STATE_UNREG_3_2" -> "Inter-state supplies to unregistered persons, by Place of Supply"
+    "ITC_4" -> "Input tax credit available, reversed, and net"
+    "EXEMPT_INWARD_5" -> "Exempt, Nil-rated and non-GST inward supplies"
+    "ESTIMATED_CASH_LIABILITY_6_1" -> "Preview of tax payable in cash after netting ITC (not a payment instruction)"
+    "OUTWARD_4" -> "Annual outward supplies and reverse-charge liability declared during the year"
+    "EXEMPT_OUTWARD_5" -> "Annual outward supplies on which tax is not payable"
+    "ITC_6" -> "Total input tax credit availed during the year"
+    "TAX_PAID_9" -> "Tax payable vs. paid through ITC and cash, by head"
+    "HSN_OUTWARD_17" -> "HSN/SAC-wise summary of outward supplies for the year"
+    "HSN_INWARD_18" -> "HSN/SAC-wise summary of inward supplies for the year"
     else -> "GST return section"
 }
 
@@ -2095,6 +2132,21 @@ private fun GstErrorDetailsScreen(sections: List<GstReturnSection>, vouchers: Li
                             Column(modifier = Modifier.padding(start = 8.dp).weight(1f)) {
                                 Text(voucherNumber?.let { "Invoice $it" } ?: "Return-level issue", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
                                 Text(gstErrorCodeLabel(issue.code), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // Phase 7J audit, Section 9 (GST-mismatch UX audit) - confirmed
+                                // defect: Gstr1Validator already computes a real, specific message
+                                // per issue (exact GSTIN/ledger/voucher, why it's wrong, what to
+                                // check - e.g. "Recipient GSTIN 'X' fails the GSTN check-digit
+                                // algorithm - verify it was entered correctly."), but this screen
+                                // discarded it entirely in favor of the generic per-CODE label
+                                // above ("Invalid GSTIN") with no elaboration - worst for a
+                                // return-level issue (voucherId == null: Composition-scheme-can't-
+                                // file-GSTR-1, undeclared-Nil-period, etc.), which additionally had
+                                // no "Fix Now" button at all, so the bare label was the user's
+                                // *only* information. Showing the real message closes both gaps
+                                // without adding any new navigation/screen.
+                                if (issue.message.isNotBlank()) {
+                                    Text(issue.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 2.dp))
+                                }
                             }
                             if (issue.voucherId != null) {
                                 ActionButton(text = "Fix Now", style = ActionButtonStyle.SECONDARY, onClick = { onFixNow(issue.voucherId) })
@@ -2198,23 +2250,45 @@ private fun GstReturnSummaryScreen(sections: List<GstReturnSection>, onBack: () 
  * display logic in this codebase, same as every other function in this file).
  */
 fun buildGstr1SummaryPdfData(gstReturn: GstReturn, sections: List<GstReturnSection>, companyName: String): TabularReportData {
+    // GSTR-1's sections (B2B/B2CL/B2CS/CDNR/...) are mutually exclusive by supply type, so summing
+    // every section's taxable/tax into one "Total" is correct there. GSTR-3B and GSTR-9 aren't laid
+    // out that way: e.g. GSTR-3B's "3.2 Inter-State to Unregistered" is a place-of-supply breakdown
+    // OF a subset of "3.1 Outward Supplies", not an additional amount, and "6.1 Estimated Cash
+    // Liability" is itself derived from 3.1 and 4 - summing all sections double- and triple-counts
+    // the same rupees. [primaryTotalsSectionKey] restricts the totals row to the one section that
+    // already holds the true period total for that return type; GSTR-1 (null) keeps summing every
+    // section like before.
+    val primaryKey = primaryTotalsSectionKey(gstReturn.returnType)
     var totalTaxable = 0L
     var totalTax = 0L
+    var totalRecords = 0
     val rows = sections.map { section ->
         val tree = parseSectionTotals(section.resultDataJson)
         val taxable = tree?.let { sumDeep(it, "taxableValuePaise") } ?: 0L
         val tax = tree?.let { sumDeep(it, "cgstPaise") + sumDeep(it, "sgstPaise") + sumDeep(it, "igstPaise") } ?: 0L
-        totalTaxable += taxable
-        totalTax += tax
-        listOf(sectionLabel(section.sectionKey), (tree?.rowCount() ?: 0).toString(), Money.fromPaise(taxable).formatPlain(), Money.fromPaise(tax).formatPlain())
+        val records = tree?.rowCount() ?: 0
+        if (primaryKey == null || section.sectionKey == primaryKey) {
+            totalTaxable += taxable
+            totalTax += tax
+            totalRecords += records
+        }
+        listOf(sectionLabel(section.sectionKey), records.toString(), Money.fromPaise(taxable).formatPlain(), Money.fromPaise(tax).formatPlain())
     }
     return TabularReportData(
         title = "${gstReturn.returnType} - ${gstReturn.periodKey}",
         subtitle = "$companyName - ${gstReturn.scheme} - ${gstReturn.filingMode}${if (gstReturn.isNilReturn) " - NIL RETURN" else ""}",
         columnHeaders = listOf("Section", "Records", "Taxable Value", "Tax"),
         rows = rows,
-        totalsRow = listOf("Total", sections.sumOf { (parseSectionTotals(it.resultDataJson)?.rowCount() ?: 0) }.toString(), Money.fromPaise(totalTaxable).formatPlain(), Money.fromPaise(totalTax).formatPlain())
+        totalsRow = listOf("Total", totalRecords.toString(), Money.fromPaise(totalTaxable).formatPlain(), Money.fromPaise(totalTax).formatPlain())
     )
+}
+
+/** The section key holding each return type's true, non-overlapping period total - see
+ * [buildGstr1SummaryPdfData]. Null means every section is additive (GSTR-1's current layout). */
+private fun primaryTotalsSectionKey(returnType: GstReturnType): String? = when (returnType) {
+    GstReturnType.GSTR3B -> "OUTWARD_3_1"
+    GstReturnType.GSTR9 -> "OUTWARD_4"
+    else -> null
 }
 
 // ==================== Automation status + reminder controls (Phase 8A, Part 2) ====================

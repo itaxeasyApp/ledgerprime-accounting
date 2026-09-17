@@ -111,7 +111,12 @@ class GstReturnDashboardTestSuite {
     private suspend fun AccountingDao.seedCompany(scheme: GstScheme = GstScheme.REGULAR) {
         insertCompany(
             CompanyEntity(
-                companyId = companyId, name = "Company $companyId", tradeName = "Company $companyId", gstin = "27AAAAA0000A1Z5",
+                // Phase 8 - a real, checksum-valid GSTIN (the same known-good example
+                // Gstr1FoundationTestSuite's own t1 confirms passes GstinChecksum.isValidChecksum) -
+                // GSTR-3B/GSTR-9 validation now checks the company's OWN filing GSTIN, which the
+                // old "27AAAAA0000A1Z5" placeholder never satisfied (GSTR-1's own validator never
+                // checked the company's own GSTIN, only recipients', so this was never caught before).
+                companyId = companyId, name = "Company $companyId", tradeName = "Company $companyId", gstin = "27AAPFU0939F1ZV",
                 pan = "AAAAA0000A", stateCode = "27", stateName = "Maharashtra", email = "", phone = "", address = "",
                 currency = "INR", financialYearStartMonth = 4, isDefault = true, createdAt = 0L,
                 accountingMode = AccountingMode.ACCOUNT_WITH_INVENTORY, businessType = BusinessType.TRADING, gstScheme = scheme
@@ -301,9 +306,13 @@ class GstReturnDashboardTestSuite {
         // QRMP is not a separate GstScheme - it is REGULAR filed at QUARTERLY frequency (see
         // Company.gstFilingFrequency's own doc comment).
         val rules = GstReturnApplicability.availableReturns(GstScheme.REGULAR, GstReturnPeriodicity.QUARTERLY)
-        assertTrue(rules.all { it.periodicity == GstReturnPeriodicity.QUARTERLY })
+        // Phase 8 - GSTR-1/GSTR-3B follow the passed filingFrequency; GSTR-9 never does (always
+        // ANNUALLY, statutorily a yearly return regardless of QRMP) - checked per-type, not ".all".
+        assertTrue(rules.filter { it.returnType == GstReturnType.GSTR1 || it.returnType == GstReturnType.GSTR3B }
+            .all { it.periodicity == GstReturnPeriodicity.QUARTERLY })
         assertTrue(rules.any { it.returnType == GstReturnType.GSTR1 })
         assertTrue(rules.any { it.returnType == GstReturnType.GSTR3B })
+        assertTrue("GSTR-9 is always ANNUALLY, never following QRMP", rules.any { it.returnType == GstReturnType.GSTR9 && it.periodicity == GstReturnPeriodicity.ANNUALLY })
     }
 
     @Test
@@ -718,7 +727,11 @@ class GstReturnDashboardTestSuite {
     }
 
     /** Same idea for GSTR-3B: forward-charge ITC and RCM must land in separate real sections
-     * (4A ITC-Forward vs 4A ITC-RCM / 3.1(d) RCM Liability), never merged into one inward figure. */
+     * (Table 4A "all other ITC" vs "inward reverse charge" / Table 3.1(d) RCM Liability), never
+     * merged into one inward figure. Phase 8 - updated for Gstr3bReturnBuilder's real, statutorily-
+     * numbered sections (OUTWARD_3_1/ITC_4), superseding the old flat bucket-only shape this test
+     * originally asserted on (same "test needs updating, not the fix" precedent GSTR-1's own
+     * Phase 8A upgrade already set for this codebase - see docs/30_CHANGELOG.md). */
     @Test
     fun t40_GstReturn3B_PrepareSeparatesForwardChargeAndRcmSections() = runBlocking {
         val (dao, repo) = setup()
@@ -729,10 +742,16 @@ class GstReturnDashboardTestSuite {
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         val sections = repo.getGstReturnSections(gr.gstReturnId).associateBy { it.sectionKey }
 
-        assertTrue(sections.keys.containsAll(setOf("OUTWARD_TAXABLE", "OUTWARD_ZERO_RATED", "OUTWARD_NIL_EXEMPT", "RCM_LIABILITY", "ITC_FORWARD", "ITC_RCM")))
-        assertTrue(sections.getValue("ITC_FORWARD").resultDataJson!!.contains("\"count\":1"))
-        assertTrue(sections.getValue("ITC_RCM").resultDataJson!!.contains("\"count\":1"))
-        assertTrue(sections.getValue("RCM_LIABILITY").resultDataJson!!.contains("\"count\":1"))
-        assertTrue("Forward-charge purchase must never appear as RCM liability", sections.getValue("RCM_LIABILITY").resultDataJson!!.contains("\"taxableValuePaise\":50000"))
+        assertTrue(sections.keys.containsAll(setOf("OUTWARD_3_1", "INTER_STATE_UNREG_3_2", "ITC_4", "EXEMPT_INWARD_5")))
+        val itc4 = sections.getValue("ITC_4").resultDataJson!!
+        // 4A(5) "all other ITC" - the forward-charge purchase's taxable value (Rs1000 = 100000p).
+        assertTrue("Forward-charge purchase must land in allOtherItc, not RCM", itc4.contains("\"allOtherItc\":{\"taxableValuePaise\":100000"))
+        // 4A(3) "inward reverse charge" - the RCM purchase's taxable value (Rs500 = 50000p).
+        assertTrue("Reverse-charge purchase must land in inwardReverseCharge, not allOtherItc", itc4.contains("\"inwardReverseCharge\":{\"taxableValuePaise\":50000"))
+        // 3.1(d) - this company's own RCM liability, same Rs500 line, a genuinely different table
+        // from Table 4's ITC (see Gstr3bOutwardSummary's own KDoc on why the same line appears in
+        // both - real GST law, not a duplicate/miscount).
+        val outward31 = sections.getValue("OUTWARD_3_1").resultDataJson!!
+        assertTrue("Forward-charge purchase must never appear as RCM liability", outward31.contains("\"reverseChargeInward\":{\"taxableValuePaise\":50000"))
     }
 }

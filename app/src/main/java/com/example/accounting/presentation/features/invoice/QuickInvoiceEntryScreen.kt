@@ -77,8 +77,8 @@ fun QuickInvoiceEntryScreen(
     onAddNewTradeLedger: (Boolean) -> Unit,
     onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, GstPricingMode) -> Unit,
     onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, GstPricingMode) -> Unit,
-    onPostAccountOnlySale: (String, String, Money, LocalDate, String, String, Double, String) -> Unit,
-    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String) -> Unit
+    onPostAccountOnlySale: (String, String, Money, LocalDate, String, String, Double, String, GstPricingMode, Double) -> Unit,
+    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String, GstPricingMode, Double) -> Unit
 ) {
     val groupsById = remember(groups) { groups.associateBy { it.groupId } }
     fun isDebtorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.DEBTORS_GROUP_ID}_") ||
@@ -100,6 +100,8 @@ fun QuickInvoiceEntryScreen(
     var amountInput by remember { mutableStateOf("") }
     var accountOnlyGstRateInput by remember { mutableStateOf("0") }
     var accountOnlyHsnSacInput by remember { mutableStateOf("") }
+    // Sub-phase C (Phase 7J GST Integration).
+    var accountOnlyCessRateInput by remember { mutableStateOf("") }
     var referenceNumber by remember { mutableStateOf("") }
     var narration by remember { mutableStateOf("") }
     var partyDropdownExpanded by remember { mutableStateOf(false) }
@@ -213,6 +215,8 @@ fun QuickInvoiceEntryScreen(
                 onGstRateChange = { accountOnlyGstRateInput = it },
                 hsnSacInput = accountOnlyHsnSacInput,
                 onHsnSacChange = { accountOnlyHsnSacInput = it },
+                cessRateInput = accountOnlyCessRateInput,
+                onCessRateChange = { accountOnlyCessRateInput = it },
                 pricingMode = pricingMode,
                 onPricingModeChange = { pricingMode = it }
             )
@@ -268,7 +272,8 @@ fun QuickInvoiceEntryScreen(
                             val postedLines = lines.filter { it.itemId.isNotBlank() }.map {
                                 AccountingViewModel.TradingLineForm(
                                     it.itemId, it.quantityInput.toDoubleOrNull() ?: 0.0, Money.parse(it.rateInput.ifBlank { "0" }),
-                                    it.supplyNature, it.chargeType, (it.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0)
+                                    it.supplyNature, it.chargeType, (it.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0),
+                                    (it.cessRateInput.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
                                 )
                             }
                             if (isSale) {
@@ -277,8 +282,8 @@ fun QuickInvoiceEntryScreen(
                                 onPostPurchaseBill(partyLedgerId, tradeLedgerId, postedLines, LocalDate.now(), referenceNumber, narration, pricingMode)
                             }
                         }
-                        isSale -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
-                        else -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
+                        isSale -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput, pricingMode, (accountOnlyCessRateInput.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
+                        else -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput, pricingMode, (accountOnlyCessRateInput.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0))
                     }
                     onDismiss()
                 },

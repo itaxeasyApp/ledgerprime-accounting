@@ -11,6 +11,17 @@ object CsvExporter {
 
     fun exportDocumentLines(data: DocumentData): String {
         val sb = StringBuilder()
+        // Week 2 (Play Store update plan, "pdf excel csv in a proper professional manner") - a
+        // UTF-8 BOM, so Excel (opened by double-click, the common real-world flow - not through an
+        // explicit "Import as UTF-8" dialog) correctly detects the encoding instead of falling back
+        // to the system ANSI codepage, which corrupts any non-ASCII character (a seller/buyer name
+        // in a regional script, an accented character) into mojibake. Harmless to every other
+        // reader (Sheets, re-import, this project's own tests, which all use `contains`, never
+        // exact-string equality against the start of the file). Constructed via the numeric code
+        // point (0xFEFF), not a char literal - a literal BOM/escape character in source code is
+        // visually indistinguishable from plain whitespace/nothing and easy to lose silently
+        // through an editor or git encoding round-trip.
+        sb.append(0xFEFF.toChar())
         // Document-branding correction (docs/CORRECTIONS_LOG.md, "not going into pdf and csv") -
         // a CSV of just line items had zero seller/buyer identity in it, unlike the PDF. These
         // header rows carry the same fields the PDF prints, plus the proprietor's name (from

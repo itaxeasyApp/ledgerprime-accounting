@@ -531,7 +531,13 @@ private fun GstDetailsStep(company: Company, onBack: () -> Unit, onSave: (Compan
             isError = panInvalid, supportingText = if (panInvalid) { { Text("Not a valid PAN") } } else null,
             modifier = Modifier.fillMaxWidth()
         )
-        OutlinedTextField(value = stateCode, onValueChange = { stateCode = it }, label = { Text("State Code") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = stateCode, onValueChange = { stateCode = it }, label = { Text("State Code") },
+            // Derived, display-only - never a second stored state-name field, same lookup
+            // CreatePartyDialog/CreateLedgerDialog/CreateCompanyDialog already use.
+            supportingText = com.example.accounting.core.common.Constants.GST_STATE_CODES[stateCode]?.let { { Text(it) } },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(modifier = Modifier.height(4.dp))
         Button(
             onClick = { onSave(company.copy(gstin = gstin, pan = pan, stateCode = stateCode)); onBack() },

@@ -201,6 +201,12 @@ data class AccountingUiState(
     val lastImportResult: ImportResult? = null,
     val lastImportRowOutcomes: Map<Int, String> = emptyMap(),
     val lastOcrExtraction: OcrExtractionResult? = null,
+    /** The scanned source image's own file path (the already-created [com.example.accounting.domain.rendering.DocumentAsset.storageReference]
+     * for [lastOcrExtraction]'s [com.example.accounting.domain.ocr.OcrExtractionResult.sourceAssetId]) -
+     * lets the OCR review screen show the actual scanned photo, not just the extracted text guesses.
+     * Set from the same `asset` [scanDocument] already holds right after creating it - never a
+     * second asset lookup. */
+    val lastOcrSourceImagePath: String? = null,
     val lastBarcodeGeneration: BarcodeGenerationResult? = null,
     val lastBarcodeScan: BarcodeScanSuggestion? = null,
 
@@ -358,6 +364,19 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     private val _snackbarEvents = MutableSharedFlow<String>()
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
+    /** Product Identity directive's "every validation failure gives exact navigation to fix it"
+     * rule, applied to the one Sale/Purchase block this app actually has (a party with no State
+     * can't have its Place of Supply determined for a GST-rated posting) - the plain-text
+     * [emitMessage] this already fires stays exactly as-is, but this additionally hands
+     * `MainAppScreen` the blocked party's own [com.example.accounting.domain.accounting.Ledger]
+     * so it can open the existing, real ledger-edit dialog immediately instead of leaving the
+     * user to hunt for where a Customer/Supplier's State field even lives. `null` = no pending
+     * fix; sole writer is the two Sale/Purchase posting paths below plus
+     * [clearGstBlockedLedgerFixTarget], which `MainAppScreen` calls once it has consumed one. */
+    private val _gstBlockedLedgerFixTarget = MutableStateFlow<com.example.accounting.domain.accounting.Ledger?>(null)
+    val gstBlockedLedgerFixTarget: StateFlow<com.example.accounting.domain.accounting.Ledger?> = _gstBlockedLedgerFixTarget.asStateFlow()
+    fun clearGstBlockedLedgerFixTarget() { _gstBlockedLedgerFixTarget.value = null }
+
     private var companyDataJob: Job? = null
     private var fyDataJob: Job? = null
     private var reportsRefreshJob: Job? = null
@@ -419,6 +438,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     is AppRoute.Subscription -> { loadSubscription() }
                     is AppRoute.DataTools -> { /* reached from Profile - keep whatever tab was active */ }
                     is AppRoute.Search -> { /* top-bar entry point - keep whatever tab was active */ }
+                    is AppRoute.OcrScan, is AppRoute.OcrResult -> { /* OCR workflow, reachable from any tab - keep whatever tab was active */ }
                     is AppRoute.About, is AppRoute.PrivacyPolicy, is AppRoute.TermsAndConditions, is AppRoute.Support ->
                         { /* drawer entry point - keep whatever tab was active */ }
                 }
@@ -799,7 +819,17 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         address: String,
         email: String,
         phone: String,
-        pinCode: String = ""
+        pinCode: String = "",
+        // Bug fix - the Business Setup Wizard's own Finish button now also creates the Company
+        // (previously it never did at all - see MainAppScreen.kt's onFinish doc comment). Calling
+        // this with the default `true` from inside that same wizard raced its own
+        // `navigateTo(AppRoute.Profile)` against this function's navigateTo(AppRoute.ProfileWizard)
+        // below, dumping the user back to wizard step 1 right after they just finished it - looks
+        // like Finish silently failed even though the Company/Groups/Ledgers were created
+        // correctly underneath. `false` skips only that redirect; every other line (Company
+        // creation, default Groups/Ledgers seeding, switchCompany, the success message) is
+        // unchanged and still runs.
+        andEnterWizard: Boolean = true
     ) {
         viewModelScope.launch {
             val newCompId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}"
@@ -828,8 +858,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 // Real gap fix (docs/CORRECTIONS_LOG.md, user report: "its not taking auto Business
                 // setup wizard") - a brand-new business previously landed on the Dashboard with no
                 // guided next step; now continues straight into the same Business Setup Wizard
-                // reachable from Profile & Business Setup, never a second/different flow.
-                navigateTo(AppRoute.ProfileWizard)
+                // reachable from Profile & Business Setup, never a second/different flow. Skipped
+                // when the wizard itself is what called this (see andEnterWizard's doc comment).
+                if (andEnterWizard) navigateTo(AppRoute.ProfileWizard)
             } else {
                 emitMessage("Error setting up your business: ${result.errorOrNull()?.message}")
             }
@@ -1404,7 +1435,13 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         /** Trade discount % on this line - reduces the taxable value before GST, see
          * [com.example.accounting.domain.trading.TradingLineInput.discountPercent]. Defaults to
          * 0.0, matching every line's behavior before this field existed. */
-        val discountPercent: Double = 0.0
+        val discountPercent: Double = 0.0,
+        /** Sub-phase C (Phase 7J GST Integration) - per-line CESS %, over and above GST. Defaults
+         * to 0.0, matching every line's behavior before this field existed. See
+         * [com.example.accounting.domain.trading.TradingLineInput.cessRatePercent], which already
+         * accepted a real rate end-to-end (calculation, posting, duty ledger) before this UI
+         * existed. */
+        val cessRatePercent: Double = 0.0
     )
 
     fun postSaleInvoice(
@@ -1489,7 +1526,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     itemId = item.itemId, itemName = item.name, hsnSacCode = item.hsnCode,
                     quantity = com.example.accounting.core.common.Quantity.fromDouble(line.quantity, item.unit),
                     rate = line.rate, gstRatePercent = item.gstRatePercent, supplyNature = line.supplyNature,
-                    chargeType = line.chargeType, discountPercent = line.discountPercent
+                    chargeType = line.chargeType, discountPercent = line.discountPercent, cessRatePercent = line.cessRatePercent
                 )
             }
 
@@ -1507,6 +1544,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     "Validation error: Set a State for ${if (isSale) "customer" else "supplier"} " +
                         "'${partyLedger.name}' before posting - Place of Supply cannot be determined."
                 )
+                _gstBlockedLedgerFixTarget.value = partyLedger
                 return@launch
             }
             val placeOfSupply = partyLedger.stateCode
@@ -1582,11 +1620,19 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         narration: String,
         gstRatePercent: Double = 0.0,
         hsnSac: String = "",
-        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+        /** Sub-phase B (Phase 7J GST Integration) - whether [amount] is the taxable value (the
+         * only interpretation this path supported before) or already includes GST. Defaults to
+         * EXCLUSIVE, byte-identical behavior to every caller that predates this parameter. */
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE,
+        /** Sub-phase C (Phase 7J GST Integration) - CESS %, over and above [gstRatePercent].
+         * Defaults to 0.0, byte-identical behavior to every caller that predates this parameter. */
+        cessRatePercent: Double = 0.0
     ) = postAccountOnlyTradingDocument(
         isSale = true, partyLedgerId = customerLedgerId, tradeLedgerId = salesLedgerId,
         amount = amount, date = date, referenceNumber = referenceNumber, narration = narration,
-        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature
+        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature, pricingMode = pricingMode,
+        cessRatePercent = cessRatePercent
     )
 
     /** D1a - Purchase counterpart of [postAccountOnlySale]; see its doc comment. */
@@ -1599,11 +1645,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         narration: String,
         gstRatePercent: Double = 0.0,
         hsnSac: String = "",
-        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE,
+        cessRatePercent: Double = 0.0
     ) = postAccountOnlyTradingDocument(
         isSale = false, partyLedgerId = supplierLedgerId, tradeLedgerId = purchaseLedgerId,
         amount = amount, date = date, referenceNumber = referenceNumber, narration = narration,
-        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature
+        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature, pricingMode = pricingMode,
+        cessRatePercent = cessRatePercent
     )
 
     private fun postAccountOnlyTradingDocument(
@@ -1616,7 +1665,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         narration: String,
         gstRatePercent: Double = 0.0,
         hsnSac: String = "",
-        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE,
+        cessRatePercent: Double = 0.0
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1643,6 +1694,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         "Validation error: Set a State for ${if (isSale) "customer" else "supplier"} " +
                             "'${partyLedger.name}' before posting - Place of Supply cannot be determined."
                     )
+                    _gstBlockedLedgerFixTarget.value = partyLedger
                     return@launch
                 }
                 repository.ensureGstLedgersExist(comp.companyId)
@@ -1655,7 +1707,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 val syntheticLine = TradingLineInput(
                     itemId = "", itemName = if (isSale) "Sale (Account Only)" else "Purchase (Account Only)",
                     hsnSacCode = hsnSac, quantity = com.example.accounting.core.common.Quantity.fromDouble(1.0, "Nos"),
-                    rate = amount, gstRatePercent = gstRatePercent, supplyNature = supplyNature
+                    rate = amount, gstRatePercent = gstRatePercent, supplyNature = supplyNature, cessRatePercent = cessRatePercent
                 )
                 val engineResult = if (isSale) {
                     TradingWorkflowEngine.buildSale(
@@ -1665,7 +1717,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         companyStateCode = comp.stateCode, placeOfSupply = partyLedger.stateCode,
                         lines = listOf(syntheticLine), gstLedgers = gstLedgers,
                         roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
-                        trackInventory = false
+                        trackInventory = false, pricingMode = pricingMode
                     )
                 } else {
                     TradingWorkflowEngine.buildPurchase(
@@ -1675,7 +1727,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         companyStateCode = comp.stateCode, placeOfSupply = partyLedger.stateCode,
                         lines = listOf(syntheticLine), gstLedgers = gstLedgers,
                         roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
-                        trackInventory = false
+                        trackInventory = false, pricingMode = pricingMode
                     )
                 }
                 val voucher = Voucher(
@@ -1892,7 +1944,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * which still renders a valid PDF ("No data for this period.", same as every other report). */
     fun renderLedgerStatementPdf(): java.io.File? {
         val statement = _uiState.value.selectedLedgerStatement ?: return null
-        return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), statement.toPdfData())
+        val companyName = _uiState.value.businessProfile?.businessName?.ifBlank { null } ?: _uiState.value.currentCompany?.name ?: ""
+        val fyLabel = _uiState.value.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: ""
+        return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), statement.toPdfData(companyName, fyLabel))
     }
 
     fun shareLedgerStatementPdf(): android.content.Intent? {
@@ -2213,7 +2267,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 },
                 createdBy = "SENIOR_ACCOUNTANT"
             )
-            when (val result = voucherDraftService.postDraft(voucher)) {
+            // Phase 7J audit, Section 2 (duplicate-posting risk) - a stable, draft-id-derived key
+            // (not the default fresh-random-UUID-per-call) so posting the same draft twice (a
+            // sequential retry, not just a concurrent double-tap - e.g. the user backs out of this
+            // screen before the first attempt finishes, then re-enters and posts again) is caught by
+            // VoucherPostingEngine.post's own idempotent-replay guard and safely no-ops instead of
+            // silently doubling the ledger balance impact. Mirrors the existing
+            // "RECURRING_DRAFT_$draftId" precedent (AccountingRepository.postRecurringDraft) exactly.
+            when (val result = voucherDraftService.postDraft(voucher, idempotencyKey = "DRAFT_${draft.draftId}")) {
                 is AccountingResult.Success -> emitMessage("Voucher $voucherNumber posted successfully")
                 is AccountingResult.Failure -> emitMessage("Posting rejected: ${result.error.message}")
             }
@@ -2877,7 +2938,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val asset = (assetResult as AccountingResult.Success).data
             when (val result = ocrService.requestExtraction(currentRequestingProfile(comp), asset.assetId, documentTypeHint)) {
                 is AccountingResult.Success -> {
-                    _uiState.update { it.copy(lastOcrExtraction = result.data) }
+                    _uiState.update { it.copy(lastOcrExtraction = result.data, lastOcrSourceImagePath = asset.storageReference) }
                     when (result.data.documentType) {
                         OcrDocumentType.PURCHASE_BILL, OcrDocumentType.SALES_INVOICE, OcrDocumentType.EXPENSE_RECEIPT,
                         OcrDocumentType.BANK_STATEMENT, OcrDocumentType.UPI_PAYMENT -> {
@@ -2924,7 +2985,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             name = name, address = base?.address ?: "", phone = base?.phone ?: "", email = base?.email ?: "", pan = pan,
             pinCode = base?.pinCode, city = base?.city, state = base?.state, country = base?.country
         )
-        _uiState.update { it.copy(lastOcrExtraction = null) }
+        _uiState.update { it.copy(lastOcrExtraction = null, lastOcrSourceImagePath = null) }
     }
 
     /** Explicit, human-triggered apply of a reviewed/edited GST Certificate OCR guess onto the
@@ -2941,7 +3002,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             phone = base?.phone ?: "", email = base?.email ?: "", gstin = gstin, pan = base?.pan ?: "",
             pinCode = base?.pinCode, city = base?.city, state = base?.state, country = base?.country
         )
-        _uiState.update { it.copy(lastOcrExtraction = null) }
+        _uiState.update { it.copy(lastOcrExtraction = null, lastOcrSourceImagePath = null) }
     }
 
     /** Dismisses the current OCR review card (Data Tools screen) without applying anything -
@@ -2949,7 +3010,16 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      * [DocumentAssetType.OCR_SOURCE_IMAGE] asset and, for invoice-like/Bank/UPI documents, a
      * `PENDING_REVIEW` voucher draft that still needs its own explicit review before it can post. */
     fun clearOcrExtraction() {
-        _uiState.update { it.copy(lastOcrExtraction = null) }
+        _uiState.update { it.copy(lastOcrExtraction = null, lastOcrSourceImagePath = null) }
+    }
+
+    /** Persists a crop/rotate edit made in [com.example.accounting.presentation.features.ocr.OcrImageEditor]
+     * back into shared state, so the edited file (not the original scan) is what any later
+     * recomposition/re-render of [OcrResultScreen] previews and what "Apply" is reasoned about
+     * against. The extraction's own guessed fields are untouched - this only ever replaces which
+     * image file backs the preview. */
+    fun updateOcrSourceImagePath(path: String) {
+        _uiState.update { it.copy(lastOcrSourceImagePath = path) }
     }
 
     // ---- QR/Barcode (pure utility - no accounting logic) ----
@@ -3311,7 +3381,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
 
     fun printGstReturn() {
         val file = renderGstReturnPdf() ?: run { emitMessage("No GST return selected."); return }
-        documentPreviewService.print(getApplication(), file, "GSTR-1 Summary")
+        val returnType = _uiState.value.selectedGstReturn?.returnType?.name ?: "GST Return"
+        documentPreviewService.print(getApplication(), file, "$returnType Summary")
     }
 
     fun shareGstReturnPdf(): android.content.Intent? {

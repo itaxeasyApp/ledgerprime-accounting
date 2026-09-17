@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -84,6 +85,10 @@ fun DashboardScreen(
     onViewTrialBalance: () -> Unit,
     onViewBalanceSheet: () -> Unit,
     onViewCashFlow: () -> Unit,
+    /** Quick Report follow-up ("add... Ledgers... card") - real, existing route
+     * ([com.example.accounting.presentation.navigation.AppRoute.ChartOfAccounts], already reachable
+     * elsewhere via Profile), never a new screen. */
+    onOpenLedgers: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
@@ -130,20 +135,24 @@ fun DashboardScreen(
                         // already auto-adapts to item-level vs account-only based on the company's
                         // own isInventoryEnabled setting - confirmed live on-device, never a second
                         // routing decision made here.
-                        QuickActionSpec(if (isService) "Income" else "Invoice", Icons.Default.ReceiptLong, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer) { onOpenCreateVoucher(VoucherType.SALES) },
-                        QuickActionSpec(if (isService) "Expenditure" else "Purchase", Icons.Default.ShoppingCart, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onOpenCreateVoucher(VoucherType.PURCHASE) },
-                        QuickActionSpec("Receive", Icons.Default.CallReceived, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer) { onOpenCreateVoucher(VoucherType.RECEIPT) },
-                        QuickActionSpec("Pay", Icons.Default.CallMade, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) { onOpenCreateVoucher(VoucherType.PAYMENT) }
+                        // Dashboard visual pass (new design reference) - each Quick Action now gets
+                        // its own distinct icon-chip color (reusing this app's existing named accent
+                        // tokens - RoyalPurple/Emerald/Crimson/Amber/Indigo - never new hex values)
+                        // instead of most of them sharing a single dull surfaceVariant gray.
+                        QuickActionSpec(if (isService) "Income" else "Invoice", Icons.Default.ReceiptLong, com.example.ui.theme.RoyalPurpleContainer, com.example.ui.theme.RoyalPurpleOnContainer) { onOpenCreateVoucher(VoucherType.SALES) },
+                        QuickActionSpec(if (isService) "Expenditure" else "Purchase", Icons.Default.ShoppingCart, com.example.ui.theme.IndigoContainer, com.example.ui.theme.IndigoTax) { onOpenCreateVoucher(VoucherType.PURCHASE) },
+                        QuickActionSpec("Receive", Icons.Default.CallReceived, com.example.ui.theme.EmeraldContainer, com.example.ui.theme.EmeraldCredit) { onOpenCreateVoucher(VoucherType.RECEIPT) },
+                        QuickActionSpec("Pay", Icons.Default.CallMade, com.example.ui.theme.CrimsonContainer, com.example.ui.theme.CrimsonDebit) { onOpenCreateVoucher(VoucherType.PAYMENT) }
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 QuickActions(
                     items = listOf(
-                        QuickActionSpec("Transfer", Icons.Default.CompareArrows, MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer) { onOpenCreateVoucher(VoucherType.CONTRA) },
-                        QuickActionSpec("Customer", Icons.Default.PersonAdd, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onAddCustomer() },
-                        QuickActionSpec("Supplier", Icons.Default.PersonAdd, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onAddSupplier() },
-                        QuickActionSpec("Item", Icons.Default.Add, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant) { onAddItem() }
+                        QuickActionSpec("Transfer", Icons.Default.CompareArrows, com.example.ui.theme.AmberContainer, com.example.ui.theme.AmberWarning) { onOpenCreateVoucher(VoucherType.CONTRA) },
+                        QuickActionSpec("Customer", Icons.Default.PersonAdd, com.example.ui.theme.IndigoContainer, com.example.ui.theme.IndigoTax) { onAddCustomer() },
+                        QuickActionSpec("Supplier", Icons.Default.PersonAdd, com.example.ui.theme.RoyalPurpleContainer, com.example.ui.theme.RoyalPurpleOnContainer) { onAddSupplier() },
+                        QuickActionSpec("Item", Icons.Default.Add, com.example.ui.theme.AmberContainer, com.example.ui.theme.AmberWarning) { onAddItem() }
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -214,22 +223,32 @@ fun DashboardScreen(
             Column {
                 Text("Quick Report", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(8.dp))
-                // Collapsed from two rows of three into one row of four (explicit "too much
-                // screen... make one line four column" follow-up) - Cash Flow and Day Book tiles
-                // dropped from this specific quick-launcher only; both stay reachable elsewhere
-                // (Cash Flow via Reports Center's Financial menu, Day Book via the Money tab's own
-                // entry point) - nothing was actually removed from the app. "Trading" deep-links to
-                // the same real Profit & Loss report - a Trading Account is the goods-trading
-                // section within P&L (Sales - COGS = Gross Profit), never a separate report of its
-                // own in this domain model. CMA Data/Project Report are deliberately not tiles here:
-                // CMA has real domain logic (domain/cma/CmaReportGenerator.kt) but no UI/ViewModel
-                // wiring at all yet, and Project Report does not exist anywhere in this codebase.
+                // "Trading" deep-links to the same real Profit & Loss report - a Trading Account is
+                // the goods-trading section within P&L (Sales - COGS = Gross Profit), never a
+                // separate report of its own in this domain model.
                 QuickActions(
                     items = listOf(
-                        QuickActionSpec("Trading", Icons.Default.Assessment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
-                        QuickActionSpec("Profit & Loss", Icons.Default.TrendingUp, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
-                        QuickActionSpec("Balance Sheet", Icons.Default.AccountBalance, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewBalanceSheet),
-                        QuickActionSpec("Trial Balance", Icons.AutoMirrored.Filled.Assignment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewTrialBalance)
+                        QuickActionSpec("Trading", Icons.Default.Assessment, com.example.ui.theme.EmeraldContainer, com.example.ui.theme.EmeraldCredit, onViewProfitLoss),
+                        QuickActionSpec("Profit & Loss", Icons.Default.TrendingUp, com.example.ui.theme.EmeraldContainer, com.example.ui.theme.EmeraldCredit, onViewProfitLoss),
+                        QuickActionSpec("Balance Sheet", Icons.Default.AccountBalance, com.example.ui.theme.IndigoContainer, com.example.ui.theme.IndigoTax, onViewBalanceSheet),
+                        QuickActionSpec("Trial Balance", Icons.AutoMirrored.Filled.Assignment, com.example.ui.theme.AmberContainer, com.example.ui.theme.AmberWarning, onViewTrialBalance)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                // Second row (user-supplied reference layout) - Ledger/Cash Flow/GST Report are
+                // real, already-implemented destinations (Ledgers screen, Cash Flow report, GST
+                // Summary report respectively - zero new navigation logic). CMA has real
+                // calculation logic in domain/cma/CmaReportGenerator.kt but no ViewModel/navigation
+                // wiring at all yet - shown here as a real tile (per the reference layout) with a
+                // no-op tap rather than either faking a destination or hiding the tile, so it's
+                // visually honest about not being wired up yet.
+                QuickActions(
+                    items = listOf(
+                        QuickActionSpec("Ledgers", Icons.Default.Book, com.example.ui.theme.RoyalPurpleContainer, com.example.ui.theme.RoyalPurpleOnContainer, onOpenLedgers),
+                        QuickActionSpec("Cash Flow", Icons.Default.SwapVert, com.example.ui.theme.IndigoContainer, com.example.ui.theme.IndigoTax, onViewCashFlow),
+                        QuickActionSpec("CMA", Icons.Default.TrendingUp, com.example.ui.theme.CrimsonContainer.copy(alpha = 0.5f), com.example.ui.theme.CrimsonDebit.copy(alpha = 0.6f)) {},
+                        QuickActionSpec("GST Report", Icons.Default.ReceiptLong, com.example.ui.theme.AmberContainer, com.example.ui.theme.AmberWarning, onViewGstSummary)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )

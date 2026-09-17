@@ -199,6 +199,9 @@ fun CreateCompanyDialog(
                         onValueChange = { stateCode = it },
                         label = { Text("State Code") },
                         placeholder = { Text("27") },
+                        // Derived, display-only - never a second stored state-name field, same
+                        // lookup CreatePartyDialog/CreateLedgerDialog already use.
+                        supportingText = com.example.accounting.core.common.Constants.GST_STATE_CODES[stateCode]?.let { { Text(it) } },
                         modifier = Modifier.width(100.dp)
                     )
                     OutlinedTextField(

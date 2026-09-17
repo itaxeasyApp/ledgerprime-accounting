@@ -150,7 +150,11 @@ class Phase7ETestSuite {
         postVoucher(dao, "V3", "2026-05-12", "Sale, with \"quotes\"\nand a newline, éèç", ledgers.getValue("debtors"), ledgers.getValue("sales"), 1_000_00L)
 
         val result = (repo.exportVoucherAs(companyId, "V3", ExportFormat.CSV) as AccountingResult.Success).data
-        assertTrue(result.content.startsWith("voucherId,voucherNumber"))
+        // Week 2 (Play Store update plan) - CsvEngine now leads with a UTF-8 BOM (0xFEFF) so Excel
+        // correctly detects the encoding for Unicode content when opened by double-click; this
+        // very test's own subject matter is Unicode escaping ("...and a newline, éèç"), so the BOM
+        // is exactly the right fix for what this test is about.
+        assertTrue(result.content.startsWith(0xFEFF.toChar() + "voucherId,voucherNumber"))
         assertTrue(result.content.contains("\"Sale, with \"\"quotes\"\"\nand a newline, éèç\""))
         assertEquals(3, result.content.trim().split("\r\n").size) // header + 2 journal lines
     }
@@ -265,7 +269,8 @@ class Phase7ETestSuite {
         dao.seed()
         val repo = AccountingRepository(dao)
         val result = (repo.exportOutstandingAs(companyId, ExportFormat.CSV) as AccountingResult.Success).data
-        assertEquals(listOf("invoiceId,invoiceNumber,invoiceType,partyId,partyName,voucherNumber,date,dueDate,totalAmountPaise,outstandingAmountPaise,status,daysOutstanding,agingBucket\r\n"), listOf(result.content))
+        // Week 2 (Play Store update plan) - CsvEngine now leads with a UTF-8 BOM (0xFEFF).
+        assertEquals(listOf(0xFEFF.toChar() + "invoiceId,invoiceNumber,invoiceType,partyId,partyName,voucherNumber,date,dueDate,totalAmountPaise,outstandingAmountPaise,status,daysOutstanding,agingBucket\r\n"), listOf(result.content))
     }
 
     @Test
@@ -330,7 +335,9 @@ class Phase7ETestSuite {
 
         val result = (repo.exportGstTransactionsAs(companyId, fyId, ExportFormat.CSV) as AccountingResult.Success).data
         val headerLine = result.content.lines().first()
-        assertEquals("gstTransactionId,voucherId,voucherType,partyGstin,placeOfSupply,supplyType,hsnSacCode,isService,taxableAmountPaise,gstRatePercent,cgstPaise,sgstPaise,igstPaise,cessPaise,direction,lineOrder", headerLine)
+        // Week 2 (Play Store update plan) - CsvEngine now leads with a UTF-8 BOM (0xFEFF), which
+        // lands on the first line since there's no newline before it.
+        assertEquals(0xFEFF.toChar() + "gstTransactionId,voucherId,voucherType,partyGstin,placeOfSupply,supplyType,hsnSacCode,isService,taxableAmountPaise,gstRatePercent,cgstPaise,sgstPaise,igstPaise,cessPaise,direction,lineOrder", headerLine)
     }
 
     @Test
