@@ -281,6 +281,23 @@ data class AccountingUiState(
 fun isInventoryEnabled(uiState: AccountingUiState): Boolean =
     uiState.currentCompany?.accountingMode == com.example.accounting.domain.company.AccountingMode.ACCOUNT_WITH_INVENTORY
 
+/**
+ * No-mock-data audit fix (2026-09) - the real [Invoice.dueDate] a posted Sale/Purchase's payment
+ * badge needs to ever actually show [com.example.accounting.domain.invoice.InvoiceStatus.OVERDUE].
+ * Both existing badge call sites ([DashboardScreen]'s `VoucherSummaryCard`, `VoucherDetailDialog`)
+ * were hardcoding `dueDate = null` into [com.example.accounting.domain.invoice.InvoiceStatusEngine.deriveStatus] -
+ * structurally correct code fed a fake absent input, so a genuinely overdue invoice always
+ * displayed "Unpaid" instead. A pure derivation over the already-loaded [AccountingUiState.invoices]
+ * (never a new query/refresh job - `Invoice.dueDate` is already real, already loaded), same
+ * one-source-of-truth shape as [AccountingUiState.outstandingByVoucherId] one field up.
+ */
+val AccountingUiState.dueDateByVoucherId: Map<String, java.time.LocalDate>
+    get() = invoices.mapNotNull { invoice ->
+        val voucherId = invoice.voucherId ?: return@mapNotNull null
+        val dueDate = invoice.dueDate ?: return@mapNotNull null
+        voucherId to dueDate
+    }.toMap()
+
 class AccountingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)

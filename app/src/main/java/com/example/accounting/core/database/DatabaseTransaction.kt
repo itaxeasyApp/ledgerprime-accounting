@@ -410,6 +410,42 @@ class DatabaseTransaction(
     }
 
     /**
+     * No-mock-data audit fix (2026-09) - posts an Invoice's Voucher and links the Invoice to it
+     * in ONE atomic transaction, re-checking "not already posted" from inside that same
+     * transaction. [AccountingRepository.postInvoice] previously read the Invoice's `voucherId`
+     * in a separate, earlier call before ever reaching [postVoucherAtomic]'s own transaction - a
+     * genuine TOCTOU race (two concurrent posts of the same Invoice, e.g. a rapid double-tap)
+     * could both read `voucherId == null`, both pass, and both post a real voucher, with the
+     * second `linkInvoiceToVoucher` silently overwriting the first link while both hit the ledger.
+     * The re-check now happens with the exact same atomicity guarantee [VoucherPostingEngine.post]'s
+     * own idempotency/duplicate-number guards already have (step 0 inside `database.withTransaction`) -
+     * never a second, weaker copy of that discipline for this one caller.
+     */
+    suspend fun postInvoiceVoucherAtomic(
+        companyId: String,
+        invoiceId: String,
+        voucher: VoucherEntity,
+        items: List<JournalItemEntity>,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+        userId: String = "SYSTEM_USER",
+        stockLines: List<VoucherStockLineEntity> = emptyList(),
+        gstTransactions: List<GstTransactionEntity> = emptyList(),
+        linkedAt: Long = System.currentTimeMillis()
+    ): Result<Unit> = runCatching {
+        database.withTransaction {
+            val invoiceEntity = dao.getInvoiceById(companyId, invoiceId)
+                ?: throw AccountingTransactionException(AppError.ResourceNotFound("Invoice", invoiceId))
+            if (invoiceEntity.voucherId != null) {
+                throw AccountingTransactionException(
+                    AppError.BusinessRuleViolation("Invoice '$invoiceId' has already been posted as voucher '${invoiceEntity.voucherId}'.")
+                )
+            }
+            VoucherPostingEngine.post(dao, voucher, items, idempotencyKey, userId, stockLines, gstTransactions)
+            dao.linkInvoiceToVoucher(companyId, invoiceId, voucher.voucherId, linkedAt)
+        }
+    }
+
+    /**
      * GST-only Sale (Architecture Checkpoint follow-up) - persists [gstTransactions] (every row's
      * `voucherId` already `null`, set by [com.example.accounting.domain.trading.TradingWorkflowEngine.buildGstOnlySale])
      * and enqueues [outboxItem] atomically. Deliberately does NOT call [VoucherPostingEngine.post] -

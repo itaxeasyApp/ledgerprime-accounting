@@ -84,6 +84,7 @@ import com.example.accounting.presentation.features.settings.SettingsAndSyncScre
 import com.example.accounting.presentation.features.subscription.SubscriptionScreen
 import com.example.accounting.presentation.viewmodel.AccountingViewModel
 import com.example.accounting.presentation.viewmodel.NavigationTab
+import com.example.accounting.presentation.viewmodel.dueDateByVoucherId
 import com.example.accounting.presentation.viewmodel.isInventoryEnabled
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -737,6 +738,7 @@ fun MainAppScreen(
                             onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
                             onToggleFavoriteParty = { viewModel.toggleFavoriteParty(it.partyId) },
                             outstandingByVoucherId = uiState.outstandingByVoucherId,
+                            dueDateByVoucherId = uiState.dueDateByVoucherId,
                             onScanDocument = launchDocumentScan
                         )
 
@@ -751,7 +753,8 @@ fun MainAppScreen(
                             onPartyClick = { party -> uiState.ledgers.find { l -> l.ledgerId == party.ledgerId }?.let { viewModel.loadLedgerStatement(it) } },
                             onToggleFavoriteParty = { viewModel.toggleFavoriteParty(it.partyId) },
                             onScanDocument = launchDocumentScan,
-                            outstandingByVoucherId = uiState.outstandingByVoucherId
+                            outstandingByVoucherId = uiState.outstandingByVoucherId,
+                            dueDateByVoucherId = uiState.dueDateByVoucherId
                         )
 
                         is AppRoute.Money -> MoneyTabContent(
@@ -1144,6 +1147,7 @@ fun MainAppScreen(
             },
             onRemoveAttachment = { attachment -> viewModel.removeVoucherAttachment(voucher.voucherId, attachment.referenceId) },
             outstandingPaise = uiState.outstandingByVoucherId[voucher.voucherId],
+            dueDate = uiState.dueDateByVoucherId[voucher.voucherId],
             companyGstin = uiState.currentCompany?.gstin.orEmpty(),
             onPreviewInvoice = { v ->
                 selectedVoucherDetail = null

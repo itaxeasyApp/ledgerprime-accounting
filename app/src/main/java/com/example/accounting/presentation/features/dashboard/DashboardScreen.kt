@@ -246,7 +246,14 @@ fun VoucherSummaryCard(
      * [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId].
      * `null` (every existing call site, unchanged) simply shows no badge - see
      * [com.example.accounting.domain.invoice.InvoiceStatusEngine]. */
-    outstandingPaise: Long? = null
+    outstandingPaise: Long? = null,
+    /** No-mock-data audit fix - the real linked Invoice's due date, from
+     * [com.example.accounting.presentation.viewmodel.AccountingUiState.dueDateByVoucherId]. Was
+     * previously always hardcoded `null` at every call site, which made
+     * [com.example.accounting.domain.invoice.InvoiceStatus.OVERDUE] structurally unreachable - a
+     * genuinely overdue invoice always showed "Unpaid" instead. `null` (no linked invoice, or no
+     * due date set) still simply skips the OVERDUE check, same as before. */
+    dueDate: java.time.LocalDate? = null
 ) {
     OutlinedCard(
         shape = RoundedCornerShape(12.dp),
@@ -297,7 +304,7 @@ fun VoucherSummaryCard(
                         isCancelled = voucher.isCancelled,
                         totalAmountPaise = voucher.totalDebits.paise.coerceAtLeast(voucher.totalCredits.paise),
                         outstandingPaise = outstandingPaise,
-                        dueDate = null
+                        dueDate = dueDate
                     )
                     com.example.accounting.presentation.components.InvoiceStatusBadge(status)
                 }

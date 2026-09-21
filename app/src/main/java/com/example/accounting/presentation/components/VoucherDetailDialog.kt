@@ -119,6 +119,11 @@ fun VoucherDetailDialog(
      * [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId].
      * `null` (the default) hides the badge for a caller that doesn't wire it. */
     outstandingPaise: Long? = null,
+    /** No-mock-data audit fix - the real linked Invoice's due date, from
+     * [com.example.accounting.presentation.viewmodel.AccountingUiState.dueDateByVoucherId]. Was
+     * previously always hardcoded `null` below, which made [InvoiceStatus.OVERDUE] structurally
+     * unreachable from this dialog. */
+    dueDate: java.time.LocalDate? = null,
     /** The company's own real GSTIN, for the Sale invoice-identity QR below - blank hides the QR
      * section entirely rather than printing an incomplete/misleading one. Never a government IRN -
      * this app has no e-invoicing API integration, so the QR only ever encodes the same real
@@ -230,7 +235,7 @@ fun VoucherDetailDialog(
                                     isCancelled = false,
                                     totalAmountPaise = voucher.totalDebits.paise.coerceAtLeast(voucher.totalCredits.paise),
                                     outstandingPaise = outstandingPaise,
-                                    dueDate = null
+                                    dueDate = dueDate
                                 )
                                 InvoiceStatusBadge(status)
                             }

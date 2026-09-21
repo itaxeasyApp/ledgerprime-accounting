@@ -20,6 +20,30 @@ enum class EntitlementFeature {
 }
 
 /**
+ * Whether this feature actually has a real, working, end-to-end implementation in this build -
+ * deliberately separate from *entitlement* (whether a plan's [CompanySubscription.entitlements]
+ * grants it). A no-mock-data audit (2026-09) found the Subscription screen showing a green
+ * checkmark for every entitled feature with zero call site anywhere in the app actually reading
+ * [EntitlementFeature] to gate a real feature - so a paying user could see "CMA Report: Included"
+ * while `ReportsCenterScreen`'s CMA tile stays hardcoded disabled regardless of subscription
+ * state. This flag is the single source every such display now reads, so promising a feature and
+ * shipping it can never drift apart again.
+ *
+ * [E_INVOICE]/[ITR]/[AUDIT_REPORT] map to Sandbox.co.in sub-services that are contracts only today
+ * (`domain/sandbox/{einvoice,income_tax,audit_report}/README.md` - zero `.kt` implementation).
+ * [CMA] has real domain logic (`domain/cma/CmaReportGenerator.kt`) but no ViewModel/UI wiring -
+ * unreachable by any user today. [ADVANCED_REPORTS] has no backend of any kind. [API_ACCESS] has
+ * no screen, key, or endpoint anywhere. Update this the same day a feature actually ships end to
+ * end - not before.
+ */
+val EntitlementFeature.isImplementedInThisBuild: Boolean
+    get() = when (this) {
+        EntitlementFeature.ACCOUNTING, EntitlementFeature.GSTR, EntitlementFeature.OCR, EntitlementFeature.INVENTORY -> true
+        EntitlementFeature.E_INVOICE, EntitlementFeature.ITR, EntitlementFeature.AUDIT_REPORT,
+        EntitlementFeature.CMA, EntitlementFeature.ADVANCED_REPORTS, EntitlementFeature.API_ACCESS -> false
+    }
+
+/**
  * A company's subscription for exactly one financial year (Phase 7J) - paid validity is always
  * FY-bound (1 Apr - 31 Mar), keyed by [financialYearId] rather than a raw date range, matching how
  * every other FY-scoped concept in this codebase

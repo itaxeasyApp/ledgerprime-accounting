@@ -1871,12 +1871,24 @@ class AccountingRepository(
      * period lock, tenant isolation) runs before the atomic write; duplicate voucher-number and
      * idempotency-key checks run inside the transaction itself.
      */
-    suspend fun postVoucher(
+    private data class VoucherPostingEntities(
+        val voucherEntity: VoucherEntity,
+        val itemEntities: List<JournalItemEntity>,
+        val stockLineEntities: List<VoucherStockLineEntity>,
+        val gstTransactionEntities: List<GstTransactionEntity>
+    )
+
+    /** Shared Double-Entry validation + entity-building step for [postVoucher] and [postInvoice] -
+     * extracted (no-mock-data audit fix) so [postInvoice] can wrap its own "not already posted"
+     * check in the SAME atomic transaction as the write via [DatabaseTransaction.postInvoiceVoucherAtomic],
+     * instead of a separate read before [postVoucher]'s own transaction (a real TOCTOU race two
+     * concurrent posts of the same invoice could both pass). Behavior-identical to the code this
+     * replaced - pure extraction, no validation/mapping logic changed. */
+    private suspend fun validateAndBuildVoucherEntities(
         voucher: Voucher,
-        idempotencyKey: String = UUID.randomUUID().toString(),
-        stockLines: List<VoucherStockLine> = emptyList(),
-        gstTransactions: List<GstTransaction> = emptyList()
-    ): AccountingResult<Voucher> {
+        stockLines: List<VoucherStockLine>,
+        gstTransactions: List<GstTransaction>
+    ): AccountingResult<VoucherPostingEntities> {
         val companyId = voucher.companyId
         val fy = dao.getFinancialYearById(voucher.financialYearId)
         val domainFy = fy?.let {
@@ -1909,10 +1921,6 @@ class AccountingRepository(
 
         if (validationResult is AccountingResult.Failure) {
             return validationResult
-        }
-
-        if (dbTransaction == null) {
-            return AccountingResult.Failure(AppError.SystemError("Database transaction unavailable: cannot post voucher atomically."))
         }
 
         // 2. Build entities for the atomic posting engine
@@ -1981,10 +1989,32 @@ class AccountingRepository(
             )
         }
 
+        return AccountingResult.Success(VoucherPostingEntities(voucherEntity, itemEntities, stockLineEntities, gstTransactionEntities))
+    }
+
+    suspend fun postVoucher(
+        voucher: Voucher,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+        stockLines: List<VoucherStockLine> = emptyList(),
+        gstTransactions: List<GstTransaction> = emptyList()
+    ): AccountingResult<Voucher> {
+        val built = validateAndBuildVoucherEntities(voucher, stockLines, gstTransactions)
+        if (built is AccountingResult.Failure) {
+            return built
+        }
+        val entities = (built as AccountingResult.Success).data
+
+        if (dbTransaction == null) {
+            return AccountingResult.Failure(AppError.SystemError("Database transaction unavailable: cannot post voucher atomically."))
+        }
+
         // 3-8. Atomic header insert, journal lines, ledger balances, audit log, outbox enqueue,
         // (Phase 4, additive) stock movements when stockLines is non-empty, and (Phase 5, additive)
         // GST transaction facts when gstTransactions is non-empty.
-        val result = dbTransaction.postVoucherAtomic(voucherEntity, itemEntities, idempotencyKey, voucher.createdBy, stockLineEntities, gstTransactionEntities)
+        val result = dbTransaction.postVoucherAtomic(
+            entities.voucherEntity, entities.itemEntities, idempotencyKey, voucher.createdBy,
+            entities.stockLineEntities, entities.gstTransactionEntities
+        )
         return if (result.isSuccess) {
             AccountingResult.Success(voucher)
         } else {
@@ -4283,21 +4313,37 @@ class AccountingRepository(
         stockLines: List<VoucherStockLine> = emptyList(),
         gstTransactions: List<GstTransaction> = emptyList()
     ): AccountingResult<Invoice> {
+        // Early, non-atomic lookup purely to give a fast/friendly error for the common case (the
+        // Invoice genuinely doesn't exist, or a user re-opening an already-posted one) - NOT the
+        // correctness guard against a real race. No-mock-data audit fix: the guard that actually
+        // prevents a double-post is the re-check inside postInvoiceVoucherAtomic's own atomic
+        // transaction below - a separate, earlier read like this one used to be the ONLY guard,
+        // which two concurrent posts of the same invoice could both pass.
         val invoiceEntity = dao.getInvoiceById(companyId, invoiceId)
             ?: return AccountingResult.Failure(AppError.ValidationError("Invoice '$invoiceId' was not found."))
         if (invoiceEntity.voucherId != null) {
             return AccountingResult.Failure(AppError.BusinessRuleViolation("Invoice '$invoiceId' has already been posted as voucher '${invoiceEntity.voucherId}'."))
         }
 
-        val postResult = postVoucher(voucher, idempotencyKey, stockLines, gstTransactions)
-        if (postResult is AccountingResult.Failure) return postResult
-        val postedVoucher = (postResult as AccountingResult.Success).data
+        val built = validateAndBuildVoucherEntities(voucher, stockLines, gstTransactions)
+        if (built is AccountingResult.Failure) {
+            return built
+        }
+        val entities = (built as AccountingResult.Success).data
 
-        // Phase 7B: only ever sets voucherId - invoiceNumber was already assigned at draft-creation
-        // time and is never overwritten here (it is deliberately NOT assumed to equal the
-        // Voucher's own voucherNumber).
+        if (dbTransaction == null) {
+            return AccountingResult.Failure(AppError.SystemError("Database transaction unavailable: cannot post voucher atomically."))
+        }
+
         val linkedAt = System.currentTimeMillis()
-        dao.linkInvoiceToVoucher(companyId, invoiceId, postedVoucher.voucherId, linkedAt)
+        val atomicResult = dbTransaction.postInvoiceVoucherAtomic(
+            companyId, invoiceId, entities.voucherEntity, entities.itemEntities, idempotencyKey, voucher.createdBy,
+            entities.stockLineEntities, entities.gstTransactionEntities, linkedAt
+        )
+        if (atomicResult.isFailure) {
+            return AccountingResult.Failure(mapTransactionFailure(atomicResult.exceptionOrNull()))
+        }
+        val postedVoucher = voucher
 
         dao.insertAuditLog(
             AuditLogEntity(
@@ -5173,8 +5219,16 @@ class AccountingRepository(
         return DocumentPartySnapshot(
             name = profile?.businessName?.ifBlank { company.name } ?: company.name,
             address = profile?.address?.ifBlank { company.address } ?: company.address,
-            gstin = profile?.gstin?.ifBlank { company.gstin } ?: company.gstin,
-            pan = profile?.pan?.ifBlank { company.pan } ?: company.pan,
+            // No-mock-data audit fix (2026-09) - GSTIN/PAN on a printed tax invoice are a
+            // statutory field, never a branding preference (docs/57_BUSINESS_IDENTITY_DISPLAY.md's
+            // own rule: never let BusinessProfile silently substitute for Company here, same as
+            // the e-invoice QR's SELLER_GSTIN). Previously preferred `profile?.gstin`/`.pan` when
+            // non-blank, so an independently-edited (and possibly stale/mistyped) Business Profile
+            // GSTIN could print on every real invoice while GST Return filing correctly kept
+            // reading Company - an invisible mismatch. `Company` is the sole authoritative source
+            // for these two fields, unconditionally.
+            gstin = company.gstin,
+            pan = company.pan,
             phone = profile?.phone?.ifBlank { company.phone } ?: company.phone,
             email = profile?.email?.ifBlank { company.email } ?: company.email,
             stateCode = company.stateCode, stateName = company.stateName

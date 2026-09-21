@@ -66,6 +66,8 @@ fun PurchasesScreen(
     onScanDocument: (OcrDocumentType) -> Unit = {},
     /** Payment-status badge - see [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId]. */
     outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    /** No-mock-data audit fix - see [com.example.accounting.presentation.viewmodel.AccountingUiState.dueDateByVoucherId] (needed for the badge to ever actually show OVERDUE). */
+    dueDateByVoucherId: Map<String, java.time.LocalDate> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     var tabIndex by remember { mutableIntStateOf(0) }
@@ -93,6 +95,7 @@ fun PurchasesScreen(
                 onNew = onNewPurchase,
                 fabDescription = "New Purchase",
                 outstandingByVoucherId = outstandingByVoucherId,
+                dueDateByVoucherId = dueDateByVoucherId,
                 onScanDocument = onScanDocument
             )
             1 -> PurchaseVoucherList(
@@ -103,7 +106,8 @@ fun PurchasesScreen(
                 onVoucherClick = onVoucherClick,
                 onNew = onNewDebitNote,
                 fabDescription = "New Debit Note",
-                outstandingByVoucherId = outstandingByVoucherId
+                outstandingByVoucherId = outstandingByVoucherId,
+                dueDateByVoucherId = dueDateByVoucherId
             )
             2 -> PartiesScreen(
                 role = PartyRole.SUPPLIER,
@@ -127,6 +131,7 @@ private fun PurchaseVoucherList(
     onNew: () -> Unit,
     fabDescription: String,
     outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    dueDateByVoucherId: Map<String, java.time.LocalDate> = emptyMap(),
     onScanDocument: ((OcrDocumentType) -> Unit)? = null
 ) {
     var isScanPickerOpen by remember { mutableStateOf(false) }
@@ -158,7 +163,8 @@ private fun PurchaseVoucherList(
                     VoucherSummaryCard(
                         voucher = voucher,
                         onClick = { onVoucherClick(voucher) },
-                        outstandingPaise = outstandingByVoucherId[voucher.voucherId]
+                        outstandingPaise = outstandingByVoucherId[voucher.voucherId],
+                        dueDate = dueDateByVoucherId[voucher.voucherId]
                     )
                 }
             }

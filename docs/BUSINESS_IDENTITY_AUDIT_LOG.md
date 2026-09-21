@@ -40,6 +40,35 @@ session; re-verify on-device next session opens this file.
   `assembleDocumentData`/`sellerSnapshot` path, so should be consistent, but not yet visually
   confirmed on-device (no voucher exists yet on the test company to render).
 
+## 2026-09-20 - No-mock-data audit: sellerSnapshot GSTIN/PAN fixed, all 4 prior open questions resolved
+
+Re-checked every `.gstin`/`.stateName`/business-name read site (74 occurrences) as part of a
+broader "no mock/static data" audit. All previously-open questions from the initial audit resolve
+clean with no code change needed:
+
+| Open question | Resolution |
+|---|---|
+| Backup & Sync screen - business name label source? | Same fixed Settings root row (`SettingsAndSyncScreen.kt:207`), already prefers `BusinessProfile`. |
+| Exported CSV/JSON filename embeds business name? | No - filenames are `invoice_<documentNumber>_<timestamp>.csv` / `gst_response_<timestamp>.json`, never a business name. Nothing to fix. |
+| Subscription/billing screen shows a business name? | No - `SubscriptionScreen.kt` shows no business name anywhere. |
+| PDF/print header vs on-screen Invoice Preview parity | Confirmed both paths already go through the same `assembleDocumentData`/`sellerSnapshot`. |
+
+**One real finding, fixed:** `sellerSnapshot()` (`AccountingRepository.kt:5171`) - the seller block
+for every rendered invoice/document - was letting `BusinessProfile.gstin`/`.pan` silently override
+`Company.gstin`/`.pan` when non-blank. Per this file's own rule (GSTIN must never substitute from
+BusinessProfile in a statutory context, same as the QR row), and since GSTIN/PAN are independently
+user-editable in Profile & Business Setup separately from Settings' own GST Details screen, a
+stale or mistyped Business Profile value could have printed on a real customer-facing tax invoice
+while GST Return filing correctly kept reading `Company`. Fixed: `gstin`/`pan` now read `company`
+unconditionally; `name`/`address`/`phone`/`email` continue to prefer `BusinessProfile` (legitimate
+branding, unchanged). `docs/57_BUSINESS_IDENTITY_DISPLAY.md`'s own table updated to match.
+
+Also re-verified (no change needed): every GST Return Dashboard GSTIN read stays `Company`-only;
+GSTR-1's `recipientGstin` is sourced from the frozen `GstTransaction.partyGstin` captured at
+posting time (never a live re-join to a possibly-changed Ledger) via `Gstr1ReturnBuilder`'s own
+already-computed JSON; `MaskedBusinessProfileSummary.gstinMasked` is a real masked derivation, not
+hardcoded.
+
 ## How to add a new entry
 
 When you check a new screen (or re-verify an old one after a change), append a new dated section

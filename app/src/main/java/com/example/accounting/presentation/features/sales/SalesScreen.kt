@@ -78,6 +78,8 @@ fun SalesScreen(
     onToggleFavoriteParty: (Party) -> Unit = {},
     /** Payment-status badge - see [com.example.accounting.presentation.viewmodel.AccountingUiState.outstandingByVoucherId]. */
     outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    /** No-mock-data audit fix - see [com.example.accounting.presentation.viewmodel.AccountingUiState.dueDateByVoucherId] (needed for the badge to ever actually show OVERDUE). */
+    dueDateByVoucherId: Map<String, java.time.LocalDate> = emptyMap(),
     /** Contextual OCR entry point (docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md) - opens the Photo
      * Picker with the type the user picked from this screen's own compact Sales Invoice/UPI
      * Payment dialog already known, skipping the fully-generic "which document type?" dialog
@@ -119,6 +121,7 @@ fun SalesScreen(
                 onNew = onNewSale,
                 fabDescription = "New Sale",
                 outstandingByVoucherId = outstandingByVoucherId,
+                dueDateByVoucherId = dueDateByVoucherId,
                 onScanDocument = onScanDocument
             )
             2 -> SalesVoucherList(
@@ -127,7 +130,8 @@ fun SalesScreen(
                 onVoucherClick = onVoucherClick,
                 onNew = onNewCreditNote,
                 fabDescription = "New Credit Note",
-                outstandingByVoucherId = outstandingByVoucherId
+                outstandingByVoucherId = outstandingByVoucherId,
+                dueDateByVoucherId = dueDateByVoucherId
             )
             3 -> PartiesScreen(
                 role = PartyRole.CUSTOMER,
@@ -173,6 +177,7 @@ private fun SalesVoucherList(
     onNew: () -> Unit,
     fabDescription: String,
     outstandingByVoucherId: Map<String, Long> = emptyMap(),
+    dueDateByVoucherId: Map<String, java.time.LocalDate> = emptyMap(),
     onScanDocument: ((OcrDocumentType) -> Unit)? = null
 ) {
     var isScanPickerOpen by remember { mutableStateOf(false) }
@@ -196,7 +201,8 @@ private fun SalesVoucherList(
                     VoucherSummaryCard(
                         voucher = voucher,
                         onClick = { onVoucherClick(voucher) },
-                        outstandingPaise = outstandingByVoucherId[voucher.voucherId]
+                        outstandingPaise = outstandingByVoucherId[voucher.voucherId],
+                        dueDate = dueDateByVoucherId[voucher.voucherId]
                     )
                 }
             }

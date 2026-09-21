@@ -117,6 +117,11 @@ private fun ImportRowCard(
     var pickingGroupForLedger by remember(suggestion.rowNumber) { mutableStateOf(false) }
     var selectedGroupId by remember(suggestion.rowNumber) { mutableStateOf<String?>(null) }
     var groupDropdownExpanded by remember(suggestion.rowNumber) { mutableStateOf(false) }
+    // No-mock-data audit fix - same synchronous double-tap guard CreateVoucherDialog's own
+    // `isSubmitting` flag uses. `onReviewAndCreateRow` dispatches an async coroutine; without this,
+    // a rapid double-tap before `outcome` updates (the only thing that removes this row's button)
+    // could create the same imported Party/Ledger/Stock Item twice.
+    var isSubmitting by remember(suggestion.rowNumber) { mutableStateOf(false) }
 
     SectionCard(title = "Row ${suggestion.rowNumber}", subtitle = "Suggested: ${suggestion.suggestionType.name}") {
         suggestion.fieldValues.entries.take(4).forEach { (key, value) ->
@@ -161,10 +166,14 @@ private fun ImportRowCard(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(onClick = { pickingGroupForLedger = false; selectedGroupId = null }) { Text("Cancel") }
+                    TextButton(onClick = { pickingGroupForLedger = false; selectedGroupId = null }, enabled = !isSubmitting) { Text("Cancel") }
                     Button(
-                        onClick = { onReviewAndCreateRow(suggestion, ImportSuggestionType.LEDGER, selectedGroupId) },
-                        enabled = selectedGroupId != null
+                        onClick = {
+                            if (isSubmitting) return@Button
+                            isSubmitting = true
+                            onReviewAndCreateRow(suggestion, ImportSuggestionType.LEDGER, selectedGroupId)
+                        },
+                        enabled = selectedGroupId != null && !isSubmitting
                     ) { Text("Confirm & Create Ledger") }
                 }
             }
@@ -182,12 +191,15 @@ private fun ImportRowCard(
                     ImportSuggestionType.entries.forEach { type ->
                         OutlinedButton(
                             onClick = {
+                                if (isSubmitting) return@OutlinedButton
                                 if (type == ImportSuggestionType.LEDGER) {
                                     pickingGroupForLedger = true
                                 } else {
+                                    isSubmitting = true
                                     onReviewAndCreateRow(suggestion, type, null)
                                 }
-                            }
+                            },
+                            enabled = !isSubmitting
                         ) { Text("Create as ${type.name}") }
                     }
                 }

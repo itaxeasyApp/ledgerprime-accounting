@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.example.accounting.domain.subscription.CompanySubscription
 import com.example.accounting.domain.subscription.EntitlementFeature
 import com.example.accounting.domain.subscription.SubscriptionPlanType
+import com.example.accounting.domain.subscription.isImplementedInThisBuild
 import com.example.accounting.presentation.components.ActionButton
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.theme.Spacing
@@ -67,9 +68,19 @@ fun SubscriptionScreen(
         Text("What's included", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.xs + Spacing.xs), contentPadding = PaddingValues(bottom = 60.dp)) {
             items(EntitlementFeature.entries) { feature ->
-                val has = subscription?.isActive == true && feature in subscription.entitlements
+                // A feature the plan entitles but this build hasn't actually shipped yet must
+                // never show as "Included" - that would promise something no screen can deliver
+                // (found live: CMA/Advanced Reports had zero backend/UI wiring behind their
+                // checkmark). "Coming soon" is the same honest-disabled language ReportsCenter's
+                // own disabled tiles already use.
+                val has = feature.isImplementedInThisBuild && subscription?.isActive == true && feature in subscription.entitlements
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(feature.displayLabel(), style = MaterialTheme.typography.bodyMedium)
+                    Column {
+                        Text(feature.displayLabel(), style = MaterialTheme.typography.bodyMedium)
+                        if (!feature.isImplementedInThisBuild) {
+                            Text("Coming soon", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                     Icon(
                         if (has) Icons.Default.CheckCircle else Icons.Default.Lock,
                         contentDescription = if (has) "Included" else "Not included",
