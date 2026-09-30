@@ -78,6 +78,7 @@ import com.example.accounting.presentation.features.profile.ProfileWizardScreen
 import com.example.accounting.presentation.features.purchases.PurchasesScreen
 import com.example.accounting.presentation.features.reports.GstReturnDashboardView
 import com.example.accounting.presentation.features.reports.ReportsCenterScreen
+import com.example.accounting.presentation.features.reports.VoucherRegisterActions
 import com.example.accounting.presentation.features.sales.SalesScreen
 import com.example.accounting.presentation.features.search.SearchScreen
 import com.example.accounting.presentation.features.settings.SettingsAndSyncScreen
@@ -285,6 +286,58 @@ fun MainAppScreen(
             }
         }
     }
+    // Voucher Register "Download PDF" - system Save-as dialog (Storage Access Framework, no
+    // storage permission); the already-rendered PDF waits here until the user picks a location.
+    var pendingPdfDownload by remember { mutableStateOf<java.io.File?>(null) }
+    val savePdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val file = pendingPdfDownload
+        pendingPdfDownload = null
+        if (uri != null && file != null) viewModel.saveFileToUri(file, uri)
+    }
+    val registerActions = VoucherRegisterActions(
+        onLoad = { viewModel.loadVoucherRegister(it) },
+        onPreviewPdf = { type, month ->
+            coroutineScope.launch {
+                val file = viewModel.renderVoucherRegisterPdf(type, month) ?: return@launch
+                try {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context, com.example.accounting.data.rendering.ShareAdapter.FILE_PROVIDER_AUTHORITY, file
+                    )
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/pdf")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Preview ${type.title}"))
+                } catch (e: android.content.ActivityNotFoundException) {
+                    // No PDF viewer installed - same silent no-op as the GSTR-1 preview.
+                }
+            }
+        },
+        onPrintPdf = { type, month ->
+            coroutineScope.launch {
+                val file = viewModel.renderVoucherRegisterPdf(type, month) ?: return@launch
+                try {
+                    com.example.accounting.data.rendering.PrintAdapter.print(context, file, type.title)
+                } catch (e: Exception) {
+                    // No print service configured.
+                }
+            }
+        },
+        onSharePdf = { type, month ->
+            coroutineScope.launch {
+                val intent = viewModel.shareVoucherRegisterPdf(type, month)
+                if (intent != null) context.startActivity(Intent.createChooser(intent, "Share ${type.title}"))
+            }
+        },
+        onDownloadPdf = { type, month ->
+            coroutineScope.launch {
+                val file = viewModel.renderVoucherRegisterPdf(type, month) ?: return@launch
+                pendingPdfDownload = file
+                val suffix = month?.toString() ?: uiState.currentFinancialYear?.fyCode.orEmpty()
+                savePdfLauncher.launch("${type.title.replace(' ', '_')}_$suffix.pdf")
+            }
+        }
+    )
     val signaturePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             coroutineScope.launch {
@@ -650,6 +703,7 @@ fun MainAppScreen(
                             },
                             onRefreshReport = { viewModel.refreshFinancialReports() },
                             gstReturnActions = gstReturnActions,
+                            registerActions = registerActions,
                             deepLinkReportKey = uiState.reportsDeepLink,
                             onDeepLinkConsumed = { viewModel.consumeReportsDeepLink() }
                         )

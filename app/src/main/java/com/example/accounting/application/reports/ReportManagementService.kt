@@ -2,6 +2,7 @@ package com.example.accounting.application.reports
 
 import com.example.accounting.core.common.Money
 import com.example.accounting.data.repository.AccountingRepository
+import com.example.accounting.domain.financialyear.FinancialYear
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.domain.reports.BalanceSheetReport
 import com.example.accounting.domain.reports.CashFlowReport
@@ -11,6 +12,9 @@ import com.example.accounting.domain.reports.OutstandingReport
 import com.example.accounting.domain.reports.ProfitAndLossReport
 import com.example.accounting.domain.reports.RatioAnalysisReport
 import com.example.accounting.domain.reports.TrialBalanceReport
+import com.example.accounting.domain.reports.VoucherRegisterReport
+import com.example.accounting.domain.reports.VoucherRegisterType
+import com.example.accounting.domain.reports.buildVoucherRegister
 import com.example.accounting.domain.taxation.gst.GstDirection
 import java.time.LocalDate
 
@@ -52,6 +56,17 @@ class ReportManagementService(private val repository: AccountingRepository) {
 
     suspend fun dayBook(companyId: String, dateRange: ClosedRange<LocalDate>): DayBookReport =
         repository.generateDayBook(companyId, dateRange)
+
+    /** Sales/Purchase/Credit Note/Debit Note register for one financial year - a pure regroup of
+     * [dayBook] over the FY's own date range (cancelled vouchers excluded), never a second query. */
+    suspend fun voucherRegister(companyId: String, financialYear: FinancialYear, type: VoucherRegisterType): VoucherRegisterReport =
+        buildVoucherRegister(
+            type = type,
+            dayBook = dayBook(companyId, financialYear.startDate..financialYear.endDate),
+            financialYearCode = financialYear.fyCode,
+            fyStart = financialYear.startDate,
+            fyEnd = financialYear.endDate
+        )
 
     suspend fun outstanding(companyId: String, role: PartyRole? = null, today: LocalDate = LocalDate.now()): OutstandingReport =
         repository.generateOutstandingReport(companyId, role, today)

@@ -15,5 +15,31 @@ data class TabularReportData(
     val subtitle: String,
     val columnHeaders: List<String>,
     val rows: List<List<String>>,
-    val totalsRow: List<String>? = null
+    val totalsRow: List<String>? = null,
+    /** Opt-in branded header/footer. Null keeps the original plain title/subtitle layout, so
+     * every report that predates [TabularReportChrome] prints exactly as before. */
+    val chrome: TabularReportChrome? = null
+)
+
+/**
+ * Company-branded page furniture for [TabularReportData] (Voucher Registers): a first-page
+ * header with logo/company name/GSTIN/FY/period, a compact "(continued)" header on later pages,
+ * repeated column headers, a footer with "Page X of Y", and - for any column listed in
+ * [carryForwardColumnPaise] - "Brought forward"/"Carried forward" running totals at each page
+ * break. Display data only; the running totals are sums of the same paise values the rows show.
+ */
+data class TabularReportChrome(
+    val companyName: String,
+    val gstin: String?,
+    val financialYearLabel: String,
+    val periodLabel: String = "",
+    /** Local file path of the company's uploaded logo (Business Profile), or null for none. */
+    val logoPath: String? = null,
+    val generatedOn: String = "",
+    /** Relative column widths; null or a size mismatch means equal widths. */
+    val columnWeights: List<Float>? = null,
+    /** Column indexes drawn right-aligned (amounts/counts). */
+    val rightAlignedColumns: Set<Int> = emptySet(),
+    /** Column index -> per-row paise values (parallel to [TabularReportData.rows]). */
+    val carryForwardColumnPaise: Map<Int, List<Long>> = emptyMap()
 )

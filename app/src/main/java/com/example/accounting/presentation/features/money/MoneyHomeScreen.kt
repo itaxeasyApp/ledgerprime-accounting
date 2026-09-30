@@ -13,10 +13,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.CallMade
-import androidx.compose.material.icons.filled.CallReceived
-import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Edit
@@ -94,16 +94,16 @@ fun MoneyHomeScreen(
             }
         }
 
-        item { MoneyTile("Receive Money", Icons.Default.CallReceived, onReceiveMoney) }
-        item { MoneyTile("Pay Money", Icons.Default.CallMade, onPayMoney) }
-        item { MoneyTile("Transfer (Cash ↔ Bank)", Icons.Default.CompareArrows, onTransfer) }
+        item { MoneyTile("Receive Money", Icons.AutoMirrored.Filled.CallReceived, onReceiveMoney) }
+        item { MoneyTile("Pay Money", Icons.AutoMirrored.Filled.CallMade, onPayMoney) }
+        item { MoneyTile("Transfer (Cash ↔ Bank)", Icons.AutoMirrored.Filled.CompareArrows, onTransfer) }
         item { MoneyTile("Cash", Icons.Default.Payments, onOpenCash) }
         item { MoneyTile("Bank", Icons.Default.AccountBalance, onOpenBank) }
         item { MoneyTile("UPI Details", Icons.Default.CreditCard, onOpenUpiProfiles) }
         item {
             MoneyTile(
                 title = if (pendingDraftsCount > 0) "Pending Reviews ($pendingDraftsCount)" else "Pending Reviews",
-                icon = Icons.Default.Assignment,
+                icon = Icons.AutoMirrored.Filled.Assignment,
                 onClick = onOpenPendingReviews
             )
         }

@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.accounting.core.common.Money
@@ -68,9 +69,15 @@ fun StatCard(
         border = DashboardCardBorder(),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        // 12dp horizontal (not 14dp) so "Receivables" + icon fits a 4-per-row tile on a 360dp-wide
+        // phone - at 14dp it wrapped/clipped to "Receivables·" with the icon squeezed to a dot.
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(text = title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                // weight(fill = false) + ellipsis: a too-long title shrinks itself, never the icon.
+                Text(
+                    text = title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
+                )
                 Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
             }
             Spacer(modifier = Modifier.height(8.dp))

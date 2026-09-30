@@ -5235,6 +5235,10 @@ class AccountingRepository(
         )
     }
 
+    /** Local path of the company's uploaded Business Profile logo, or null - the same lookup
+     * [brandingSnapshot] performs for invoice PDFs, exposed for report PDFs (Voucher Registers). */
+    suspend fun getCompanyLogoPath(companyId: String): String? = brandingSnapshot(companyId).logoStorageReference
+
     private suspend fun brandingSnapshot(companyId: String): DocumentBrandingSnapshot {
         val signatoryName = dao.getIndividualProfile(companyId)?.name.orEmpty()
         val profile = dao.getBusinessProfile(companyId) ?: return DocumentBrandingSnapshot(signatoryName = signatoryName)

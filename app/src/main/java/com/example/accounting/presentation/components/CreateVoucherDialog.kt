@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -647,7 +648,7 @@ fun CreateVoucherDialog(
                                 onValueChange = {}, readOnly = true,
                                 label = { Text(if (isContra) "From Account" else "Source Account") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = debitDropdownExpanded) },
-                                modifier = Modifier.fillMaxWidth().menuAnchor()
+                                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
                             )
                             ExposedDropdownMenu(expanded = debitDropdownExpanded, onDismissRequest = { debitDropdownExpanded = false }) {
                                 availableLedgers.forEach { led ->
@@ -667,7 +668,7 @@ fun CreateVoucherDialog(
                                 onValueChange = {}, readOnly = true,
                                 label = { Text(if (isContra) "To Account" else "Adjustment Account") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = creditDropdownExpanded) },
-                                modifier = Modifier.fillMaxWidth().menuAnchor()
+                                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
                             )
                             ExposedDropdownMenu(expanded = creditDropdownExpanded, onDismissRequest = { creditDropdownExpanded = false }) {
                                 availableLedgers.forEach { led ->

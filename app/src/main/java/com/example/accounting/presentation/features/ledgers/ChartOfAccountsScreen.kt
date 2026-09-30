@@ -30,7 +30,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -192,7 +192,7 @@ fun ChartOfAccountsScreen(
                             selected = effectiveTab == CoaTab.LEDGERS,
                             onClick = { selectedCoaTab = CoaTab.LEDGERS },
                             text = { Text("Ledgers (${uiState.ledgers.size})") },
-                            icon = { Icon(Icons.Default.List, contentDescription = "Ledgers") }
+                            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Ledgers") }
                         )
                         CoaTab.GROUPS -> Tab(
                             selected = effectiveTab == CoaTab.GROUPS,

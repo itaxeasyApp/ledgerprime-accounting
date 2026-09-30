@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
+import androidx.core.os.BundleCompat
 import com.google.android.gms.auth.api.phone.SmsRetriever
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Status
@@ -33,7 +34,7 @@ class SmsRetrieverManager(private val context: Context) {
             override fun onReceive(receiverContext: Context?, intent: Intent?) {
                 if (intent?.action != SmsRetriever.SMS_RETRIEVED_ACTION) return
                 val extras = intent.extras ?: return
-                val status = extras.get(SmsRetriever.EXTRA_STATUS) as? Status ?: return
+                val status = BundleCompat.getParcelable(extras, SmsRetriever.EXTRA_STATUS, Status::class.java) ?: return
                 if (status.statusCode != CommonStatusCodes.SUCCESS) return
                 val message = extras.getString(SmsRetriever.EXTRA_SMS_MESSAGE).orEmpty()
                 Regex("\\b(\\d{6})\\b").find(message)?.groupValues?.get(1)?.let { code -> trySend(code) }

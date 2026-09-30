@@ -5,7 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -30,7 +30,7 @@ import com.example.accounting.core.common.Money
 @Composable
 fun SalesSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
     title = "Sales", amount = amount, subtitle = "",
-    icon = Icons.Default.ReceiptLong, iconTint = MaterialTheme.colorScheme.primary,
+    icon = Icons.AutoMirrored.Filled.ReceiptLong, iconTint = MaterialTheme.colorScheme.primary,
     modifier = modifier.clickable(onClick = onClick)
 )
 
@@ -43,7 +43,7 @@ fun PurchaseSummary(amount: Money, modifier: Modifier = Modifier, onClick: () ->
 
 @Composable
 fun ReceiptSummary(amount: Money, modifier: Modifier = Modifier, onClick: () -> Unit) = StatCard(
-    title = "Receivables", amount = amount, subtitle = "You are owed",
+    title = "Receivables", amount = amount, subtitle = "To receive",
     icon = Icons.Default.ArrowDownward, iconTint = MaterialTheme.colorScheme.secondary,
     modifier = modifier.clickable(onClick = onClick)
 )

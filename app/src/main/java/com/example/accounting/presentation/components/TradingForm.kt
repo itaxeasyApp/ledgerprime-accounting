@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -155,7 +156,7 @@ internal fun TradingForm(
             onValueChange = {}, readOnly = true,
             label = { Text(if (isSale) "Customer / Account" else "Supplier / Account") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = partyDropdownExpanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = partyDropdownExpanded, onDismissRequest = { onPartyDropdownExpandedChange(false) }) {
             partyLedgerOptions.forEach { led ->
@@ -205,7 +206,7 @@ internal fun TradingForm(
             onValueChange = {}, readOnly = true,
             label = { Text("$tradeLedgerWord Account") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = tradeDropdownExpanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = tradeDropdownExpanded, onDismissRequest = { onTradeDropdownExpandedChange(false) }) {
             ledgers.filter { if (isSale) isSalesLedger(it) else isPurchaseLedger(it) }.forEach { led ->
@@ -406,7 +407,7 @@ private fun VoucherLineItemCard(
                         onValueChange = {}, readOnly = true,
                         label = { Text("Item") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = itemDropdownExpanded) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                        modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
                     ExposedDropdownMenu(expanded = itemDropdownExpanded, onDismissRequest = { itemDropdownExpanded = false }) {
                         stockItems.forEach { candidate ->

@@ -19,8 +19,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,7 +76,7 @@ fun VoucherDraftReviewScreen(
         if (drafts.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(Icons.AutoMirrored.Filled.Assignment, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("Nothing pending review", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -133,7 +134,7 @@ fun VoucherDraftEditorScreen(
                         readOnly = true,
                         label = { Text("Ledger") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = ledgerDropdownExpanded) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor().testTag("draft_line_ledger_$index")
+                        modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable).testTag("draft_line_ledger_$index")
                     )
                     ExposedDropdownMenu(expanded = ledgerDropdownExpanded, onDismissRequest = { ledgerDropdownExpanded = false }) {
                         ledgers.forEach { ledger ->

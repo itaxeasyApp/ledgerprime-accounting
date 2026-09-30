@@ -70,6 +70,10 @@ import com.example.accounting.domain.reports.OutstandingReport
 import com.example.accounting.domain.reports.ProfitAndLossReport
 import com.example.accounting.domain.reports.RatioAnalysisReport
 import com.example.accounting.domain.reports.TrialBalanceReport
+import com.example.accounting.domain.reports.VoucherRegisterReport
+import com.example.accounting.domain.reports.VoucherRegisterType
+import com.example.accounting.domain.reports.toDetailPdfData
+import com.example.accounting.domain.reports.toMonthlySummaryPdfData
 import com.example.accounting.domain.reports.toPdfData
 import com.example.accounting.domain.rendering.BusinessProfile
 import com.example.accounting.domain.rendering.DocumentAssetType
@@ -265,6 +269,12 @@ data class AccountingUiState(
      * auto-select on next Report Center composition; cleared once consumed so it never re-fires
      * on an unrelated later visit to the Reports tab. */
     val reportsDeepLink: String? = null,
+
+    /** Reports Center > Sales/Purchase voucher register currently on screen (Sales/Purchase/
+     * Credit Note/Debit Note), loaded on demand by [AccountingViewModel.loadVoucherRegister] for
+     * the current company + financial year. */
+    val voucherRegister: VoucherRegisterReport? = null,
+    val isVoucherRegisterLoading: Boolean = false,
 
     /** Same one-shot request/consume shape as [reportsDeepLink] - the Dashboard's "Cash"/"Bank"
      * Business Snapshot cards must land directly on that specific ledger list, never on the Money
@@ -3171,6 +3181,74 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         val fy = _uiState.value.currentFinancialYear ?: run { emitMessage("No financial year selected."); return null }
         val report = reportService.dayBook(comp.companyId, fy.startDate..fy.endDate)
         return com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), report.toPdfData())
+    }
+
+    // ---- Voucher Registers (Sales/Purchase/Credit Note/Debit Note) ----
+
+    /** Loads [type]'s register for the current company + financial year via
+     * [ReportManagementService.voucherRegister] (Day Book regrouped; cancelled vouchers excluded).
+     * Called by the Reports Center register screen whenever the register, FY or voucher list changes. */
+    fun loadVoucherRegister(type: VoucherRegisterType) {
+        val comp = _uiState.value.currentCompany ?: return
+        val fy = _uiState.value.currentFinancialYear ?: return
+        _uiState.update { it.copy(isVoucherRegisterLoading = true) }
+        viewModelScope.launch {
+            val report = try {
+                reportService.voucherRegister(comp.companyId, fy, type)
+            } catch (e: Exception) {
+                emitMessage("Could not load ${type.title}: ${e.message}")
+                null
+            }
+            _uiState.update { it.copy(voucherRegister = report, isVoucherRegisterLoading = false) }
+        }
+    }
+
+    /**
+     * Renders [type]'s register to a branded PDF via [com.example.accounting.data.rendering.TabularPdfRenderer]:
+     * the monthly summary when [month] is null, otherwise that month's voucher-level detail. The
+     * register is re-fetched from [ReportManagementService.voucherRegister] (never a stale screen
+     * copy); company name/GSTIN/logo come from the Company + Business Profile.
+     */
+    suspend fun renderVoucherRegisterPdf(type: VoucherRegisterType, month: java.time.YearMonth?): File? {
+        val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return null }
+        val fy = _uiState.value.currentFinancialYear ?: run { emitMessage("No financial year selected."); return null }
+        return try {
+            val report = reportService.voucherRegister(comp.companyId, fy, type)
+            val chrome = com.example.accounting.domain.rendering.TabularReportChrome(
+                companyName = _uiState.value.businessProfile?.businessName?.ifBlank { null } ?: comp.name,
+                gstin = comp.gstin.ifBlank { null },
+                financialYearLabel = "Financial Year: ${fy.fyCode}",
+                logoPath = repository.getCompanyLogoPath(comp.companyId),
+                generatedOn = LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+            )
+            val data = if (month == null) report.toMonthlySummaryPdfData(chrome) else report.toDetailPdfData(month, chrome)
+            com.example.accounting.data.rendering.TabularPdfRenderer.render(getApplication(), data)
+        } catch (e: Exception) {
+            emitMessage("Could not create PDF: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun shareVoucherRegisterPdf(type: VoucherRegisterType, month: java.time.YearMonth?): android.content.Intent? {
+        val file = renderVoucherRegisterPdf(type, month) ?: return null
+        return documentPreviewService.buildShareIntent(getApplication(), file, "application/pdf")
+    }
+
+    /** Download: copies an already-rendered PDF to the location the user picked in the system
+     * "Save as" dialog (Storage Access Framework - no storage permission needed). */
+    fun saveFileToUri(source: File, target: android.net.Uri) {
+        viewModelScope.launch {
+            val saved = try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openOutputStream(target)?.use { out ->
+                        source.inputStream().use { it.copyTo(out) }
+                    } != null
+                }
+            } catch (e: Exception) {
+                false
+            }
+            emitMessage(if (saved) "PDF saved." else "Could not save PDF.")
+        }
     }
 
     // ---- GSTR-1 PDF Preview/Download/Print/Share (Phase 8A, Part 2) ----

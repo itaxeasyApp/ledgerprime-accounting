@@ -1,6 +1,7 @@
 package com.example.accounting.presentation.features.reports
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,9 +18,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,11 +52,15 @@ import com.example.accounting.domain.reports.AgingBucket
 import com.example.accounting.domain.reports.CashFlowReport
 import com.example.accounting.domain.reports.OutstandingReport
 import com.example.accounting.domain.reports.RatioAnalysisReport
+import com.example.accounting.domain.reports.VoucherRegisterType
 import com.example.accounting.presentation.components.Amount
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.components.TableRow
 import com.example.accounting.presentation.features.dashboard.VoucherSummaryCard
 import com.example.accounting.presentation.viewmodel.AccountingUiState
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private enum class ReportCategory(val label: String) { FINANCIAL("Financial"), SALES_PURCHASE("Sales/Purchase"), ACCOUNTS("Accounts"), GST("GST"), ANALYSIS("Analysis") }
 
@@ -59,7 +69,8 @@ private enum class ReportCategory(val label: String) { FINANCIAL("Financial"), S
  * itself, never duplicate this screen's own category layout. */
 private fun reportCategoryForKey(reportKey: String): ReportCategory? = when (reportKey) {
     "Trial Balance", "Profit & Loss", "Balance Sheet", "Cash Flow" -> ReportCategory.FINANCIAL
-    "Sales Register", "Purchase Register", "Outstanding Receivables", "Outstanding Payables" -> ReportCategory.SALES_PURCHASE
+    "Sales Register", "Purchase Register", "Credit Note Register", "Debit Note Register",
+    "Outstanding Receivables", "Outstanding Payables" -> ReportCategory.SALES_PURCHASE
     "Cash Book", "Bank Book", "Receipt Register", "Payment Register" -> ReportCategory.ACCOUNTS
     "GST Summary", "HSN/SAC Summary", "GST Return Dashboard" -> ReportCategory.GST
     "Ratio Analysis" -> ReportCategory.ANALYSIS
@@ -90,6 +101,7 @@ fun ReportsCenterScreen(
      * current) rather than only firing on data changes. */
     onRefreshReport: () -> Unit = {},
     gstReturnActions: GstReturnDashboardActions,
+    registerActions: VoucherRegisterActions = VoucherRegisterActions(),
     /** Dashboard-card-to-Report-Center deep link fix - [AccountingUiState.reportsDeepLink], a
      * report-menu key to jump straight into (e.g. "Outstanding Receivables") instead of leaving
      * the user on the generic category menu a Dashboard card used to always land on. */
@@ -139,7 +151,7 @@ fun ReportsCenterScreen(
 
         when (category) {
             ReportCategory.FINANCIAL -> FinancialCategory(uiState, onExportReport, onShareReport, onPrintReport, onRefreshReport, initialReportKey)
-            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, initialReportKey)
+            ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, registerActions, initialReportKey)
             ReportCategory.ACCOUNTS -> AccountsCategory(uiState, onOpenDayBook, onOpenAllLedgers)
             ReportCategory.GST -> GstCategory(uiState, gstReturnActions, initialReportKey)
             ReportCategory.ANALYSIS -> AnalysisCategory(uiState)
@@ -227,17 +239,22 @@ private fun CashFlowView(report: CashFlowReport?) {
 }
 
 @Composable
-private fun SalesPurchaseCategory(uiState: AccountingUiState, initialReportKey: String? = null) {
+private fun SalesPurchaseCategory(uiState: AccountingUiState, registerActions: VoucherRegisterActions, initialReportKey: String? = null) {
     var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
-        ReportMenu(listOf("Sales Register" to true, "Purchase Register" to true, "Outstanding Receivables" to true, "Outstanding Payables" to true)) { reportKey = it }
+        ReportMenu(
+            VoucherRegisterType.entries.map { it.title to true } +
+                listOf("Outstanding Receivables" to true, "Outstanding Payables" to true)
+        ) { reportKey = it }
+        return
+    }
+    VoucherRegisterType.fromTitle(reportKey!!)?.let { registerType ->
+        VoucherRegisterView(uiState, registerType, registerActions, onBack = { reportKey = null })
         return
     }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         BackRow(reportKey!!, onBack = { reportKey = null })
         when (reportKey) {
-            "Sales Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.SALES })
-            "Purchase Register" -> VoucherRegisterList(uiState.vouchers.filter { it.voucherType == VoucherType.PURCHASE })
             "Outstanding Receivables" -> OutstandingList(uiState.receivablesReport)
             "Outstanding Payables" -> OutstandingList(uiState.payablesReport)
         }
@@ -576,4 +593,91 @@ private fun BackRow(title: String, onBack: () -> Unit, actions: @Composable () -
 @Composable
 private fun EmptyReportState() {
     Text("No data yet for this report.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
+}
+
+/** Reports Center > Sales/Purchase register callbacks, grouped like [GstReturnDashboardActions].
+ * A null month means the register's monthly summary; a month means that month's detail. */
+data class VoucherRegisterActions(
+    val onLoad: (VoucherRegisterType) -> Unit = {},
+    val onPreviewPdf: (VoucherRegisterType, YearMonth?) -> Unit = { _, _ -> },
+    val onPrintPdf: (VoucherRegisterType, YearMonth?) -> Unit = { _, _ -> },
+    val onSharePdf: (VoucherRegisterType, YearMonth?) -> Unit = { _, _ -> },
+    val onDownloadPdf: (VoucherRegisterType, YearMonth?) -> Unit = { _, _ -> }
+)
+
+private val REGISTER_ROW_DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.ENGLISH)
+
+/**
+ * Sales/Purchase/Credit Note/Debit Note register: FY months with their real voucher count and
+ * total (from [com.example.accounting.application.reports.ReportManagementService.voucherRegister]);
+ * tapping a month with vouchers opens that month's voucher-level detail. Reloads whenever the
+ * company, financial year (the app-wide FY filter) or voucher list changes.
+ */
+@Composable
+private fun VoucherRegisterView(uiState: AccountingUiState, type: VoucherRegisterType, actions: VoucherRegisterActions, onBack: () -> Unit) {
+    var selectedMonth by remember(type) { mutableStateOf<YearMonth?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val fy = uiState.currentFinancialYear
+    LaunchedEffect(type, uiState.currentCompany?.companyId, fy?.financialYearId, uiState.vouchers) { actions.onLoad(type) }
+    val report = uiState.voucherRegister?.takeIf { it.registerType == type && it.financialYearCode == fy?.fyCode }
+    val month = selectedMonth?.let { report?.month(it) }
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        BackRow(
+            title = if (month != null) "${type.title} - ${month.label}" else type.title,
+            onBack = { if (selectedMonth != null) selectedMonth = null else onBack() },
+            actions = {
+                IconButton(onClick = { actions.onLoad(type) }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
+                IconButton(onClick = { actions.onPrintPdf(type, selectedMonth) }) { Icon(Icons.Default.Print, contentDescription = "Print") }
+                IconButton(onClick = { actions.onSharePdf(type, selectedMonth) }) { Icon(Icons.Default.Share, contentDescription = "Share") }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More PDF options") }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Preview PDF") },
+                            leadingIcon = { Icon(Icons.Default.Visibility, contentDescription = null) },
+                            onClick = { menuOpen = false; actions.onPreviewPdf(type, selectedMonth) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Download PDF") },
+                            leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                            onClick = { menuOpen = false; actions.onDownloadPdf(type, selectedMonth) }
+                        )
+                    }
+                }
+            }
+        )
+        com.example.accounting.presentation.components.ReportDocumentHeader(
+            reportName = month?.let { "${type.title} - ${it.label}" } ?: type.title,
+            businessName = uiState.businessProfile?.businessName?.ifBlank { null } ?: uiState.currentCompany?.name ?: "My Business",
+            financialYearLabel = fy?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
+        )
+        when {
+            report == null && uiState.isVoucherRegisterLoading ->
+                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            report == null -> EmptyReportState()
+            month != null -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
+                item { TableRow("Total (${month.voucherCount} vouchers)", money = month.totalAmount, emphasize = true) }
+                items(month.rows, key = { it.voucherId }) { row ->
+                    SectionCard(
+                        title = row.partyName ?: row.narration.ifBlank { row.voucherType.displayName },
+                        subtitle = "${row.voucherNumber} • ${row.date.format(REGISTER_ROW_DATE_FORMAT)}",
+                        trailing = { Amount(row.totalAmount, style = MaterialTheme.typography.titleSmall, emphasize = true) }
+                    ) {}
+                }
+            }
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
+                item { TableRow("Total (${report.totalCount} vouchers)", money = report.totalAmount, emphasize = true) }
+                items(report.months, key = { it.month.toString() }) { m ->
+                    SectionCard(
+                        // A month with no vouchers shows its real count of 0 but has no detail to open.
+                        onClick = if (m.voucherCount > 0) ({ selectedMonth = m.month }) else null,
+                        title = m.label,
+                        subtitle = if (m.voucherCount == 1) "1 voucher" else "${m.voucherCount} vouchers",
+                        trailing = { Amount(m.totalAmount, style = MaterialTheme.typography.titleSmall, emphasize = m.voucherCount > 0) }
+                    ) {}
+                }
+            }
+        }
+    }
 }

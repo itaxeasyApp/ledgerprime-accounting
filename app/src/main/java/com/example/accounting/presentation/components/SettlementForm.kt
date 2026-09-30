@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -77,7 +78,7 @@ internal fun SettlementForm(
             onValueChange = {}, readOnly = true,
             label = { Text(if (isReceipt) "Customer" else "Supplier") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
             eligibleParties.forEach { led ->
@@ -132,7 +133,7 @@ internal fun SettlementForm(
             onValueChange = {}, readOnly = true,
             label = { Text("Settlement Account") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cashBankDropdownExpanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = cashBankDropdownExpanded, onDismissRequest = { cashBankDropdownExpanded = false }) {
             cashBankLedgers.forEach { led ->
