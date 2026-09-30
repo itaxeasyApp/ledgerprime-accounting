@@ -101,6 +101,7 @@ import com.example.accounting.domain.taxation.gstreturn.GstScheme
 import com.example.accounting.domain.trading.OutstandingInvoice
 import com.example.accounting.domain.trading.TradingLineInput
 import com.example.accounting.domain.trading.TradingWorkflowEngine
+import com.example.accounting.presentation.components.BusinessDetails
 import com.example.accounting.presentation.navigation.AppRoute
 import com.example.accounting.presentation.navigation.HashRouter
 import kotlinx.coroutines.Job
@@ -817,80 +818,76 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(otpPendingPhone = null) }
     }
 
-    fun createCompany(
-        name: String,
-        tradeName: String,
-        gstin: String,
-        pan: String,
-        stateCode: String,
-        address: String,
-        email: String,
-        phone: String,
-        pinCode: String = ""
-    ) {
+    /** The shared business-details form's statutory half, applied onto [base] - legal name falls
+     * back to the trade name, and stateName is derived from the GST state-code table (falling back
+     * to "", never a guessed name, for an unrecognized code). */
+    private fun companyWithDetails(base: Company, details: BusinessDetails): Company {
+        val legalName = details.legalName.ifBlank { details.tradeName }
+        return base.copy(
+            name = legalName, legalName = legalName, tradeName = details.tradeName,
+            gstin = details.gstin, pan = details.pan,
+            stateCode = details.stateCode, stateName = Constants.GST_STATE_CODES[details.stateCode] ?: "",
+            address = details.address, email = details.email, phone = details.phone, pinCode = details.pinCode
+        )
+    }
+
+    /** The shared business-details form's branding half, applied onto [base]. */
+    private fun profileWithDetails(base: BusinessProfile, details: BusinessDetails): BusinessProfile = base.copy(
+        businessName = details.tradeName, legalName = details.legalName.ifBlank { details.tradeName },
+        constitutionType = details.constitutionType,
+        address = details.address, pinCode = details.pinCode, city = details.city, state = details.state, country = details.country,
+        phone = details.phone, email = details.email, website = details.website,
+        gstin = details.gstin, pan = details.pan, tan = details.tan, udyam = details.udyam
+    )
+
+    /**
+     * Creates the business from the shared business-details form (the Setup Wizard's first step -
+     * the only place a business is created). Writes both [Company] and its [BusinessProfile] before
+     * [switchCompany], so the profile load it triggers already finds the saved profile.
+     */
+    fun createBusiness(details: BusinessDetails) {
         viewModelScope.launch {
-            val newCompId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}"
-            val newCompany = Company(
-                companyId = newCompId,
-                name = name,
-                tradeName = tradeName,
-                gstin = Constants.normalizeTaxId(gstin),
-                pan = Constants.normalizeTaxId(pan),
-                stateCode = stateCode,
-                // Audit fix - was always the hardcoded Company.stateName default ("Maharashtra")
-                // regardless of the state code entered; now honestly derived from the real GST
-                // state-code table, falling back to "" (never a guessed name) for an unrecognized code.
-                stateName = Constants.GST_STATE_CODES[stateCode] ?: "",
-                address = address,
-                email = email,
-                phone = phone,
-                currency = "INR",
-                isDefault = false,
-                pinCode = pinCode
+            val newCompany = companyWithDetails(
+                Company(companyId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}", name = "", currency = "INR", isDefault = false),
+                details
             )
             val result = repository.createCompany(newCompany)
-            if (result is AccountingResult.Success) {
-                switchCompany(newCompany)
-                emitMessage("Your business '${newCompany.name}' is set up and ready")
-                // Real gap fix (docs/CORRECTIONS_LOG.md, user report: "its not taking auto Business
-                // setup wizard") - a brand-new business previously landed on the Dashboard with no
-                // guided next step; now continues straight into the same Business Setup Wizard
-                // reachable from Profile & Business Setup, never a second/different flow.
-                navigateTo(AppRoute.ProfileWizard)
-            } else {
+            if (result !is AccountingResult.Success) {
                 emitMessage("Error setting up your business: ${result.errorOrNull()?.message}")
+                return@launch
             }
+            val profile = profileWithDetails(BusinessProfile(businessProfileId = "", companyId = newCompany.companyId, businessName = details.tradeName), details)
+            val profileResult = profileService.upsertBusinessProfile(newCompany.companyId, profile)
+            switchCompany(newCompany)
+            if (profileResult is AccountingResult.Success) _uiState.update { it.copy(businessProfile = profileResult.data) }
+            emitMessage("Your business '${details.tradeName}' is set up and ready")
         }
     }
 
-    /** Edit-Company fix - see [AccountingRepository.updateCompany]. `companies`/`currentCompany`
-     * refresh on their own once this returns (`loadCompaniesAndInitialData`'s `getCompanies()`
-     * collector is a live Room Flow over the `companies` table) - no manual state patch needed
-     * here, same as every other DB write in this ViewModel. */
-    fun updateCompany(
-        companyId: String,
-        name: String,
-        tradeName: String,
-        gstin: String,
-        pan: String,
-        stateCode: String,
-        address: String,
-        email: String,
-        phone: String,
-        pinCode: String = ""
-    ) {
+    /**
+     * The single save path for the shared business-details form (Setup Wizard, Settings > My
+     * Business). Writes [Company] (statutory: legal name, GSTIN, PAN, state code, contact) and
+     * [BusinessProfile] (branding) together so the two can no longer diverge; [applyExtras] lets
+     * the wizard add its bank/terms fields to the same profile save.
+     */
+    fun saveBusinessDetails(details: BusinessDetails, applyExtras: (BusinessProfile) -> BusinessProfile = { it }) {
         viewModelScope.launch {
-            val existing = _uiState.value.companies.find { it.companyId == companyId } ?: return@launch
-            val updated = existing.copy(
-                name = name, tradeName = tradeName,
-                gstin = Constants.normalizeTaxId(gstin), pan = Constants.normalizeTaxId(pan),
-                stateCode = stateCode, address = address, email = email, phone = phone, pinCode = pinCode
-            )
-            val result = repository.updateCompany(updated)
-            if (result is AccountingResult.Success) {
-                emitMessage("Business details updated")
-            } else {
-                emitMessage("Error updating your business: ${result.errorOrNull()?.message}")
+            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
+            val updatedCompany = companyWithDetails(comp, details)
+            val companyResult = repository.updateCompany(updatedCompany)
+            if (companyResult !is AccountingResult.Success) {
+                emitMessage("Error updating your business: ${companyResult.errorOrNull()?.message}")
+                return@launch
+            }
+            val base = _uiState.value.businessProfile ?: BusinessProfile(businessProfileId = "", companyId = comp.companyId, businessName = details.tradeName)
+            when (val result = profileService.upsertBusinessProfile(comp.companyId, applyExtras(profileWithDetails(base, details)))) {
+                is AccountingResult.Success -> {
+                    // One update for both, so a form re-seeding on the new profile id never sees
+                    // the old Company (the companies Room Flow catches up on its own afterwards).
+                    _uiState.update { it.copy(currentCompany = updatedCompany, businessProfile = result.data) }
+                    emitMessage("Saved")
+                }
+                is AccountingResult.Failure -> emitMessage("Failed: ${result.error.message}")
             }
         }
     }
@@ -2416,45 +2413,9 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    /** Profile Wizard (Part 2) - the full [BusinessProfile] shape, unlike [updateBusinessProfile]'s
-     * 7-field subset (kept for the old single-page screen, unchanged). Called once per wizard
-     * step ("Save progress" requirement) - always `.copy()`s over the currently-loaded profile, so
-     * a step the user hasn't reached yet never gets blanked by an earlier step's save. */
-    fun updateBusinessProfileFull(
-        businessName: String, legalName: String, constitutionType: com.example.accounting.domain.rendering.ConstitutionType,
-        address: String, pinCode: String, city: String, state: String, country: String, phone: String, email: String, website: String,
-        gstin: String, pan: String, tan: String, udyam: String,
-        bankName: String, bankAccountNumber: String, bankIfsc: String, bankBranch: String, upiId: String,
-        termsAndConditions: String
-    ) {
-        viewModelScope.launch {
-            // Real bug fix (docs/CORRECTIONS_LOG.md, user report: "not taking auto Business setup
-            // wizard") - same silent-no-op issue as [updateBusinessProfile] above, plus this
-            // function previously gave no feedback even on a real success, making every "Next"/
-            // "Finish" tap in the wizard look like it did nothing.
-            val comp = _uiState.value.currentCompany ?: run { emitMessage("Set up your business first."); return@launch }
-            val base = _uiState.value.businessProfile ?: BusinessProfile(businessProfileId = "", companyId = comp.companyId, businessName = businessName)
-            val profile = base.copy(
-                businessName = businessName, legalName = legalName, constitutionType = constitutionType,
-                address = address, pinCode = pinCode, city = city, state = state, country = country,
-                phone = phone, email = email, website = website,
-                gstin = gstin, pan = pan, tan = tan, udyam = udyam,
-                bankName = bankName, bankAccountNumber = bankAccountNumber, bankIfsc = bankIfsc, bankBranch = bankBranch, upiId = upiId,
-                termsAndConditions = termsAndConditions
-            )
-            when (val result = profileService.upsertBusinessProfile(comp.companyId, profile)) {
-                is AccountingResult.Success -> {
-                    _uiState.update { it.copy(businessProfile = result.data) }
-                    emitMessage("Saved")
-                }
-                is AccountingResult.Failure -> emitMessage("Failed: ${result.error.message}")
-            }
-        }
-    }
-
     /** Reuses the exact asset pipeline already established for OCR/import (`sha256` + real
      * [DocumentAssetType], never a fake/placeholder asset id) - picks up wherever the profile
-     * currently stands via `.copy()`, same safe-partial-update pattern as [updateBusinessProfileFull]. */
+     * currently stands via `.copy()`, same safe-partial-update pattern as [saveBusinessDetails]. */
     fun uploadBusinessBrandingAsset(imageFile: File, type: DocumentAssetType) {
         viewModelScope.launch {
             // Real bug fix (docs/CORRECTIONS_LOG.md, user report: "logo and signature is also not

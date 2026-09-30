@@ -26,7 +26,7 @@ import com.example.accounting.presentation.theme.Spacing
  * Phase UI-03: the one generic modal-dialog shell - consolidates the title/scrollable-content/
  * Cancel+Confirm-actions layout every `Create*Dialog.kt` file (`CreatePartyDialog`,
  * `CreateLedgerDialog`, `CreateStockItemDialog`, `CreateBankUpiProfileDialog`,
- * `CreateCompanyDialog`) already hand-builds identically. [content] holds only the dialog's own
+ * and formerly `CreateCompanyDialog`) already hand-builds identically. [content] holds only the dialog's own
  * form fields - this component has no knowledge of what any specific dialog collects, per "widgets
  * accept data through parameters, never hardcoded business data." Existing dialogs are not
  * retrofitted in this pass (out of scope - all five already work and are already tested).

@@ -5,13 +5,22 @@
 This app stores business identity data in **two separate places**:
 
 - **`Company`** (`domain/company/Company.kt`) — the sole authoritative record for
-  statutory/accounting fields (`name`, `gstin`, `pan`, `stateCode`, ...). Edited via
-  **Settings > My Business > Edit Business Details / GST Details / Contact Details**.
+  statutory/accounting fields (`name`, `gstin`, `pan`, `stateCode`, ...).
 - **`BusinessProfile`** (`domain/rendering/BusinessProfile.kt`) — the document-branding identity
   (Phase 7D): trade name, address, GSTIN, PAN, phone, email, logo, signature, bank/UPI details.
-  Edited via **Profile & Business Setup**. Deliberately separate from `Company` so a business can
-  have a shorter trading name on invoices than its registered legal name — see that file's own
-  KDoc.
+  Deliberately separate from `Company` so a business can have a shorter trading name on invoices
+  than its registered legal name — see that file's own KDoc.
+
+**Both are entered through one shared form** (`presentation/components/BusinessDetailsForm.kt`,
+2026-09-30, user request: "make at one place form and make its reusable component"): the
+Business Setup Wizard (which also creates the business - the old separate Set Up My Business
+dialog and Profile & Business Setup's own Business Profile form are gone) and Settings > My
+Business > Edit Business Details / GST Details / Contact Details all show its sections and save
+through `AccountingViewModel.saveBusinessDetails`/`createBusiness`, which write `Company` and
+`BusinessProfile` together. Before this, a GSTIN entered in the wizard only reached
+`BusinessProfile` and so never reached invoices or GST filing (which read `Company`). The one
+remaining `BusinessProfile`-only write is the OCR "Apply" of a scanned GST certificate
+(`applyOcrBusinessProfileDraft`) - deliberately never a silent change to the statutory record.
 
 Because the app is strictly single-business (one `Company` row per install), a user editing
 "their business name" in Profile & Business Setup reasonably expects **every screen** that shows
@@ -56,9 +65,9 @@ real regression, not a consistency fix.
 | `presentation/components/VoucherDetailDialog.kt` (`InvoiceQrSection`) | `SELLER_GSTIN` in the invoice QR payload | Correct as-is - statutory, must be `Company.gstin` |
 | `data/repository/AccountingRepository.kt` (`sellerSnapshot`, used by `assembleDocumentData`/`assembleDocumentDataFromVoucher` - i.e. Invoice Preview and all document rendering) | Seller name/address/GSTIN/PAN/phone/email on every generated invoice/document | **Fixed 2026-09** - `name`/`address`/`phone`/`email` correctly prefer `BusinessProfile` (branding); `gstin`/`pan` previously did too (a no-mock-data audit finding: a real tax invoice's GSTIN/PAN is statutory, same as the QR row above - a stale/independently-edited Business Profile value could print wrong while GST filing stayed correct). Now unconditionally `company.gstin`/`company.pan`. |
 
-`Settings > My Business > Edit Business Details/GST Details/Contact Details` themselves correctly
-show and edit `Company`'s own current values (that IS the screen that edits `Company`) - not a
-violation of this rule, since that screen's whole purpose is `Company`, not display consistency.
+The shared business-details form (Setup Wizard, `Settings > My Business > Edit Business
+Details/GST Details/Contact Details`) is an editor, not a display: it seeds GSTIN/PAN/state code
+from `Company` first and everything else from `BusinessProfile` first, and saves both records.
 
 ## Adding a new screen that shows business identity
 

@@ -53,7 +53,6 @@ import com.example.accounting.presentation.navigation.AppRoute
 import com.example.accounting.presentation.components.AppDivider
 import com.example.accounting.presentation.components.AppTopBar
 import com.example.accounting.presentation.components.CreateBankUpiProfileDialog
-import com.example.accounting.presentation.components.CreateCompanyDialog
 import com.example.accounting.presentation.components.CreateGroupDialog
 import com.example.accounting.presentation.components.CreateLedgerDialog
 import com.example.accounting.presentation.components.CreatePartyDialog
@@ -106,28 +105,6 @@ data class NavItem(
  * already-open form as a prefill, never a second scan/decode mechanism. */
 private enum class BarcodeScanTarget { ItemLookup, PurchaseVoucher }
 
-/** Audit fix (Company/Profile/Ledger Setup) - reuse the Company's own already-entered
- * name/GSTIN/PAN/address/phone/email as the Business Profile screen's starting point instead of
- * every field starting blank, when no real [com.example.accounting.domain.rendering.BusinessProfile]
- * has been saved yet for this company. Purely a seed for the initial on-screen values - never
- * persisted as-is; both [com.example.accounting.presentation.features.profile.ProfileScreen] and
- * [com.example.accounting.presentation.features.profile.ProfileWizardScreen]'s own `onSave` still
- * independently read/write the real `uiState.businessProfile`. */
-private fun businessProfileSeed(uiState: com.example.accounting.presentation.viewmodel.AccountingUiState): com.example.accounting.domain.rendering.BusinessProfile? =
-    uiState.businessProfile ?: uiState.currentCompany?.let { comp ->
-        com.example.accounting.domain.rendering.BusinessProfile(
-            businessProfileId = "",
-            companyId = comp.companyId,
-            businessName = comp.tradeName.ifBlank { comp.name },
-            legalName = comp.name,
-            address = comp.address,
-            phone = comp.phone,
-            email = comp.email,
-            gstin = comp.gstin,
-            pan = comp.pan
-        )
-    }
-
 /**
  * Phase 7J UI: 5-item bottom nav (Home/Sales/Purchases/Money/Reports) per the UX spec's Section
  * 14. Every other area (Party, Items, Cash/Bank, Outstanding, Profile, Import/OCR, Subscription,
@@ -173,7 +150,6 @@ fun MainAppScreen(
     // Architecture correction (real Group hierarchy) - opens CreateGroupDialog.
     var isCreateGroupOpen by remember { mutableStateOf(false) }
     var isCreateStockItemOpen by remember { mutableStateOf(false) }
-    var isCreateCompanyOpen by remember { mutableStateOf(false) }
     var selectedVoucherDetail by remember { mutableStateOf<Voucher?>(null) }
     var showInvoicePreview by remember { mutableStateOf(false) }
     var createPartyRole by remember { mutableStateOf<PartyRole?>(null) }
@@ -373,8 +349,8 @@ fun MainAppScreen(
     // Product decision - single-business app: a business-less user must still see the Dashboard
     // and every bottom-nav function, not a forced "set up your business first" gate. AppTopBar
     // renders "My Business" / "GSTIN: --" as a static header (no switcher - there is only ever
-    // one business); "Set Up My Business" lives in Profile > Company & Sync, reached via the
-    // profile icon, the same isCreateCompanyOpen/CreateCompanyDialog every edit already uses.
+    // one business); "Set Up My Business" (Settings > My Business) opens the Business Setup Wizard,
+    // whose first step creates the business - the one shared business-details form.
     // uiState's lists (vouchers/parties/ledgers/...) simply stay empty since nothing was ever
     // loaded for a null company, and every single AccountingViewModel action already guards on
     // `_uiState.value.currentCompany ?: return` - none of them can crash on a null company, they
@@ -751,13 +727,9 @@ fun MainAppScreen(
 
                         is AppRoute.SettingsAndSync -> SettingsAndSyncScreen(
                             uiState = uiState,
-                            onOpenCreateCompany = { isCreateCompanyOpen = true },
-                            onSaveCompany = { company ->
-                                viewModel.updateCompany(
-                                    company.companyId, company.name, company.tradeName, company.gstin, company.pan,
-                                    company.stateCode, company.address, company.email, company.phone, company.pinCode
-                                )
-                            },
+                            onOpenCreateCompany = { viewModel.navigateTo(AppRoute.ProfileWizard) },
+                            onSaveBusinessDetails = { viewModel.saveBusinessDetails(it) },
+                            onLookupPinCode = { viewModel.lookupPinCode(it) },
                             onDeleteCompany = { viewModel.deleteCompany(it.companyId) },
                             onTogglePeriodLock = { viewModel.togglePeriodLock(it) },
                             onAddPreviousFinancialYear = { viewModel.addPreviousFinancialYear() },
@@ -855,14 +827,10 @@ fun MainAppScreen(
                         )
 
                         is AppRoute.Profile -> ProfileScreen(
-                            businessProfile = businessProfileSeed(uiState),
                             individualProfile = uiState.individualProfile,
                             isPinCodeLookupInProgress = uiState.isPinCodeLookupInProgress,
                             pinCodeLookupResult = uiState.pinCodeLookupResult,
                             onLookupPinCode = { viewModel.lookupPinCode(it) },
-                            onSaveBusinessProfile = { bn, ln, addr, pin, city, state, country, ph, em, gst, pan ->
-                                viewModel.updateBusinessProfile(bn, ln, addr, ph, em, gst, pan, pin, city, state, country)
-                            },
                             onSaveIndividualProfile = { name, addr, pin, city, state, country, ph, em, pan ->
                                 viewModel.updateIndividualProfile(name, addr, ph, em, pan, pin, city, state, country)
                             },
@@ -874,19 +842,15 @@ fun MainAppScreen(
                         )
 
                         is AppRoute.ProfileWizard -> ProfileWizardScreen(
-                            businessProfile = businessProfileSeed(uiState),
+                            company = uiState.currentCompany,
+                            businessProfile = uiState.businessProfile,
                             logoAssetLabel = uiState.businessProfile?.logoAssetId,
                             signatureAssetLabel = uiState.businessProfile?.signatureAssetId,
                             isPinCodeLookupInProgress = uiState.isPinCodeLookupInProgress,
                             pinCodeLookupResult = uiState.pinCodeLookupResult,
                             onLookupPinCode = { viewModel.lookupPinCode(it) },
-                            onSave = { businessName, legalName, constitutionType, address, pinCode, city, state, country,
-                                phone, email, website, gstin, pan, tan, udyam, bankName, bankAccountNumber, bankIfsc, bankBranch, upiId, terms ->
-                                viewModel.updateBusinessProfileFull(
-                                    businessName, legalName, constitutionType, address, pinCode, city, state, country,
-                                    phone, email, website, gstin, pan, tan, udyam, bankName, bankAccountNumber, bankIfsc, bankBranch, upiId, terms
-                                )
-                            },
+                            onCreateBusiness = { viewModel.createBusiness(it) },
+                            onSave = { details, applyExtras -> viewModel.saveBusinessDetails(details, applyExtras) },
                             onPickLogo = { logoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onPickSignature = { signaturePickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onFinish = { viewModel.navigateTo(AppRoute.Profile) }
@@ -1049,19 +1013,6 @@ fun MainAppScreen(
         CreateStockItemDialog(
             onDismiss = { isCreateStockItemOpen = false },
             onCreateItem = viewModel::createStockItem
-        )
-    }
-
-    if (isCreateCompanyOpen) {
-        CreateCompanyDialog(
-            onDismiss = { isCreateCompanyOpen = false },
-            isLookingUp = uiState.isPinCodeLookupInProgress,
-            lookupResult = uiState.pinCodeLookupResult,
-            onLookupPinCode = { viewModel.lookupPinCode(it) },
-            onCreateCompany = { name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode ->
-                viewModel.createCompany(name, tradeName, gstin, pan, stateCode, address, email, phone, pinCode)
-                isCreateCompanyOpen = false
-            }
         )
     }
 

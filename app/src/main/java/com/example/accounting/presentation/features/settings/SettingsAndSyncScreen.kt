@@ -47,7 +47,13 @@ import com.example.accounting.domain.company.AccountingMode
 import com.example.accounting.domain.company.BusinessType
 import com.example.accounting.domain.company.Company
 import com.example.accounting.domain.financialyear.AccountingPeriod
+import com.example.accounting.presentation.components.BusinessContactFields
+import com.example.accounting.presentation.components.BusinessDetails
+import com.example.accounting.presentation.components.BusinessDetailsFormState
+import com.example.accounting.presentation.components.BusinessIdentityFields
+import com.example.accounting.presentation.components.BusinessTaxFields
 import com.example.accounting.presentation.components.SectionCard
+import com.example.accounting.presentation.components.rememberBusinessDetailsFormState
 import com.example.accounting.presentation.viewmodel.AccountingUiState
 
 /**
@@ -95,12 +101,12 @@ private sealed class DeleteBusinessStage {
 @Composable
 fun SettingsAndSyncScreen(
     uiState: AccountingUiState,
+    /** Opens the Business Setup Wizard, where a business is created. */
     onOpenCreateCompany: () -> Unit,
-    /** Saves a whole edited [Company] snapshot (see [AccountingRepository.updateCompany]) - each
-     * sub-form below builds its own copy of the current business with only its own fields changed
-     * and everything else carried over untouched, so one save path covers Business Details/GST
-     * Details/Contact Details without three separate ViewModel functions. */
-    onSaveCompany: (Company) -> Unit = {},
+    /** Business Details / GST Details / Contact Details all save the shared form's
+     * [BusinessDetails] through this one path (`AccountingViewModel.saveBusinessDetails`). */
+    onSaveBusinessDetails: (BusinessDetails) -> Unit = {},
+    onLookupPinCode: (String) -> Unit = {},
     /** Full Company CRUD - Delete. Real, irreversible, cascades all of that business's data
      * (see [com.example.accounting.data.repository.AccountingRepository.deleteCompany]). */
     onDeleteCompany: (Company) -> Unit = {},
@@ -225,20 +231,26 @@ fun SettingsAndSyncScreen(
             modifier = modifier
         )
 
-        is SettingsStep.EditBusinessDetails -> currentCompany?.let { company ->
-            EditBusinessDetailsStep(company = company, onBack = { step = SettingsStep.MyBusiness }, onSave = onSaveCompany, modifier = modifier)
-        }
+        is SettingsStep.EditBusinessDetails -> BusinessDetailsSectionStep(
+            title = "Edit Business Details", uiState = uiState, onBack = { step = SettingsStep.MyBusiness },
+            onSave = onSaveBusinessDetails, sectionValid = { it.identityValid }, modifier = modifier
+        ) { BusinessIdentityFields(it, modifier = Modifier.fillMaxWidth()) }
 
         is SettingsStep.DangerZone -> currentCompany?.let { company ->
             DangerZoneStep(company = company, onBack = { step = SettingsStep.MyBusiness }, onRequestDelete = { deleteStage = DeleteBusinessStage.Warning }, modifier = modifier)
         }
 
-        is SettingsStep.GstDetails -> currentCompany?.let { company ->
-            GstDetailsStep(company = company, onBack = { step = SettingsStep.MyBusiness }, onSave = onSaveCompany, modifier = modifier)
-        }
+        is SettingsStep.GstDetails -> BusinessDetailsSectionStep(
+            title = "GST Details", uiState = uiState, onBack = { step = SettingsStep.MyBusiness },
+            onSave = onSaveBusinessDetails, sectionValid = { it.taxValid }, modifier = modifier,
+            subtitle = "Registration status and filing frequency are under GST Dashboard > GST Settings"
+        ) { BusinessTaxFields(it, modifier = Modifier.fillMaxWidth()) }
 
-        is SettingsStep.ContactDetails -> currentCompany?.let { company ->
-            ContactDetailsStep(company = company, onBack = { step = SettingsStep.MyBusiness }, onSave = onSaveCompany, modifier = modifier)
+        is SettingsStep.ContactDetails -> BusinessDetailsSectionStep(
+            title = "Contact Details", uiState = uiState, onBack = { step = SettingsStep.MyBusiness },
+            onSave = onSaveBusinessDetails, sectionValid = { it.contactValid }, modifier = modifier
+        ) {
+            BusinessContactFields(it, uiState.isPinCodeLookupInProgress, uiState.pinCodeLookupResult, onLookupPinCode, modifier = Modifier.fillMaxWidth())
         }
 
         is SettingsStep.InvoicePreferences -> currentCompany?.let { company ->
@@ -397,21 +409,21 @@ private fun MyBusinessStep(
 
         SectionCard(
             title = "Edit Business Details",
-            subtitle = "Legal entity name, trade name",
+            subtitle = "Trade name, legal name, business type",
             onClick = onOpenEditBusinessDetails,
             trailing = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) }
         ) {}
 
         SectionCard(
             title = "GST Details",
-            subtitle = "GSTIN, PAN, state",
+            subtitle = "GSTIN, PAN, state code, TAN, UDYAM",
             onClick = onOpenGstDetails,
             trailing = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) }
         ) {}
 
         SectionCard(
             title = "Contact Details",
-            subtitle = "Phone, email, address",
+            subtitle = "Phone, email, website, address",
             onClick = onOpenContactDetails,
             trailing = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null) }
         ) {}
@@ -476,104 +488,34 @@ private fun DangerZoneStep(company: Company, onBack: () -> Unit, onRequestDelete
     }
 }
 
+/**
+ * Edit Business Details / GST Details / Contact Details - each is one section of the shared
+ * business-details form (BusinessDetailsForm.kt, the same one the Setup Wizard uses) and saves
+ * through the same `saveBusinessDetails`, so Company and Business Profile stay in step. [sectionValid]
+ * gates Save on the shown section only - the other sections' values are carried over unchanged.
+ */
 @Composable
-private fun EditBusinessDetailsStep(company: Company, onBack: () -> Unit, onSave: (Company) -> Unit, modifier: Modifier = Modifier) {
-    var name by remember(company.companyId) { mutableStateOf(company.name) }
-    var tradeName by remember(company.companyId) { mutableStateOf(company.tradeName) }
-
+private fun BusinessDetailsSectionStep(
+    title: String,
+    uiState: AccountingUiState,
+    onBack: () -> Unit,
+    onSave: (BusinessDetails) -> Unit,
+    sectionValid: (BusinessDetailsFormState) -> Boolean,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    content: @Composable (BusinessDetailsFormState) -> Unit
+) {
+    val state = rememberBusinessDetailsFormState(uiState.currentCompany, uiState.businessProfile)
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        SettingsBackHeader("Edit Business Details", onBack)
-        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Legal Entity Name") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = tradeName, onValueChange = { tradeName = it }, label = { Text("Trade Name (Optional)") }, modifier = Modifier.fillMaxWidth())
+        SettingsBackHeader(title, onBack, subtitle = subtitle)
+        content(state)
         Spacer(modifier = Modifier.height(4.dp))
         Button(
-            onClick = { onSave(company.copy(name = name, tradeName = tradeName)); onBack() },
-            enabled = name.isNotBlank(),
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Save Changes") }
-    }
-}
-
-@Composable
-private fun GstDetailsStep(company: Company, onBack: () -> Unit, onSave: (Company) -> Unit, modifier: Modifier = Modifier) {
-    var gstin by remember(company.companyId) { mutableStateOf(company.gstin) }
-    var pan by remember(company.companyId) { mutableStateOf(company.pan) }
-    var stateCode by remember(company.companyId) { mutableStateOf(company.stateCode) }
-
-    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
-    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
-    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
-    androidx.compose.runtime.LaunchedEffect(gstin) {
-        if (pan.isBlank()) com.example.accounting.core.common.ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
-    }
-
-    // Play Store readiness correction (docs/CORRECTIONS_LOG.md) - this is the authoritative
-    // statutory GSTIN/PAN (GST filing, e-invoice QR all read Company directly, never Business
-    // Profile) - real format validation matters most here, not just cosmetically on a branding copy.
-    val gstinInvalid = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)
-    val panInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidPan(pan)
-
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        SettingsBackHeader("GST Details", onBack, subtitle = "Registration status and filing frequency are under GST Dashboard > GST Settings")
-        OutlinedTextField(
-            value = gstin, onValueChange = { gstin = it.uppercase() }, label = { Text("GSTIN") },
-            isError = gstinInvalid, supportingText = if (gstinInvalid) { { Text("Not a valid GSTIN") } } else null,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = pan, onValueChange = { pan = it.uppercase() }, label = { Text("PAN") },
-            isError = panInvalid, supportingText = if (panInvalid) { { Text("Not a valid PAN") } } else null,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(value = stateCode, onValueChange = { stateCode = it }, label = { Text("State Code") }, modifier = Modifier.fillMaxWidth())
-        Spacer(modifier = Modifier.height(4.dp))
-        Button(
-            onClick = { onSave(company.copy(gstin = gstin, pan = pan, stateCode = stateCode)); onBack() },
-            enabled = !gstinInvalid && !panInvalid,
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Save Changes") }
-    }
-}
-
-@Composable
-private fun ContactDetailsStep(company: Company, onBack: () -> Unit, onSave: (Company) -> Unit, modifier: Modifier = Modifier) {
-    var phone by remember(company.companyId) { mutableStateOf(company.phone) }
-    var email by remember(company.companyId) { mutableStateOf(company.email) }
-    var address by remember(company.companyId) { mutableStateOf(company.address) }
-    var pinCode by remember(company.companyId) { mutableStateOf(company.pinCode) }
-
-    val phoneInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidIndianMobile(phone)
-    val emailInvalid = !com.example.accounting.core.common.ContactFieldValidation.isValidEmail(email)
-
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        SettingsBackHeader("Contact Details", onBack)
-        OutlinedTextField(
-            value = phone, onValueChange = { phone = it }, label = { Text("Phone") },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone),
-            isError = phoneInvalid, supportingText = if (phoneInvalid) { { Text("Not a valid 10-digit mobile number") } } else null,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = email, onValueChange = { email = it }, label = { Text("Email") },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
-            isError = emailInvalid, supportingText = if (emailInvalid) { { Text("Not a valid email address") } } else null,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Registered Business Address") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = pinCode, onValueChange = { pinCode = it }, label = { Text("PIN Code") }, modifier = Modifier.fillMaxWidth())
-        Spacer(modifier = Modifier.height(4.dp))
-        Button(
-            onClick = { onSave(company.copy(phone = phone, email = email, address = address, pinCode = pinCode)); onBack() },
-            enabled = !phoneInvalid && !emailInvalid,
+            onClick = { onSave(state.toDetails()); onBack() },
+            enabled = sectionValid(state),
             modifier = Modifier.fillMaxWidth()
         ) { Text("Save Changes") }
     }

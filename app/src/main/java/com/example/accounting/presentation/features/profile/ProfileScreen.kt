@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
@@ -36,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import com.example.accounting.core.common.ContactFieldValidation
 import com.example.accounting.domain.ocr.OcrDocumentType
 import com.example.accounting.domain.profile.PinCodeLookupResult
-import com.example.accounting.domain.rendering.BusinessProfile
 import com.example.accounting.domain.rendering.IndividualProfile
 import com.example.accounting.presentation.components.ActionButton
 import com.example.accounting.presentation.components.AddressPinCodeFields
@@ -48,19 +46,18 @@ import com.example.accounting.presentation.theme.Spacing
 /**
  * Phase 7J UI: "Profile & Business Setup" - reached from the persistent top-bar icon, never a
  * bottom-nav item (per the UX spec's "secondary features are reached through their respective
- * sections" rule). Shows both a Business section and an Individual section unconditionally -
+ * sections" rule). Business details open the Setup Wizard (the one shared business form); the
+ * Individual section is shown unconditionally -
  * nothing in the frozen `ProfileApplicationService`/domain model enforces exclusivity between
  * them, so this screen doesn't invent one either. Also hosts the Import/Subscription/Company &
  * Sync entry points, matching the spec's "secondary features reached through here" framing.
  */
 @Composable
 fun ProfileScreen(
-    businessProfile: BusinessProfile?,
     individualProfile: IndividualProfile?,
     isPinCodeLookupInProgress: Boolean = false,
     pinCodeLookupResult: PinCodeLookupResult? = null,
     onLookupPinCode: (String) -> Unit = {},
-    onSaveBusinessProfile: (businessName: String, legalName: String, address: String, pinCode: String, city: String, state: String, country: String, phone: String, email: String, gstin: String, pan: String) -> Unit,
     onSaveIndividualProfile: (name: String, address: String, pinCode: String, city: String, state: String, country: String, phone: String, email: String, pan: String) -> Unit,
     onOpenImportData: () -> Unit,
     onOpenSubscription: () -> Unit,
@@ -108,7 +105,8 @@ fun ProfileScreen(
             Icon(Icons.Default.DocumentScanner, contentDescription = null)
         }
 
-        BusinessProfileSection(businessProfile, isPinCodeLookupInProgress, pinCodeLookupResult, onLookupPinCode, onSaveBusinessProfile)
+        // Business details are edited only in the wizard above (shared BusinessDetailsForm) - no
+        // second business form here.
         IndividualProfileSection(individualProfile, isPinCodeLookupInProgress, pinCodeLookupResult, onLookupPinCode, onSaveIndividualProfile)
 
         SectionCard(onClick = onOpenImportData, title = "Import & Scan", subtitle = "CSV/JSON import, scan a receipt") {
@@ -143,101 +141,6 @@ private fun ProfileSectionHeader(icon: androidx.compose.ui.graphics.vector.Image
 }
 
 @Composable
-private fun BusinessProfileSection(
-    profile: BusinessProfile?,
-    isPinCodeLookupInProgress: Boolean,
-    pinCodeLookupResult: PinCodeLookupResult?,
-    onLookupPinCode: (String) -> Unit,
-    onSave: (String, String, String, String, String, String, String, String, String, String, String) -> Unit
-) {
-    var businessName by remember(profile) { mutableStateOf(profile?.businessName ?: "") }
-    var legalName by remember(profile) { mutableStateOf(profile?.legalName ?: "") }
-    var address by remember(profile) { mutableStateOf(profile?.address ?: "") }
-    var pinCode by remember(profile) { mutableStateOf(profile?.pinCode ?: "") }
-    var city by remember(profile) { mutableStateOf(profile?.city ?: "") }
-    var state by remember(profile) { mutableStateOf(profile?.state ?: "") }
-    var country by remember(profile) { mutableStateOf(profile?.country ?: "") }
-    var phone by remember(profile) { mutableStateOf(profile?.phone ?: "") }
-    var email by remember(profile) { mutableStateOf(profile?.email ?: "") }
-    var gstin by remember(profile) { mutableStateOf(profile?.gstin ?: "") }
-    var pan by remember(profile) { mutableStateOf(profile?.pan ?: "") }
-
-    androidx.compose.runtime.LaunchedEffect(pinCodeLookupResult) {
-        val result = pinCodeLookupResult
-        if (result != null && result.success && result.pinCode == pinCode) {
-            city = result.city; state = result.state; country = result.country
-        }
-    }
-    // Real gap fix (docs/CORRECTIONS_LOG.md, user request: "Extract Pan No from GSTIN") - a GSTIN
-    // already contains its holder's real PAN (characters 3-12); auto-fills PAN the moment a valid
-    // GSTIN is entered, only while PAN is still blank - never overwrites a value the user typed.
-    androidx.compose.runtime.LaunchedEffect(gstin) {
-        if (pan.isBlank()) ContactFieldValidation.extractPanFromGstin(gstin)?.let { pan = it }
-    }
-
-    // Play Store readiness correction - real format validation for phone/email/PAN, matching the
-    // GSTIN pattern already used elsewhere; all four stay optional (blank is valid), this only
-    // rejects a non-blank value that isn't shaped like a real one.
-    val phoneInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
-    val emailInvalid = !ContactFieldValidation.isValidEmail(email)
-    val gstinInvalid = gstin.isNotBlank() && !com.example.accounting.domain.taxation.gst.GSTRules.isValidGSTIN(gstin)
-    val panInvalid = !ContactFieldValidation.isValidPan(pan)
-
-    SectionCard(elevated = true) {
-        ProfileSectionHeader(Icons.Default.Business, "Business Profile")
-        Spacer(modifier = Modifier.height(Spacing.md))
-        FormField(value = businessName, onValueChange = { businessName = it }, label = "Trade name", modifier = Modifier.fillMaxWidth())
-        Spacer(modifier = Modifier.height(Spacing.sm))
-        FormField(value = legalName, onValueChange = { legalName = it }, label = "Legal name", modifier = Modifier.fillMaxWidth())
-        Spacer(modifier = Modifier.height(Spacing.sm))
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(
-                value = phone, onValueChange = { phone = it }, label = "Phone", keyboardType = KeyboardType.Phone,
-                isError = phoneInvalid, supportingText = if (phoneInvalid) "Not a valid 10-digit mobile number" else null,
-                modifier = Modifier.weight(1f)
-            )
-            FormField(
-                value = email, onValueChange = { email = it }, label = "Email", keyboardType = KeyboardType.Email,
-                isError = emailInvalid, supportingText = if (emailInvalid) "Not a valid email address" else null,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(modifier = Modifier.height(Spacing.sm))
-        AddressPinCodeFields(
-            address = address, onAddressChange = { address = it },
-            pinCode = pinCode, onPinCodeChange = { pinCode = it },
-            city = city, onCityChange = { city = it },
-            state = state, onStateChange = { state = it },
-            country = country, onCountryChange = { country = it },
-            isLookingUp = isPinCodeLookupInProgress,
-            lookupErrorMessage = pinCodeLookupResult?.takeIf { it.pinCode == pinCode && !it.success }?.errorMessage,
-            onLookupPinCode = onLookupPinCode,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(Spacing.sm))
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            FormField(
-                value = gstin, onValueChange = { gstin = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "GSTIN",
-                isError = gstinInvalid, supportingText = if (gstinInvalid) "Not a valid GSTIN" else null,
-                modifier = Modifier.weight(1f)
-            )
-            FormField(
-                value = pan, onValueChange = { pan = com.example.accounting.core.common.Constants.normalizeTaxId(it) }, label = "PAN",
-                isError = panInvalid, supportingText = if (panInvalid) "Not a valid PAN" else null,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(modifier = Modifier.height(Spacing.md))
-        ActionButton(
-            text = "Save Business Profile",
-            onClick = { onSave(businessName, legalName, address, pinCode, city, state, country, phone, email, gstin, pan) },
-            enabled = businessName.isNotBlank() && !phoneInvalid && !emailInvalid && !gstinInvalid && !panInvalid,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
 private fun IndividualProfileSection(
     profile: IndividualProfile?,
     isPinCodeLookupInProgress: Boolean,
@@ -262,7 +165,7 @@ private fun IndividualProfileSection(
         }
     }
 
-    // Play Store readiness correction - see BusinessProfileSection's identical rationale above.
+    // Play Store readiness correction - real format validation, same as the shared business form.
     val phoneInvalid = !ContactFieldValidation.isValidIndianMobile(phone)
     val emailInvalid = !ContactFieldValidation.isValidEmail(email)
     // An Individual's PAN has real, legally-fixed structure: 4th character 'P' (docs/CORRECTIONS_LOG.md,
