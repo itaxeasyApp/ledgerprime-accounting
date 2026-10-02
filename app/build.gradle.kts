@@ -10,6 +10,22 @@ plugins {
   alias(libs.plugins.firebase.crashlytics)
 }
 
+
+// ---- Release signing (Phase 8, Step 24) ------------------------------------------------------------
+// The upload keystore must live OUTSIDE this repository and outside OneDrive. There is deliberately no
+// default keystore path and no default password. Provide, as environment variables or Gradle properties
+// (-P..., or ~/.gradle/gradle.properties - never a file inside the repo):
+//   KEYSTORE_PATH    absolute path of the keystore
+//   STORE_PASSWORD   keystore password
+//   KEY_PASSWORD     optional - defaults to STORE_PASSWORD (PKCS12 keystores use one password)
+//   KEY_ALIAS        optional - defaults to "upload"
+// Only the release tasks that actually sign (assembleRelease / bundleRelease / packageRelease / signRelease*
+// / validateSigningRelease) require them; debug builds, unit tests and lint do not.
+fun signingValue(name: String): String? =
+  providers.environmentVariable(name).orElse(providers.gradleProperty(name)).orNull?.takeIf { it.isNotBlank() }
+
+val releaseKeystorePath: String? = signingValue("KEYSTORE_PATH")
+val releaseStorePassword: String? = signingValue("STORE_PASSWORD")
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -26,11 +42,15 @@ android {
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
+      // No default path and no default password: both must be supplied explicitly (see the
+      // "Release signing" block at the top of this file). Left unset when absent - the guard at the bottom
+      // of this file then fails any release build with a clear message, while debug builds and tests are unaffected.
+      if (releaseKeystorePath != null && releaseStorePassword != null) {
+        storeFile = file(releaseKeystorePath)
+        storePassword = releaseStorePassword
+        keyAlias = signingValue("KEY_ALIAS") ?: "upload"
+        keyPassword = signingValue("KEY_PASSWORD") ?: releaseStorePassword
+      }
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -153,4 +173,32 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// Fails a release build that would sign with a missing, in-repo, OneDrive or known-compromised keystore -
+// with a message that never contains a password.
+gradle.taskGraph.whenReady {
+  val needsReleaseSigning = allTasks.any {
+    it.path.startsWith(":app:") && Regex("^(assemble|bundle|package|sign|validateSigning)(.*)Release").containsMatchIn(it.name) ||
+      it.path.startsWith(":app:") && it.name.matches(Regex("(assemble|bundle|package)Release.*"))
+  }
+  if (needsReleaseSigning) {
+    val problems = mutableListOf<String>()
+    if (releaseKeystorePath == null) problems += "KEYSTORE_PATH is not set (absolute path of the upload keystore, outside the repository)"
+    if (releaseStorePassword == null) problems += "STORE_PASSWORD is not set (the keystore password)"
+    if (releaseKeystorePath != null) {
+      val ks = file(releaseKeystorePath).canonicalFile
+      val repo = rootDir.canonicalFile
+      if (!ks.isFile) problems += "the keystore file does not exist: ${ks.path}"
+      if (ks.path.startsWith(repo.path + File.separator)) problems += "the keystore must live OUTSIDE the repository, but is inside it: ${ks.path}"
+      if (ks.path.contains("${File.separator}OneDrive", ignoreCase = true)) problems += "the keystore must not live in OneDrive: ${ks.path}"
+      if (ks.name.equals("my-upload-key.jks", ignoreCase = true)) problems += "my-upload-key.jks is the compromised, publicly exposed key and must not be used"
+    }
+    if (problems.isNotEmpty()) {
+      throw GradleException(
+        "Release signing is not configured safely:\n - " + problems.joinToString("\n - ") +
+          "\nSet KEYSTORE_PATH and STORE_PASSWORD (environment variables or Gradle properties; KEY_PASSWORD/KEY_ALIAS optional)."
+      )
+    }
+  }
 }

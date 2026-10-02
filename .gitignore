@@ -20,3 +20,11 @@ debug.keystore
 
 # Firebase client config (project-specific; keep out of version control)
 app/google-services.json
+
+# Signing material - private keys/keystores must never be committed (Phase 8 Step 24)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+keystore.properties

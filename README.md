@@ -134,6 +134,15 @@ GSTR-2B file has been supplied, so the file format has not been documented and n
 (`BROKEN_G7_S7_gstr9AndGstr9c_mustBeAvailableForRegularTaxpayer`, GSTR-9/9C are deliberately not offered
 until an annual-period screen exists). Run: `./gradlew.bat testDebugUnitTest` (JDK 21).
 
+**Release signing (Phase 8 Step 24)**
+- The upload keystore lives OUTSIDE this repository and outside OneDrive; there is no default keystore path or
+  password anywhere in the build. `my-upload-key.jks` (committed in the initial commit) is a compromised, publicly
+  exposed key and must not be used - the build refuses it.
+- Release builds (`assembleRelease` / `bundleRelease`) need, as environment variables or Gradle properties
+  (e.g. in `~/.gradle/gradle.properties`, never a file in the repo): `KEYSTORE_PATH`, `STORE_PASSWORD`, and
+  optionally `KEY_PASSWORD` and `KEY_ALIAS` (default `upload`). They fail with a clear message when missing, or
+  when the keystore is inside the repo or OneDrive. Debug builds and tests need none of them.
+- `*.jks`, `*.keystore`, `*.p12`, `*.pfx`, `*.pem` and `keystore.properties` are gitignored.
 **Known open items**
 - GSTR-2B remains blocked pending a real GST Portal GSTR-2B file (importer, matcher, GSTR-3B READY,
   GSTR-9 Table 8 all depend on it).
