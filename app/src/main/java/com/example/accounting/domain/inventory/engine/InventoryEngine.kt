@@ -78,11 +78,20 @@ object InventoryEngine {
 
             val (newState, movementRatePaise, movementAmountPaise) = when (line.direction) {
                 StockDirection.IN -> {
+                    // A Credit Note's returned goods re-enter stock at the cost they left at, never at
+                    // the Credit Note's own (selling-price) line rate - see saleReturnCostRatePaise.
+                    val returnCostRatePaise = saleReturnCostRatePaise(dao, voucher, line)
+                    val receiptRatePaise = returnCostRatePaise ?: line.ratePaise
+                    val receiptAmountPaise = if (returnCostRatePaise != null) {
+                        StockValuationEngine.amountFor(line.quantityRaw, returnCostRatePaise)
+                    } else {
+                        line.amountPaise
+                    }
                     val newAvgCost = StockValuationEngine.weightedAverageCostAfterReceipt(
-                        current.quantityRaw, current.avgCostPaise, line.quantityRaw, line.ratePaise
+                        current.quantityRaw, current.avgCostPaise, line.quantityRaw, receiptRatePaise
                     )
                     val newQty = current.quantityRaw + line.quantityRaw
-                    Triple(ItemState(newQty, newAvgCost), line.ratePaise, line.amountPaise)
+                    Triple(ItemState(newQty, newAvgCost), receiptRatePaise, receiptAmountPaise)
                 }
                 StockDirection.OUT -> {
                     if (current.quantityRaw < line.quantityRaw) {
@@ -127,6 +136,23 @@ object InventoryEngine {
             )
             dao.updateStockCache(voucher.companyId, line.itemId, newState.quantityRaw, newState.avgCostPaise)
         }
+    }
+
+    /**
+     * The cost rate (paise per unit) the goods of a Credit Note's [line] originally left stock at:
+     * the weighted rate of the referenced Sales voucher's OUT movements for the same item. `null`
+     * for anything that isn't a Credit Note against a Sales voucher that moved this item, in which
+     * case the caller keeps the line's own rate unchanged.
+     */
+    private suspend fun saleReturnCostRatePaise(dao: AccountingDao, voucher: VoucherEntity, line: VoucherStockLineEntity): Long? {
+        if (voucher.voucherType != VoucherType.CREDIT_NOTE) return null
+        val originalVoucherId = voucher.referenceVoucherId ?: return null
+        val originalOuts = dao.getStockMovementsForVoucher(originalVoucherId).filter {
+            it.itemId == line.itemId && it.direction == StockDirection.OUT && it.movementType != StockMovementType.CANCELLATION_REVERSAL
+        }
+        val totalQtyRaw = originalOuts.sumOf { it.quantityRaw }
+        if (totalQtyRaw <= 0L) return null
+        return if (originalOuts.size == 1) originalOuts.single().ratePaise else originalOuts.sumOf { it.amountPaise } * 1000L / totalQtyRaw
     }
 
     /**

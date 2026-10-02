@@ -40,6 +40,7 @@ import com.example.accounting.application.voucher.VoucherDraftLine
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.Ledger
 import com.example.accounting.domain.accounting.StandardSystemGroups
+import com.example.accounting.domain.accounting.netDebitBalance
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.presentation.components.Amount
@@ -204,8 +205,9 @@ fun MoneyTabContent(
     val bankLedgers = uiState.ledgers.filter {
         StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) || StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
     }
-    val totalCash = cashLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
-    val totalBank = bankLedgers.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
+    // Ledger.debitMinusCredit keeps the Dr/Cr side (an overdrawn bank is negative) - the Balance Sheet's sign.
+    val totalCash = cashLedgers.netDebitBalance()
+    val totalBank = bankLedgers.netDebitBalance()
 
     when (val s = sub) {
         MoneySubScreen.Home -> MoneyHomeScreen(
@@ -306,7 +308,7 @@ fun CashOrBankLedgerListScreen(
                         title = ledger.name,
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Amount(ledger.currentBalance, style = MaterialTheme.typography.titleSmall, emphasize = true)
+                                Amount(ledger.debitMinusCredit(), style = MaterialTheme.typography.titleSmall, emphasize = true)
                                 IconButton(onClick = { onEditLedger(ledger) }) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit $title account", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }

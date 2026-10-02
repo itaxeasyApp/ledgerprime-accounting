@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.example.accounting.core.crash.CrashReporter
 import com.example.accounting.presentation.MainAppScreen
 import com.example.accounting.presentation.features.splash.SplashScreen
 import com.example.ui.theme.MyApplicationTheme
@@ -17,6 +18,7 @@ import com.example.ui.theme.MyApplicationTheme
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    CrashReporter.install()
     enableEdgeToEdge()
     setContent {
       MyApplicationTheme {

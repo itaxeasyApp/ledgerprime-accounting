@@ -53,6 +53,7 @@ import com.example.accounting.domain.reports.CashFlowReport
 import com.example.accounting.domain.reports.OutstandingReport
 import com.example.accounting.domain.reports.RatioAnalysisReport
 import com.example.accounting.domain.reports.VoucherRegisterType
+import com.example.accounting.domain.reports.voucherCountLabel
 import com.example.accounting.presentation.components.Amount
 import com.example.accounting.presentation.components.SectionCard
 import com.example.accounting.presentation.components.TableRow
@@ -657,7 +658,7 @@ private fun VoucherRegisterView(uiState: AccountingUiState, type: VoucherRegiste
                 Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             report == null -> EmptyReportState()
             month != null -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-                item { TableRow("Total (${month.voucherCount} vouchers)", money = month.totalAmount, emphasize = true) }
+                item { TableRow("Total (${voucherCountLabel(month.voucherCount)})", money = month.totalAmount, emphasize = true) }
                 items(month.rows, key = { it.voucherId }) { row ->
                     SectionCard(
                         title = row.partyName ?: row.narration.ifBlank { row.voucherType.displayName },
@@ -667,13 +668,13 @@ private fun VoucherRegisterView(uiState: AccountingUiState, type: VoucherRegiste
                 }
             }
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 40.dp)) {
-                item { TableRow("Total (${report.totalCount} vouchers)", money = report.totalAmount, emphasize = true) }
+                item { TableRow("Total (${voucherCountLabel(report.totalCount)})", money = report.totalAmount, emphasize = true) }
                 items(report.months, key = { it.month.toString() }) { m ->
                     SectionCard(
                         // A month with no vouchers shows its real count of 0 but has no detail to open.
                         onClick = if (m.voucherCount > 0) ({ selectedMonth = m.month }) else null,
                         title = m.label,
-                        subtitle = if (m.voucherCount == 1) "1 voucher" else "${m.voucherCount} vouchers",
+                        subtitle = voucherCountLabel(m.voucherCount),
                         trailing = { Amount(m.totalAmount, style = MaterialTheme.typography.titleSmall, emphasize = m.voucherCount > 0) }
                     ) {}
                 }

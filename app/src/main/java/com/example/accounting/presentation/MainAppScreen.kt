@@ -193,7 +193,9 @@ fun MainAppScreen(
     // ScanTypePickerDialogs (Sales/Purchases/Profile/Money - docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md)
     // through to the moment a photo actually comes back, since the launcher's own callback can't
     // take extra parameters.
-    var pendingScanDocumentType by remember { mutableStateOf(OcrDocumentType.UNKNOWN) }
+    // rememberSaveable (not remember): opening the camera can get this low-memory app's activity
+    // recreated before the photo comes back, which would otherwise lose the type/output file.
+    var pendingScanDocumentType by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(OcrDocumentType.UNKNOWN) }
     val documentPhotoPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             coroutineScope.launch {
@@ -202,12 +204,65 @@ fun MainAppScreen(
             }
         }
     }
+
+    // PAN / Aadhaar / GST Certificate: Camera AND Gallery. The Photo Picker above has no camera
+    // option - camera capture only ever "worked" through the older system image chooser, which
+    // Android's updated Photo Picker replaced. This chooser offers the camera (writing to a
+    // FileProvider cache file) plus the gallery apps; both results go to the same scanDocument
+    // OCR pipeline. No CAMERA permission is declared, so ACTION_IMAGE_CAPTURE needs no runtime
+    // prompt - the camera app handles its own permission.
+    var pendingCameraPhotoPath by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+    val identityDocumentScanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val cameraFile = pendingCameraPhotoPath?.let { File(it) }
+        pendingCameraPhotoPath = null
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            cameraFile?.delete()
+            return@rememberLauncherForActivityResult
+        }
+        coroutineScope.launch {
+            val capturedPhoto = cameraFile?.takeIf { it.exists() && it.length() > 0 }
+            val file = capturedPhoto
+                ?: result.data?.data?.let { copyUriToCacheFile(context, it, "scan_${System.currentTimeMillis()}.jpg") }
+            if (capturedPhoto == null) cameraFile?.delete()
+            if (file != null) viewModel.scanDocument(file, pendingScanDocumentType)
+            else snackbarHostState.showSnackbar("No photo was received - please try again")
+        }
+    }
+    fun launchIdentityDocumentScan() {
+        val photo = File(context.cacheDir, "scan_camera_${System.currentTimeMillis()}.jpg")
+        val photoUri = androidx.core.content.FileProvider.getUriForFile(
+            context, com.example.accounting.data.rendering.ShareAdapter.FILE_PROVIDER_AUTHORITY, photo
+        )
+        val camera = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, photoUri)
+            clipData = android.content.ClipData.newRawUri("", photoUri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val gallery = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        val chooser = Intent.createChooser(gallery, "Take a photo or choose from gallery").apply {
+            putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(camera))
+        }
+        pendingCameraPhotoPath = photo.absolutePath
+        try {
+            identityDocumentScanLauncher.launch(chooser)
+        } catch (e: android.content.ActivityNotFoundException) {
+            pendingCameraPhotoPath = null
+            documentPhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+    }
+
     // Shared trigger every contextual scan entry point (Sales/Purchases/Profile/Money -
     // docs/59_CONTEXTUAL_OCR_ENTRY_POINTS.md, docs/CORRECTIONS_LOG.md) calls with its own already-
     // known [OcrDocumentType] - avoids repeating the same two-line launch at each call site.
     val launchDocumentScan: (OcrDocumentType) -> Unit = { type ->
         pendingScanDocumentType = type
-        documentPhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        when (type) {
+            OcrDocumentType.PAN_CARD, OcrDocumentType.AADHAAR_CARD, OcrDocumentType.GST_CERTIFICATE -> launchIdentityDocumentScan()
+            else -> documentPhotoPickerLauncher.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
     }
 
     // Phase 7J UI fix: Android Photo Picker for barcode/QR scans - `scanBarcodeImage` already
@@ -310,7 +365,7 @@ fun MainAppScreen(
                 val file = viewModel.renderVoucherRegisterPdf(type, month) ?: return@launch
                 pendingPdfDownload = file
                 val suffix = month?.toString() ?: uiState.currentFinancialYear?.fyCode.orEmpty()
-                savePdfLauncher.launch("${type.title.replace(' ', '_')}_$suffix.pdf")
+                savePdfLauncher.launch("${type.title}_$suffix.pdf".replace(' ', '_'))
             }
         }
     )
@@ -755,8 +810,10 @@ fun MainAppScreen(
                             ledgers = uiState.ledgers,
                             salesRevenue = uiState.vouchers.filter { it.voucherType == VoucherType.SALES && !it.isCancelled }
                                 .fold(com.example.accounting.core.common.Money.ZERO) { acc, v -> acc + v.totalDebits },
-                            receivables = uiState.outstandingByVoucherId.values.fold(0L) { acc, v -> acc + v }
-                                .let { com.example.accounting.core.common.Money.fromPaise(it) },
+                            // Same figure as the Dashboard's Receivables card - outstandingByVoucherId
+                            // covers every voucher type, so summing it also counted unpaid purchases.
+                            receivables = uiState.receivablesReport?.totalOutstanding
+                                ?: (uiState.balanceSheet?.sundryDebtors ?: com.example.accounting.core.common.Money.ZERO),
                             onNewSale = { createVoucherType = VoucherType.SALES; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onNewCreditNote = { createVoucherType = VoucherType.CREDIT_NOTE; isCreateVoucherTypeLocked = true; isCreateVoucherOpen = true },
                             onVoucherClick = { selectedVoucherDetail = it },
@@ -918,14 +975,14 @@ fun MainAppScreen(
             onPostSaleInvoice = { customer, sales, lines, date, ref, narration, pricingMode ->
                 viewModel.postSaleInvoice(customer, sales, lines, date, ref, narration, pricingMode)
             },
-            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode ->
-                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode)
+            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode, supplierInvoiceDate ->
+                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode, supplierInvoiceDate)
             },
             onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn ->
                 viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn)
             },
-            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn ->
-                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn)
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn, supplierInvoiceDate ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn, supplierInvoiceDate = supplierInvoiceDate)
             }
         )
     } else if (isCreateVoucherOpen) {
@@ -942,6 +999,10 @@ fun MainAppScreen(
             isServiceCompany = uiState.currentCompany?.businessType == com.example.accounting.domain.company.BusinessType.SERVICE,
             lockedType = isCreateVoucherTypeLocked,
             prefillFrom = uiState.pendingVoucherCorrection,
+            // Step 19: the original's GST rate/HSN, read from its own GST fact by correctVoucher (was never passed on).
+            prefillGstDetail = uiState.pendingVoucherCorrectionGstDetail,
+            prefillSupplierInvoiceNumber = uiState.pendingVoucherCorrectionSupplierNumber,
+            prefillSupplierInvoiceDate = uiState.pendingVoucherCorrectionSupplierDate,
             onDismiss = { isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false; viewModel.clearOutstandingInvoices() },
             onAddNewParty = { role -> createPartyRole = role },
             onAddNewBankLedger = { editingLedger = null; quickAddLedgerGroupId = null; isCreateLedgerOpen = true },
@@ -954,16 +1015,16 @@ fun MainAppScreen(
                 viewModel.postSaleInvoice(customer, sales, lines, date, ref, narration, pricingMode)
                 isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode ->
-                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode)
+            onPostPurchaseBill = { supplier, purchase, lines, date, ref, narration, pricingMode, supplierInvoiceDate ->
+                viewModel.postPurchaseBill(supplier, purchase, lines, date, ref, narration, pricingMode, supplierInvoiceDate)
                 isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
             onPostAccountOnlySale = { customer, sales, amount, date, ref, narration, gstRate, hsn ->
                 viewModel.postAccountOnlySale(customer, sales, amount, date, ref, narration, gstRate, hsn)
                 isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
-            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn ->
-                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn)
+            onPostAccountOnlyPurchase = { supplier, purchase, amount, date, ref, narration, gstRate, hsn, supplierInvoiceDate ->
+                viewModel.postAccountOnlyPurchase(supplier, purchase, amount, date, ref, narration, gstRate, hsn, supplierInvoiceDate = supplierInvoiceDate)
                 isCreateVoucherOpen = false; isCreateVoucherTypeLocked = false
             },
             onPostCreditNote = { originalId, date, ref, narration ->

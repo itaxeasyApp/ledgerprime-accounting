@@ -209,5 +209,11 @@ data class GSTTransactionExportDto(
     val igstPaise: Long,
     val cessPaise: Long,
     val direction: String,
-    val lineOrder: Int
+    val lineOrder: Int,
+    /** Step 17 - the supplier's own invoice number/date from the Purchase GST fact (see
+     * [com.example.accounting.domain.taxation.gst.GstTransaction.supplierDocumentNumber]); `null` = NOT_RECORDED,
+     * and always `null` for sales, notes and every pre-Step-13 row. [supplierDocumentDate] is ISO-8601. The supplier
+     * GSTIN is the existing [partyGstin]. */
+    val supplierDocumentNumber: String? = null,
+    val supplierDocumentDate: String? = null
 )

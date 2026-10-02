@@ -199,7 +199,9 @@ class Gstr1FoundationTestSuite {
     }
 
     @Test
-    fun t11_Builder_CreditNoteAgainstUnregisteredParty_ClassifiedAsCdnur() {
+    fun t11_Builder_CreditNoteAgainstUnregisteredIntraStateParty_NetsIntoB2csNotCdnur() {
+        // Phase 8 Step 5: CDNUR is only for notes against B2CL invoices and exports - an unregistered
+        // intra-state note nets (as a negative amount) into the B2CS state+rate summary.
         val originalSale = gt("V9", "LED_H", "", "27", SupplyType.INTRA_STATE)
         val note = originalSale.copy(gstTransactionId = UUID.randomUUID().toString(), voucherId = "V10", voucherType = VoucherType.CREDIT_NOTE, taxableAmount = -originalSale.taxableAmount)
         val vouchers = mapOf(
@@ -207,8 +209,26 @@ class Gstr1FoundationTestSuite {
             "V10" to voucher("V10", VoucherType.CREDIT_NOTE, "2026-04-15", refId = "V9")
         )
         val data = runBlocking { Gstr1ReturnBuilder.build("G", "202604", listOf(note), vouchers, emptyList()) }
-        assertEquals(1, data.cdnur.size)
+        assertTrue(data.cdnur.isEmpty())
         assertTrue(data.cdnr.isEmpty())
+        assertEquals(1, data.b2cs.size)
+        assertEquals(note.taxableAmount.paise, data.b2cs.first().taxableValue.paise)
+    }
+
+    @Test
+    fun t11b_Builder_CreditNoteAgainstUnregisteredB2clInvoice_ClassifiedAsCdnur() {
+        val originalSale = gt("V9", "LED_H", "", "09", SupplyType.INTER_STATE, taxable = 3_00_000_00L)
+        val note = originalSale.copy(
+            gstTransactionId = UUID.randomUUID().toString(), voucherId = "V10", voucherType = VoucherType.CREDIT_NOTE,
+            taxableAmount = -originalSale.taxableAmount, igst = -originalSale.igst
+        )
+        val vouchers = mapOf(
+            "V9" to voucher("V9", VoucherType.SALES, "2026-04-05"),
+            "V10" to voucher("V10", VoucherType.CREDIT_NOTE, "2026-04-15", refId = "V9")
+        )
+        val data = runBlocking { Gstr1ReturnBuilder.build("27AAAAA0000A1Z5", "202604", listOf(note), vouchers, emptyList()) }
+        assertEquals(1, data.cdnur.size)
+        assertTrue(data.b2cs.isEmpty())
     }
 
     @Test

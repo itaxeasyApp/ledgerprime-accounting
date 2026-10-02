@@ -25,8 +25,45 @@ import com.example.accounting.domain.sync.SyncOperation
 import com.example.accounting.domain.sync.SyncStockLineDto
 import com.example.accounting.domain.sync.SyncVoucherDto
 import com.example.accounting.domain.sync.toPostOperation
+import com.example.accounting.domain.taxation.gst.GstDirection
+import com.example.accounting.domain.taxation.gst.PurchaseDocumentIdentity
+import com.example.accounting.domain.taxation.gstreturn.GstQuarter
+import com.example.accounting.domain.taxation.gstreturn.GstReturnStatus
+import com.example.accounting.domain.taxation.gstreturn.GstReturnType
 import kotlinx.coroutines.flow.first
 import java.util.UUID
+
+/**
+ * Phase 8 Step 13 - rejects a Purchase whose supplier document (supplier + document number, see
+ * [PurchaseDocumentIdentity]) is already booked, in the same company and financial year, by a live
+ * (non-cancelled) purchase. Used by both posting paths (voucher-backed and GST-only), so the rule has a
+ * single definition. A row with no document number has nothing to match on and is never rejected -
+ * unknown is not a duplicate. Credit/Debit Notes are never compared (they carry no supplier document).
+ */
+internal object PurchaseDocumentGuard {
+    suspend fun requireNoDuplicate(dao: AccountingDao, incoming: List<GstTransactionEntity>) {
+        val purchases = incoming.filter { it.direction == GstDirection.INPUT && it.voucherType == VoucherType.PURCHASE }
+        if (purchases.none { PurchaseDocumentIdentity.normalizeNumber(it.supplierDocumentNumber) != null }) return
+        fun GstTransactionEntity.key() = PurchaseDocumentIdentity.duplicateKey(partyGstin, partyLedgerId, supplierDocumentNumber)
+        val incomingGroups = purchases.map { it.transactionGroupId.ifBlank { it.voucherId ?: it.gstTransactionId } }.toSet()
+        val incomingVouchers = purchases.mapNotNull { it.voucherId }.toSet()
+        val first = purchases.first()
+        val live = dao.getGstTransactionsForCompanyFY(first.companyId, first.financialYearId).filter {
+            it.direction == GstDirection.INPUT && it.voucherType == VoucherType.PURCHASE &&
+                it.transactionGroupId !in incomingGroups && (it.voucherId == null || it.voucherId !in incomingVouchers)
+        }
+        for (row in purchases) {
+            val key = row.key() ?: continue
+            val clash = live.firstOrNull { it.key() == key } ?: continue
+            throw AccountingTransactionException(
+                AppError.BusinessRuleViolation(
+                    "Supplier document '${row.supplierDocumentNumber!!.trim()}' from this supplier is already booked in this financial year " +
+                        "(${clash.voucherId ?: "GST-only purchase ${clash.transactionGroupId}"}). Cancel that purchase first if it was entered by mistake."
+                )
+            )
+        }
+    }
+}
 
 /**
  * Carries a typed [AppError] out of the posting/cancellation engine so callers can map the
@@ -42,6 +79,8 @@ class AccountingTransactionException(val appError: AppError) : Exception(appErro
  * verify the guard/business logic without requiring a Robolectric-backed Room instance.
  */
 internal object VoucherPostingEngine {
+
+    private fun VoucherType.isGstNote() = this == VoucherType.CREDIT_NOTE || this == VoucherType.DEBIT_NOTE
 
     /**
      * Computes the new signed ledger balance after applying a Dr/Cr delta.
@@ -132,6 +171,78 @@ internal object VoucherPostingEngine {
             }
         }
 
+        // 1.6. GST flag/fact agreement (Phase 8, B8) - a voucher flagged GST-applicable must carry
+        // the GstTransaction facts GST reporting reads; the flag alone drives no report.
+        if (voucher.isGstApplicable && gstTransactions.isEmpty()) {
+            throw AccountingTransactionException(
+                AppError.BusinessRuleViolation(
+                    "Voucher ${voucher.voucherNumber} is flagged GST-applicable but carries no GST transaction rows."
+                )
+            )
+        }
+
+        // 1.65. One valid note per original (Phase 8, B6) - a Credit/Debit Note is a full mirror of
+        // the voucher it references, so a second live one would reverse the same sale/purchase twice
+        // in the ledgers, the GST rows and the stock at once (the engine writes all three together,
+        // which is why rejecting it here, before anything is written, covers all three). A CANCELLED
+        // note is out of the books and does not block - cancelling it is how a note is corrected.
+        // Only notes are checked: `referenceVoucherId` is also how a corrected same-type repost is
+        // linked to the voucher it corrects, and that must stay unaffected.
+        if (voucher.voucherType.isGstNote() && voucher.referenceVoucherId != null) {
+            val existing = dao.getAllVouchersByCompany(voucher.companyId).first().firstOrNull {
+                it.referenceVoucherId == voucher.referenceVoucherId && it.voucherType.isGstNote() &&
+                    !it.isCancelled && it.voucherId != voucher.voucherId
+            }
+            if (existing != null) {
+                throw AccountingTransactionException(
+                    AppError.BusinessRuleViolation(
+                        "${existing.voucherType.displayName} ${existing.voucherNumber} already reverses voucher ${voucher.referenceVoucherId}. " +
+                            "Only one valid Credit/Debit Note can be issued against a voucher - cancel ${existing.voucherNumber} first to issue a correction."
+                    )
+                )
+            }
+        }
+
+        // 1.66. Duplicate purchase document (Phase 8, Step 13) - the same supplier's invoice number
+        // booked twice in one financial year would claim its ITC twice.
+        PurchaseDocumentGuard.requireNoDuplicate(dao, gstTransactions)
+
+        // 1.7. GST period gate (Phase 8, B9) - a GST-bearing voucher may not be posted into a GST
+        // filing period that is locked, or into a month/quarter whose GSTR-1/GSTR-3B is already
+        // FILED (the books would change, the filed return would not). Outward supplies are gated
+        // by GSTR-1 and GSTR-3B; inward supplies only by GSTR-3B.
+        if (gstTransactions.isNotEmpty()) {
+            val postingDate = runCatching { java.time.LocalDate.parse(voucher.date) }.getOrNull()
+            if (postingDate != null) {
+                val lockedPeriod = dao.getGstFilingPeriodsByCompany(voucher.companyId).first()
+                    .firstOrNull { it.isLocked && voucher.date >= it.startDate && voucher.date <= it.endDate }
+                if (lockedPeriod != null) {
+                    throw AccountingTransactionException(
+                        AppError.BusinessRuleViolation(
+                            "GST filing period '${lockedPeriod.periodLabel}' is locked; a GST voucher cannot be posted on ${voucher.date}."
+                        )
+                    )
+                }
+                val gatingReturnTypes = buildSet {
+                    add(GstReturnType.GSTR3B)
+                    if (gstTransactions.any { it.direction == GstDirection.OUTPUT }) add(GstReturnType.GSTR1)
+                }
+                val quarter = GstQuarter.ofMonth(postingDate.monthValue).name
+                val filedReturn = dao.getGstReturnsForCompany(voucher.companyId).first().firstOrNull {
+                    it.status == GstReturnStatus.FILED && it.financialYearId == voucher.financialYearId &&
+                        it.returnType in gatingReturnTypes &&
+                        (it.month == postingDate.monthValue || (it.month == null && it.quarter == quarter))
+                }
+                if (filedReturn != null) {
+                    throw AccountingTransactionException(
+                        AppError.BusinessRuleViolation(
+                            "${filedReturn.returnType.name} for period ${filedReturn.periodKey} is already filed; a GST voucher cannot be posted on ${voucher.date}."
+                        )
+                    )
+                }
+            }
+        }
+
         // 2. Insert voucher
         dao.insertVoucher(voucher)
 
@@ -201,7 +312,12 @@ internal object VoucherPostingEngine {
                             SyncGstTransactionDto(
                                 it.gstTransactionId, it.voucherType.name, it.partyLedgerId, it.partyGstin, it.placeOfSupply, it.supplyType.name,
                                 it.itemId, it.hsnSacCode, it.quantityRaw, it.taxableAmountPaise, it.gstRatePercent,
-                                it.cgstPaise, it.sgstPaise, it.igstPaise, it.cessPaise, it.direction.name, it.lineOrder
+                                it.cgstPaise, it.sgstPaise, it.igstPaise, it.cessPaise, it.direction.name, it.lineOrder,
+                                chargeType = it.chargeType.name, supplyNature = it.supplyNature.name,
+                                transactionGroupId = it.transactionGroupId.ifBlank { voucher.voucherId },
+                                transactionDate = it.transactionDate,
+                                partyGstRegistrationStatus = it.partyGstRegistrationStatus,
+                                supplierDocumentNumber = it.supplierDocumentNumber, supplierDocumentDate = it.supplierDocumentDate
                             )
                         }
                     )
@@ -460,6 +576,7 @@ class DatabaseTransaction(
     ): Result<Unit> = runCatching {
         database.withTransaction {
             if (dao.getOutboxByIdempotencyKey(outboxItem.idempotencyKey) == null) {
+                PurchaseDocumentGuard.requireNoDuplicate(dao, gstTransactions)
                 dao.insertGstTransactions(gstTransactions)
                 dao.insertOutboxItem(outboxItem)
             }

@@ -1,4 +1,4 @@
-package com.example.accounting.core.database
+﻿package com.example.accounting.core.database
 
 import android.content.Context
 import androidx.room.Database
@@ -92,7 +92,7 @@ import com.example.accounting.data.local.entity.VoucherStockLineEntity
         GstReturnSectionEntity::class,
         GstReturnSubmissionEntity::class
     ],
-    version = 29,
+    version = 30,
     exportSchema = false
 )
 @TypeConverters(RoomConverters::class)
@@ -1016,7 +1016,7 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * Phase 7J-B.2 — a database-level guarantee against a duplicate voucher attachment: the
+         * Phase 7J-B.2 â€” a database-level guarantee against a duplicate voucher attachment: the
          * same `(voucherId, documentAssetId)` pair can never be linked twice, while the same
          * `documentAssetId` remains freely attachable to a *different* voucher (the index is
          * composite, not on `documentAssetId` alone). Pure `CREATE UNIQUE INDEX` - no column
@@ -1326,6 +1326,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29)
+        /** Phase 8 Step 13 (purchase document identity for GSTR-2B matching) - two nullable columns on
+         * `gst_transactions`: the supplier's own invoice number and date. Purely additive and
+         * deliberately NOT backfilled: no existing row has a recorded supplier document number/date
+         * (the voucher's free-text reference is not the same fact and its date is the booking date), so
+         * every historical row stays NULL = NOT_RECORDED rather than receiving a fabricated value. No
+         * default, matching the entity's plain nullable fields. */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gst_transactions ADD COLUMN supplierDocumentNumber TEXT")
+                db.execSQL("ALTER TABLE gst_transactions ADD COLUMN supplierDocumentDate TEXT")
+            }
+        }
+
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30)
     }
 }

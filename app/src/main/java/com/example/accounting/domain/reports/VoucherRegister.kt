@@ -25,6 +25,12 @@ enum class VoucherRegisterType(val voucherType: VoucherType, val title: String) 
     }
 }
 
+/** "1 voucher" / "N vouchers" - shared by the register screen and its PDFs. */
+fun voucherCountLabel(count: Int): String = if (count == 1) "1 voucher" else "$count vouchers"
+
+/** FinancialYear.fyCode is already "FY 2026-27" - prefix only when a bare code is given. */
+private fun fyLabel(fyCode: String): String = if (fyCode.startsWith("FY")) fyCode else "FY $fyCode"
+
 /** One month of a register - [rows] are the month's real, non-cancelled vouchers of the
  * register's type, oldest first; [voucherCount]/[totalAmount] are derived from exactly those rows. */
 data class VoucherRegisterMonth(
@@ -86,7 +92,7 @@ fun buildVoucherRegister(
 /** Monthly-summary PDF: one row per FY month with its voucher count and total. */
 fun VoucherRegisterReport.toMonthlySummaryPdfData(chrome: TabularReportChrome): TabularReportData = TabularReportData(
     title = registerType.title,
-    subtitle = "Monthly summary - FY $financialYearCode",
+    subtitle = "Monthly summary - ${fyLabel(financialYearCode)}",
     columnHeaders = listOf("Month", "Vouchers", "Amount"),
     rows = months.map { listOf(it.label, it.voucherCount.toString(), it.totalAmount.formatPlain()) },
     totalsRow = listOf("Total", totalCount.toString(), totalAmount.formatPlain()),
@@ -106,12 +112,12 @@ fun VoucherRegisterReport.toDetailPdfData(month: YearMonth?, chrome: TabularRepo
     val periodEnd = month?.atEndOfMonth()?.coerceAtMost(fyEnd) ?: fyEnd
     return TabularReportData(
         title = registerType.title,
-        subtitle = if (month == null) "All vouchers - FY $financialYearCode" else "${month.format(MONTH_LABEL_FORMAT)} - FY $financialYearCode",
+        subtitle = if (month == null) "All vouchers - ${fyLabel(financialYearCode)}" else "${month.format(MONTH_LABEL_FORMAT)} - ${fyLabel(financialYearCode)}",
         columnHeaders = listOf("Date", "Voucher No.", "Party", "Narration", "Amount"),
         rows = rows.map {
             listOf(it.date.format(DATE_FORMAT), it.voucherNumber, it.partyName ?: "-", it.narration, it.totalAmount.formatPlain())
         },
-        totalsRow = listOf("", "", "", "Total (${rows.size} vouchers)", Money.fromPaise(rows.sumOf { it.totalAmount.paise }).formatPlain()),
+        totalsRow = listOf("", "", "", "Total (${voucherCountLabel(rows.size)})", Money.fromPaise(rows.sumOf { it.totalAmount.paise }).formatPlain()),
         chrome = chrome.copy(
             periodLabel = "${periodStart.format(DATE_FORMAT)} to ${periodEnd.format(DATE_FORMAT)}",
             columnWeights = listOf(1.1f, 1.4f, 2.4f, 2.8f, 1.4f),

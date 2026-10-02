@@ -1,4 +1,4 @@
-package com.example.accounting
+﻿package com.example.accounting
 
 import com.example.accounting.core.common.AccountingResult
 import com.example.accounting.core.common.DrCr
@@ -329,11 +329,12 @@ class GstReturnDashboardTestSuite {
         assertEquals("Importing a response must move to PROCESSING, never straight to FILED", GstReturnStatus.PROCESSING, afterImport.status)
     }
 
+    // GSTR-1 stands in for the return in t12/t21/t35: they test the submission boundary, and GSTR-3B can no longer be READY (Table 4 is unreconciled with GSTR-2B).
     @Test
     fun t12_OnlineMode_ReportsUnconfiguredIntegration_NeverFakeSuccess() = runBlocking {
         val (dao, repo) = setup()
         postSale(dao, "V1", "2026-04-10")
-        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR3B, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
+        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR1, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         repo.validateGstReturn(companyId, gr.gstReturnId, fy)
         val result = repo.submitGstReturnOnline(companyId, gr.gstReturnId, fy)
@@ -453,7 +454,7 @@ class GstReturnDashboardTestSuite {
     fun t21_MultipleOnlineSubmissions_PreserveFullHistory() = runBlocking {
         val (dao, repo) = setup()
         postSale(dao, "V1", "2026-04-10")
-        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR3B, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
+        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR1, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         repo.validateGstReturn(companyId, gr.gstReturnId, fy)
         repo.submitGstReturnOnline(companyId, gr.gstReturnId, fy) // attempt 1: FAILED (unconfigured gateway)
@@ -653,7 +654,7 @@ class GstReturnDashboardTestSuite {
     fun t35_SuccessfulGateway_MovesToSubmitted_ProvingTheIntegrationBoundaryWorks() = runBlocking {
         val (dao, repo) = setup()
         postSale(dao, "V1", "2026-04-10")
-        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR3B, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
+        val gr = repo.getOrCreateGstReturn(companyId, fy, GstQuarter.Q1, 4, GstScheme.REGULAR, GstReturnType.GSTR1, GstReturnPeriodicity.MONTHLY, GstFilingMode.ONLINE)
         repo.prepareGstReturn(companyId, gr.gstReturnId, fy)
         repo.validateGstReturn(companyId, gr.gstReturnId, fy)
         val result = repo.submitGstReturnOnline(companyId, gr.gstReturnId, fy, SucceedingGateway())
@@ -712,7 +713,7 @@ class GstReturnDashboardTestSuite {
         assertTrue("B2CL/EXP must be empty for this data", sections.getValue("B2CL").resultDataJson!!.contains("\"count\":0"))
         assertTrue("No export in this data", sections.getValue("EXP").resultDataJson!!.contains("\"count\":0"))
         // Both lines share the same HSN+rate (8471 @ 18%), so HSN has exactly one aggregated row
-        // whose taxable value is the SUM of both invoices (₹1000 + ₹500 = ₹1500 = 150000 paise).
+        // whose taxable value is the SUM of both invoices (â‚¹1000 + â‚¹500 = â‚¹1500 = 150000 paise).
         assertTrue("HSN summary must have one aggregated row for the shared HSN/rate", sections.getValue("HSN").resultDataJson!!.contains("\"count\":1"))
         assertTrue("HSN aggregate must sum both outward lines' taxable value", sections.getValue("HSN").resultDataJson!!.contains("\"taxableValuePaise\":150000"))
     }

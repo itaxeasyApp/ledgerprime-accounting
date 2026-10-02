@@ -195,6 +195,11 @@ data class AccountingUiState(
      * account-only Sale/Purchase. Cleared alongside [pendingVoucherCorrection] in lockstep - never
      * meaningful on its own. */
     val pendingVoucherCorrectionGstDetail: Pair<Double, String>? = null,
+    /** Step 18 - the cancelled Purchase's own recorded supplier invoice number/date, read from its GST fact just
+     * before cancellation, so the correction form can restore them. `null` = NOT_RECORDED (never the voucher date).
+     * Cleared in lockstep with [pendingVoucherCorrection]. */
+    val pendingVoucherCorrectionSupplierNumber: String? = null,
+    val pendingVoucherCorrectionSupplierDate: LocalDate? = null,
     val currentSubscription: CompanySubscription? = null,
     val voucherDraftsPendingReview: List<VoucherDraft> = emptyList(),
     val outstandingReport: OutstandingReport? = null,
@@ -847,8 +852,13 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
      */
     fun createBusiness(details: BusinessDetails) {
         viewModelScope.launch {
+            val displayName = details.legalName.ifBlank { details.tradeName }
+            if (displayName.isBlank()) {
+                emitMessage("Enter your business name to continue")
+                return@launch
+            }
             val newCompany = companyWithDetails(
-                Company(companyId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}", name = "", currency = "INR", isDefault = false),
+                Company(companyId = "COMP_${UUID.randomUUID().toString().take(8).uppercase()}", name = displayName, currency = "INR", isDefault = false),
                 details
             )
             val result = repository.createCompany(newCompany)
@@ -1188,6 +1198,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             val gstDetail = if (voucher.voucherType == VoucherType.SALES || voucher.voucherType == VoucherType.PURCHASE) {
                 repository.getGstTransactionsForVoucher(voucher.voucherId).firstOrNull()?.let { it.gstRatePercent to it.hsnSacCode }
             } else null
+            // Step 18: a Purchase's supplier document identity lives on its GST fact, not on the Voucher.
+            val supplierFact = if (voucher.voucherType == VoucherType.PURCHASE) {
+                repository.getGstTransactionsForVoucher(voucher.voucherId).firstOrNull()
+            } else null
             val idempotencyKey = UUID.randomUUID().toString()
             val result = repository.deleteVoucherSafely(comp.companyId, fy.financialYearId, voucher.voucherId, idempotencyKey, "SENIOR_ACCOUNTANT")
             if (result is AccountingResult.Success) {
@@ -1195,7 +1209,13 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     com.example.accounting.automation.jobs.AutomationEvent.VoucherDeleted(comp.companyId, voucher.voucherId, voucher.voucherId)
                 )
                 refreshFinancialReports()
-                _uiState.update { it.copy(pendingVoucherCorrection = voucher, pendingVoucherCorrectionGstDetail = gstDetail) }
+                _uiState.update {
+                    it.copy(
+                        pendingVoucherCorrection = voucher, pendingVoucherCorrectionGstDetail = gstDetail,
+                        pendingVoucherCorrectionSupplierNumber = supplierFact?.supplierDocumentNumber,
+                        pendingVoucherCorrectionSupplierDate = supplierFact?.supplierDocumentDate
+                    )
+                }
                 emitMessage("Original voucher cancelled - review and repost the corrected version")
             } else {
                 emitMessage("Could not start correction: ${result.errorOrNull()?.message}")
@@ -1204,7 +1224,12 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun consumeVoucherCorrection() {
-        _uiState.update { it.copy(pendingVoucherCorrection = null, pendingVoucherCorrectionGstDetail = null) }
+        _uiState.update {
+            it.copy(
+                pendingVoucherCorrection = null, pendingVoucherCorrectionGstDetail = null,
+                pendingVoucherCorrectionSupplierNumber = null, pendingVoucherCorrectionSupplierDate = null
+            )
+        }
     }
 
     fun postQuickVoucher(
@@ -1451,10 +1476,13 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         date: LocalDate,
         referenceNumber: String,
         narration: String,
-        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE,
+        /** The date printed on the supplier's invoice; `null` = not recorded (never the booking [date]). */
+        supplierInvoiceDate: LocalDate? = null
     ) = postTradingDocument(
         isSale = false, partyLedgerId = supplierLedgerId, tradeLedgerId = purchaseLedgerId,
-        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration, pricingMode = pricingMode
+        lines = lines, date = date, referenceNumber = referenceNumber, narration = narration, pricingMode = pricingMode,
+        supplierInvoiceDate = supplierInvoiceDate
     )
 
     /**
@@ -1471,7 +1499,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         date: LocalDate,
         referenceNumber: String,
         narration: String,
-        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE
+        pricingMode: com.example.accounting.domain.taxation.gst.GstPricingMode = com.example.accounting.domain.taxation.gst.GstPricingMode.EXCLUSIVE,
+        supplierInvoiceDate: LocalDate? = null
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1553,7 +1582,10 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                     companyStateCode = comp.stateCode, placeOfSupply = placeOfSupply,
                     lines = tradingLines, gstLedgers = gstLedgers,
                     roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
-                    pricingMode = pricingMode
+                    pricingMode = pricingMode,
+                    // Step 13/14: the purchase form's Invoice Number and Supplier Invoice Date are the supplier's own
+                    // document identity; an unset date stays NOT_RECORDED (the voucher date is the booking date, never a fallback).
+                    supplierDocumentNumber = referenceNumber, supplierDocumentDate = supplierInvoiceDate
                 )
             }
 
@@ -1623,11 +1655,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         narration: String,
         gstRatePercent: Double = 0.0,
         hsnSac: String = "",
-        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+        /** The date printed on the supplier's invoice; `null` = not recorded (never the booking [date]). */
+        supplierInvoiceDate: LocalDate? = null
     ) = postAccountOnlyTradingDocument(
         isSale = false, partyLedgerId = supplierLedgerId, tradeLedgerId = purchaseLedgerId,
         amount = amount, date = date, referenceNumber = referenceNumber, narration = narration,
-        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature
+        gstRatePercent = gstRatePercent, hsnSac = hsnSac, supplyNature = supplyNature,
+        supplierInvoiceDate = supplierInvoiceDate
     )
 
     private fun postAccountOnlyTradingDocument(
@@ -1640,7 +1675,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         narration: String,
         gstRatePercent: Double = 0.0,
         hsnSac: String = "",
-        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL
+        supplyNature: GstSupplyNature = GstSupplyNature.NORMAL,
+        supplierInvoiceDate: LocalDate? = null
     ) {
         viewModelScope.launch {
             val comp = _uiState.value.currentCompany ?: return@launch
@@ -1699,7 +1735,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         companyStateCode = comp.stateCode, placeOfSupply = partyLedger.stateCode,
                         lines = listOf(syntheticLine), gstLedgers = gstLedgers,
                         roundOffLedgerId = roundOffRef.ledgerId, roundOffLedgerName = roundOffRef.name,
-                        trackInventory = false
+                        trackInventory = false,
+                        supplierDocumentNumber = referenceNumber, supplierDocumentDate = supplierInvoiceDate
                     )
                 }
                 val voucher = Voucher(
@@ -1814,7 +1851,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                 narration = narration.ifBlank { "Being ${voucherType.displayName.lowercase()} against ${original.voucherNumber}" },
                 totalAmount = engineResult.totalAmount, items = engineResult.journalItems,
                 createdBy = if (isCredit) "SALES_BILLING_DESK" else "PURCHASE_DESK",
-                partyGstin = original.partyGstin, isGstApplicable = true, referenceVoucherId = originalVoucherId
+                partyGstin = original.partyGstin, isGstApplicable = engineResult.gstTransactions.isNotEmpty(), referenceVoucherId = originalVoucherId
             )
 
             val result = repository.postVoucher(voucher, stockLines = engineResult.stockLines, gstTransactions = engineResult.gstTransactions)

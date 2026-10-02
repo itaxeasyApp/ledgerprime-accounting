@@ -145,7 +145,8 @@ fun GSTSummaryExportDto.toCsvRows(): List<List<String?>> = listOf(
 
 fun List<GSTTransactionExportDto>.toGstTransactionCsvHeaders(): List<String> = listOf(
     "gstTransactionId", "voucherId", "voucherType", "partyGstin", "placeOfSupply", "supplyType",
-    "hsnSacCode", "isService", "taxableAmountPaise", "gstRatePercent", "cgstPaise", "sgstPaise", "igstPaise", "cessPaise", "direction", "lineOrder"
+    "hsnSacCode", "isService", "taxableAmountPaise", "gstRatePercent", "cgstPaise", "sgstPaise", "igstPaise", "cessPaise", "direction", "lineOrder",
+    "supplierDocumentNumber", "supplierDocumentDate"
 )
 
 fun List<GSTTransactionExportDto>.toGstTransactionCsvRows(): List<List<String?>> = map {
@@ -153,7 +154,7 @@ fun List<GSTTransactionExportDto>.toGstTransactionCsvRows(): List<List<String?>>
         it.gstTransactionId, it.voucherId, it.voucherType.name, it.partyGstin, it.placeOfSupply, it.supplyType,
         it.hsnSacCode, it.isService?.toString(), it.taxableAmountPaise.toString(), it.gstRatePercent.toString(),
         it.cgstPaise.toString(), it.sgstPaise.toString(), it.igstPaise.toString(), it.cessPaise.toString(),
-        it.direction, it.lineOrder.toString()
+        it.direction, it.lineOrder.toString(), it.supplierDocumentNumber, it.supplierDocumentDate
     )
 }
 

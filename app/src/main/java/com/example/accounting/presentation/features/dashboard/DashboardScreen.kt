@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.accounting.core.common.Money
 import com.example.accounting.domain.accounting.StandardSystemGroups
+import com.example.accounting.domain.accounting.netDebitBalance
 import com.example.accounting.domain.accounting.Voucher
 import com.example.accounting.domain.accounting.VoucherType
 import com.example.accounting.domain.company.BusinessType
@@ -50,6 +51,7 @@ import com.example.accounting.presentation.components.DashboardCardBorder
 import com.example.accounting.presentation.components.QuickActionSpec
 import com.example.accounting.presentation.components.QuickActions
 import com.example.accounting.presentation.theme.Radius
+import com.example.accounting.presentation.theme.Spacing
 import com.example.accounting.presentation.viewmodel.AccountingUiState
 
 /**
@@ -100,26 +102,28 @@ fun DashboardScreen(
     val payables = uiState.payablesReport?.totalOutstanding ?: (uiState.balanceSheet?.currentLiabilities ?: Money.ZERO)
     val gstPayable = uiState.gstSummary?.netTaxPayable ?: Money.ZERO
     val groupsById = uiState.groups.associateBy { it.groupId }
+    // Debit-minus-credit (Ledger.debitMinusCredit), not the bare magnitude: the same sign the Trial
+    // Balance and Balance Sheet use, so an overdrawn (Credit) bank shows negative here too.
     val cashBalance = uiState.ledgers.filter {
         StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.CASH_GROUP_ID) ||
             StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.CASH_GROUP_ID, groupsById)
-    }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
+    }.netDebitBalance()
     val bankBalance = uiState.ledgers.filter {
         StandardSystemGroups.isExactSystemGroup(it.groupId, StandardSystemGroups.BANK_GROUP_ID) ||
             StandardSystemGroups.isUnder(it.groupId, StandardSystemGroups.BANK_GROUP_ID, groupsById)
-    }.fold(Money.ZERO) { acc, l -> acc + l.currentBalance }
+    }.netDebitBalance()
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 80.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+            .padding(horizontal = Spacing.md),
+        contentPadding = PaddingValues(top = Spacing.md, bottom = 80.dp),
+        verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
         item {
             Column {
                 Text("Quick Actions", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 // Phase UI-03: now via the shared QuickActions row wrapper instead of two hand-
                 // rolled Rows of QuickAction calls - same items, same order, same colors/icons.
                 QuickActions(
@@ -137,7 +141,7 @@ fun DashboardScreen(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 QuickActions(
                     items = listOf(
                         QuickActionSpec("Transfer", Icons.AutoMirrored.Filled.CompareArrows, MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer) { onOpenCreateVoucher(VoucherType.CONTRA) },
@@ -153,7 +157,7 @@ fun DashboardScreen(
         item {
             Column {
                 Text("Business Snapshot", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 // Phase UI-04: extracted into its own composable (BusinessSnapshot.kt) so this
                 // screen's body is a composition of named sections; income/expenditure is only
                 // passed when the current company is a SERVICE business (IncomeExpenditureReport
@@ -213,7 +217,7 @@ fun DashboardScreen(
         item {
             Column {
                 Text("Quick Report", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Spacing.sm))
                 // Collapsed from two rows of three into one row of four (explicit "too much
                 // screen... make one line four column" follow-up) - Cash Flow and Day Book tiles
                 // dropped from this specific quick-launcher only; both stay reachable elsewhere

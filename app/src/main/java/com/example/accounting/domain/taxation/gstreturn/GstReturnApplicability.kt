@@ -35,8 +35,12 @@ object GstReturnApplicability {
      * GST Settings refactor - "Taxpayer Type is the single source of truth" for which return
      * types are ever shown at all (Dashboard, Select Return). Deliberately a SEPARATE list from
      * [availableReturns]: GSTR-9/GSTR-9C are real Regular-scheme returns and must be visible for a
-     * Regular taxpayer, but this codebase has no preparation logic for either yet (see
-     * [GstReturnType]'s own KDoc), so they are listed here (visible) but intentionally absent from
+     * Regular taxpayer. GSTR-9 now has preparation, validation and JSON generation in the repository
+     * (Phase 8, Step 8) but stays out of [availableReturns] on purpose: that set drives the
+     * dashboard's monthly/quarterly period selectors and Data Summary, and an annual return needs an
+     * annual-period screen first. GSTR-9C (Phase 8, Step 9) has preparation, validation and a
+     * working-paper export in the repository and is held back for the same reason. So both are
+     * listed here (visible) but intentionally absent from
      * [availableReturns] (the actionable/periodicity-bearing set the Dashboard's "File" buttons and
      * Select Return's tappability both key off) - same "real gap, never a fabricated
      * implementation" precedent this codebase already established for CMP-08's tax-liability figure.

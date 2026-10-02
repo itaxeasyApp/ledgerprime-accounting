@@ -83,6 +83,7 @@ import com.example.accounting.presentation.theme.Spacing
 import com.example.accounting.presentation.viewmodel.AccountingUiState
 import com.example.ui.theme.IndigoContainer
 import com.example.ui.theme.IndigoTax
+import com.example.accounting.domain.taxation.gst.GstVoucherFilter
 import com.example.accounting.domain.taxation.gstreturn.GstFilingMode
 import com.example.accounting.domain.taxation.gstreturn.GstQuarter
 import com.example.accounting.domain.taxation.gstreturn.GstReturn
@@ -454,9 +455,10 @@ private fun GstDashboardStep(
                 }) {}
             }
         }
-        if (uiState.vouchers.isNotEmpty()) {
+        val gstVouchers = GstVoucherFilter.filter(uiState.vouchers)
+        if (gstVouchers.isNotEmpty()) {
             item { Text("Recent Activity", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)) }
-            items(uiState.vouchers.sortedByDescending { it.date }.take(3), key = { it.voucherId }) { v ->
+            items(gstVouchers.sortedByDescending { it.date }.take(3), key = { it.voucherId }) { v ->
                 SectionCard(title = "${v.voucherType.displayName} - ${v.voucherNumber}", subtitle = v.date.toString()) {
                     Amount(v.totalDebits, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -885,7 +887,7 @@ private fun GstDataSummaryStep(uiState: AccountingUiState, onBack: () -> Unit, o
             com.example.accounting.domain.taxation.gstreturn.GstPeriod.of(fy, gstReturn.quarter, gstReturn.month).dateRange()
         }.getOrNull()
     } else null
-    val vouchersInPeriod = if (range != null) uiState.vouchers.filter { !it.isCancelled && it.date in range } else emptyList()
+    val vouchersInPeriod = if (range != null) GstVoucherFilter.filter(uiState.vouchers, range) else emptyList()
     val salesCount = vouchersInPeriod.count { it.voucherType == VoucherType.SALES }
     val purchaseCount = vouchersInPeriod.count { it.voucherType == VoucherType.PURCHASE }
 

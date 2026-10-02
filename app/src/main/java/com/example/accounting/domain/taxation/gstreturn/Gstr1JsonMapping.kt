@@ -1,5 +1,9 @@
 package com.example.accounting.domain.taxation.gstreturn
 
+import com.example.accounting.core.common.Money
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+
 /**
  * Phase 8A, Part 1 - two distinct JSON shapes for the same [Gstr1ReturnData], matching this
  * project's existing "readable internal tree vs. statutory portal tree" split (see
@@ -92,98 +96,164 @@ fun Gstr1ReturnData.toTree(): Map<String, Any?> = linkedMapOf(
  * rate. Money fields are rupees with 2 decimals (GSTN's own convention, unlike this project's own
  * paise-Long convention elsewhere) - converted ONLY at this final serialization boundary, never
  * upstream.
+ *
+ * Phase 8, Step 5 - GSTN conventions applied here: `fp` is MMYYYY (a quarter is reported as its last
+ * month); every date is dd-MM-yyyy; `gt`/`cur_gt` carry the aggregate turnover; B2CS rows carry
+ * `sply_ty` (INTRA/INTER); CDNUR entries are flat note objects typed B2CL/EXPWP/EXPWOP; Nil `sply_ty`
+ * is the INTRB2B/INTRB2C/INTRAB2B/INTRAB2C enumeration (one row per code); HSN rows carry `uqc`;
+ * export invoices carry `itms`; Table 13 `doc_num` is the GSTN nature-of-document code; and a note
+ * (Credit/Debit) is reported with POSITIVE values - its type is given by `ntty`, not by a minus sign.
+ * A B2CS row is a net summary and may legitimately be negative.
  */
 object Gstr1PortalJsonSerializer {
+    private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy")
+
+    private fun LocalDate.gstn(): String = format(DATE_FORMAT)
+
     private fun Long.toRupees(): Double = this / 100.0
 
-    private fun Gstr1RateLine.toItm(): Map<String, Any?> = linkedMapOf(
-        "num" to null,
-        "itm_det" to linkedMapOf(
-            "rt" to gstRatePercent, "txval" to taxableValue.paise.toRupees(),
-            "camt" to cgst.paise.toRupees(), "samt" to sgst.paise.toRupees(),
-            "iamt" to igst.paise.toRupees(), "csamt" to cess.paise.toRupees()
+    /** GSTN `fp`: MMYYYY. A monthly key ("202604") becomes "042026"; a quarterly key ("2026-27-Q1")
+     * becomes its last month ("062026"). Anything unrecognised is returned unchanged. */
+    fun toGstnReturnPeriod(periodKey: String): String {
+        Regex("^(\\d{4})(\\d{2})$").matchEntire(periodKey)?.let { return it.groupValues[2] + it.groupValues[1] }
+        Regex("^(\\d{4})-\\d{2}-Q([1-4])$").matchEntire(periodKey)?.let {
+            val startYear = it.groupValues[1].toInt()
+            return when (it.groupValues[2]) {
+                "1" -> "06$startYear"
+                "2" -> "09$startYear"
+                "3" -> "12$startYear"
+                else -> "03${startYear + 1}"
+            }
+        }
+        return periodKey
+    }
+
+    private fun Gstr1RateLine.toItm(num: Int, absolute: Boolean = false): Map<String, Any?> {
+        fun Money.v(): Double = (if (absolute) abs() else this).paise.toRupees()
+        return linkedMapOf(
+            "num" to num,
+            "itm_det" to linkedMapOf(
+                "rt" to gstRatePercent, "txval" to taxableValue.v(),
+                "camt" to cgst.v(), "samt" to sgst.v(),
+                "iamt" to igst.v(), "csamt" to cess.v()
+            )
         )
-    )
+    }
 
     private fun Gstr1Invoice.toInv(): Map<String, Any?> = linkedMapOf(
-        "inum" to invoiceNumber, "idt" to invoiceDate.toString(), "val" to invoiceValue.paise.toRupees(),
+        "inum" to invoiceNumber, "idt" to invoiceDate.gstn(), "val" to invoiceValue.paise.toRupees(),
         "pos" to posStateCode, "rchrg" to if (reverseCharge) "Y" else "N", "inv_typ" to "R",
-        "itms" to rateLines.map { it.toItm() }
+        "itms" to rateLines.mapIndexed { i, l -> l.toItm(i + 1) }
     )
 
     private fun Gstr1B2clInvoice.toInv(): Map<String, Any?> = linkedMapOf(
-        "inum" to invoiceNumber, "idt" to invoiceDate.toString(), "val" to invoiceValue.paise.toRupees(),
-        "pos" to posStateCode, "itms" to rateLines.map { it.toItm() }
+        "inum" to invoiceNumber, "idt" to invoiceDate.gstn(), "val" to invoiceValue.paise.toRupees(),
+        "pos" to posStateCode, "itms" to rateLines.mapIndexed { i, l -> l.toItm(i + 1) }
     )
 
-    private fun Gstr1Note.toNt(): Map<String, Any?> = linkedMapOf(
+    /** Credit/Debit Note fields, all values positive - `ntty` carries the direction. */
+    private fun Gstr1Note.noteFields(): LinkedHashMap<String, Any?> = linkedMapOf(
         "ntty" to if (noteType == NoteType.CREDIT) "C" else "D",
-        "nt_num" to noteNumber, "nt_dt" to noteDate.toString(), "val" to noteValue.paise.toRupees(),
-        "pos" to posStateCode, "rchrg" to if (reverseCharge) "Y" else "N",
-        "itms" to rateLines.map { it.toItm() }
+        "nt_num" to noteNumber, "nt_dt" to noteDate.gstn(), "val" to noteValue.abs().paise.toRupees(),
+        "pos" to posStateCode,
+        "itms" to rateLines.mapIndexed { i, l -> l.toItm(i + 1, absolute = true) }
     )
 
-    fun serialize(data: Gstr1ReturnData): Map<String, Any?> = linkedMapOf(
-        "gstin" to data.companyGstin,
-        "fp" to data.periodKey,
-        "b2b" to data.b2b.map { party ->
-            linkedMapOf("ctin" to party.recipientGstin, "inv" to party.invoices.map { it.toInv() })
-        },
-        "b2cl" to data.b2cl.groupBy { it.posStateCode }.map { (pos, invoices) ->
-            linkedMapOf("pos" to pos, "inv" to invoices.map { it.toInv() })
-        },
-        "b2cs" to data.b2cs.map { row ->
-            linkedMapOf(
-                "typ" to "OE", "pos" to row.posStateCode, "rt" to row.gstRatePercent,
-                "txval" to row.taxableValue.paise.toRupees(), "camt" to row.cgst.paise.toRupees(),
-                "samt" to row.sgst.paise.toRupees(), "iamt" to row.igst.paise.toRupees(), "csamt" to row.cess.paise.toRupees()
-            )
-        },
-        "cdnr" to data.cdnr.map { party ->
-            linkedMapOf("ctin" to party.recipientGstin, "nt" to party.notes.map { it.toNt() })
-        },
-        "cdnur" to data.cdnur.map { note ->
-            linkedMapOf("typ" to "B2CL", "nt" to listOf(note.toNt()))
-        },
-        "exp" to data.exports.groupBy { "" }.flatMap { (_, invoices) ->
-            listOf(
+    private fun Gstr1Note.toCdnrNote(): Map<String, Any?> = linkedMapOf<String, Any?>().apply {
+        putAll(noteFields())
+        put("rchrg", if (reverseCharge) "Y" else "N")
+        put("inv_typ", "R")
+    }
+
+    private fun Gstr1Note.toCdnurNote(): Map<String, Any?> {
+        val typ = when {
+            !isExport -> "B2CL"
+            rateLines.any { it.igst.paise != 0L } -> "EXPWP"
+            else -> "EXPWOP"
+        }
+        return linkedMapOf<String, Any?>("typ" to typ).apply { putAll(noteFields()) }
+    }
+
+    private fun splyTy(pos: String, companyStateCode: String): String =
+        if (companyStateCode.length == 2 && pos.isNotBlank() && pos != companyStateCode) "INTER" else "INTRA"
+
+    private fun nilSplyTy(interState: Boolean, registered: Boolean): String =
+        (if (interState) "INTR" else "INTRA") + (if (registered) "B2B" else "B2C")
+
+    fun serialize(data: Gstr1ReturnData): Map<String, Any?> {
+        val companyStateCode = data.companyGstin.trim().take(2)
+        return linkedMapOf(
+            "gstin" to data.companyGstin,
+            "fp" to toGstnReturnPeriod(data.periodKey),
+            "gt" to data.aggregateTurnoverPrevFy.paise.toRupees(),
+            "cur_gt" to data.cumulativeTurnoverCurrentFy.paise.toRupees(),
+            "b2b" to data.b2b.map { party ->
+                linkedMapOf("ctin" to party.recipientGstin, "inv" to party.invoices.map { it.toInv() })
+            },
+            "b2cl" to data.b2cl.groupBy { it.posStateCode }.map { (pos, invoices) ->
+                linkedMapOf("pos" to pos, "inv" to invoices.map { it.toInv() })
+            },
+            "b2cs" to data.b2cs.map { row ->
                 linkedMapOf(
-                    "exp_typ" to "WPAY",
-                    "inv" to invoices.map { linkedMapOf("inum" to it.invoiceNumber, "idt" to it.invoiceDate.toString(), "val" to it.taxableValue.paise.toRupees()) }
+                    "sply_ty" to splyTy(row.posStateCode, companyStateCode),
+                    "typ" to "OE", "pos" to row.posStateCode, "rt" to row.gstRatePercent,
+                    "txval" to row.taxableValue.paise.toRupees(), "camt" to row.cgst.paise.toRupees(),
+                    "samt" to row.sgst.paise.toRupees(), "iamt" to row.igst.paise.toRupees(), "csamt" to row.cess.paise.toRupees()
                 )
-            )
-        },
-        "nil" to linkedMapOf(
-            "inv" to data.nilRated.map { row ->
+            },
+            "cdnr" to data.cdnr.map { party ->
+                linkedMapOf("ctin" to party.recipientGstin, "nt" to party.notes.map { it.toCdnrNote() })
+            },
+            "cdnur" to data.cdnur.map { it.toCdnurNote() },
+            "exp" to data.exports.groupBy { if (it.igst.paise != 0L) "WPAY" else "WOPAY" }.map { (expTyp, invoices) ->
                 linkedMapOf(
-                    "sply_ty" to if (row.interState) "INTER" else "INTRA",
-                    "expt_amt" to (if (row.bucket == SupplyNatureBucket.EXEMPT) row.taxableValue.paise.toRupees() else 0.0),
-                    "nil_amt" to (if (row.bucket == SupplyNatureBucket.NIL_RATED) row.taxableValue.paise.toRupees() else 0.0),
-                    "ngsup_amt" to 0.0
-                )
-            }
-        ),
-        "hsn" to linkedMapOf(
-            "data" to data.hsn.mapIndexed { index, row ->
-                linkedMapOf(
-                    "num" to index + 1, "hsn_sc" to row.hsnSacCode, "qty" to row.totalQuantity,
-                    "rt" to row.gstRatePercent, "txval" to row.taxableValue.paise.toRupees(),
-                    "camt" to row.cgst.paise.toRupees(), "samt" to row.sgst.paise.toRupees(),
-                    "iamt" to row.igst.paise.toRupees(), "csamt" to row.cess.paise.toRupees()
-                )
-            }
-        ),
-        "doc_issue" to linkedMapOf(
-            "doc_det" to data.documentsIssued.mapIndexed { index, row ->
-                linkedMapOf(
-                    "doc_num" to index + 1, "docs" to listOf(
+                    "exp_typ" to expTyp,
+                    "inv" to invoices.map { inv ->
                         linkedMapOf(
-                            "num" to 1, "from" to row.seriesFrom, "to" to row.seriesTo,
-                            "totnum" to row.totalCount, "cancel" to row.cancelledCount, "net_issue" to row.netIssued
+                            "inum" to inv.invoiceNumber, "idt" to inv.invoiceDate.gstn(),
+                            "val" to (inv.taxableValue + inv.igst).paise.toRupees(),
+                            "itms" to listOf(
+                                linkedMapOf(
+                                    "txval" to inv.taxableValue.paise.toRupees(), "rt" to inv.gstRatePercent,
+                                    "iamt" to inv.igst.paise.toRupees(), "csamt" to 0.0
+                                )
+                            )
+                        )
+                    }
+                )
+            },
+            "nil" to linkedMapOf(
+                "inv" to data.nilRated.groupBy { nilSplyTy(it.interState, it.registered) }.map { (sply, rows) ->
+                    linkedMapOf(
+                        "sply_ty" to sply,
+                        "expt_amt" to rows.filter { it.bucket == SupplyNatureBucket.EXEMPT }.sumOf { it.taxableValue.paise }.toRupees(),
+                        "nil_amt" to rows.filter { it.bucket == SupplyNatureBucket.NIL_RATED }.sumOf { it.taxableValue.paise }.toRupees(),
+                        "ngsup_amt" to 0.0
+                    )
+                }
+            ),
+            "hsn" to linkedMapOf(
+                "data" to data.hsn.mapIndexed { index, row ->
+                    linkedMapOf(
+                        "num" to index + 1, "hsn_sc" to row.hsnSacCode, "uqc" to row.uqc, "qty" to (row.totalQuantity ?: 0.0),
+                        "rt" to row.gstRatePercent, "val" to row.totalValue.paise.toRupees(), "txval" to row.taxableValue.paise.toRupees(),
+                        "camt" to row.cgst.paise.toRupees(), "samt" to row.sgst.paise.toRupees(),
+                        "iamt" to row.igst.paise.toRupees(), "csamt" to row.cess.paise.toRupees()
+                    )
+                }
+            ),
+            "doc_issue" to linkedMapOf(
+                "doc_det" to data.documentsIssued.map { row ->
+                    linkedMapOf(
+                        "doc_num" to row.natureCode, "docs" to listOf(
+                            linkedMapOf(
+                                "num" to 1, "from" to row.seriesFrom, "to" to row.seriesTo,
+                                "totnum" to row.totalCount, "cancel" to row.cancelledCount, "net_issue" to row.netIssued
+                            )
                         )
                     )
-                )
-            }
+                }
+            )
         )
-    )
+    }
 }

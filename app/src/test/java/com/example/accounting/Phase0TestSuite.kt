@@ -214,10 +214,10 @@ class Phase0TestSuite {
         // Templates: voucher_stock_lines.discountPaise column; GST Settings refactor:
         // companies.gstReturnPeriodMonth/gstReturnPeriodQuarter columns; company-deletion foreign-
         // key fix: stock_movements gains the missing companies CASCADE; Contacts + Favorites
-        // correction: parties.isFavorite column), backed by exactly twenty-eight explicit,
+        // correction: parties.isFavorite column; Phase 8 Step 13: gst_transactions.supplierDocumentNumber/supplierDocumentDate columns), backed by exactly twenty-nine explicit,
         // non-destructive migrations - see testMigrationInfrastructure_ExplicitRegistry.
         assertNotNull(AppDatabase::class.java)
-        assertEquals(28, AppDatabase.ALL_MIGRATIONS.size)
+        assertEquals(29, AppDatabase.ALL_MIGRATIONS.size)
     }
 
     // ==========================================
@@ -227,7 +227,7 @@ class Phase0TestSuite {
     fun testMigrationInfrastructure_ExplicitRegistry() {
         val migrations = AppDatabase.ALL_MIGRATIONS
         assertNotNull("Explicit migrations array must be defined", migrations)
-        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column), 24->25 (Phase 8A, Part 2: companies.gstr1ReminderEnabled column), 25->26 (5 Invoice PDF Templates: voucher_stock_lines.discountPaise column), 26->27 (GST Settings refactor: companies.gstReturnPeriodMonth/gstReturnPeriodQuarter columns), 27->28 (company-deletion foreign-key fix: stock_movements gains the missing companies CASCADE), and 28->29 (Contacts + Favorites correction: parties.isFavorite column) are the only migrations registered so far", 28, migrations.size)
+        assertEquals("Version 1->2 (Phase 4), 2->3 (Phase 5), 3->4 (Phase 7A), 4->5 (Phase 7B), 5->6 (Phase 7D), 6->7 (Business Profile hardening), 7->8 (Phase 7F: Recurring Voucher Engine), 8->9 (Phase 7J-B: Management Layer), 9->10 (GST Settings: company gstEnabled column), 10->11 (Architecture Checkpoint: gst_transactions.voucherId relaxed to nullable), 11->12 (Rule 30: Party Data Validation - ledgers.gstRegistrationStatus column), 12->13 (Rule 31: Purchase/RCM Foundation - gst_transactions.chargeType column), 13->14 (Rule 33: GST Return Dashboard & Filing Foundation - companies.gstScheme column + gst_returns/gst_return_artifacts/gst_return_sections/gst_return_submissions tables), 14->15 (Rule 33 redesign: companies.gstFilingFrequency column), 15->16 (PIN-code address lookup: business_profiles/individual_profiles pinCode/city/state/country columns), 16->17 (Phase 7J-B.2: voucher_document_references.(voucherId, documentAssetId) unique index), 17->18 (D1a: companies.gstOperatingMode column), 18->19 (D1b: gst_transactions.supplyNature/transactionGroupId/transactionDate/partyGstRegistrationStatus columns), 19->20 (Company/Profile/Ledger Setup audit: ledgers.bankName/bankBranch columns), 20->21 (Customer/Supplier Setup fix: ledgers.pinCode column), 21->22 (13-point correctness pass: companies.pinCode column), 22->23 (Group-hierarchy audit fix: backfill the 17 missing standard account_groups - Loans (Liability)/Bank OD/Secured/Unsecured Loans among them - for every company created before createCompany() was switched to the canonical 28-group hierarchy), 23->24 (Phase 8A, Part 2: gst_returns.isNilReturn column), 24->25 (Phase 8A, Part 2: companies.gstr1ReminderEnabled column), 25->26 (5 Invoice PDF Templates: voucher_stock_lines.discountPaise column), 26->27 (GST Settings refactor: companies.gstReturnPeriodMonth/gstReturnPeriodQuarter columns), 27->28 (company-deletion foreign-key fix: stock_movements gains the missing companies CASCADE), 28->29 (Contacts + Favorites correction: parties.isFavorite column) and 29->30 (Phase 8 Step 13: gst_transactions.supplierDocumentNumber/supplierDocumentDate columns) are the only migrations registered so far", 29, migrations.size)
         assertEquals(1, migrations[0].startVersion)
         assertEquals(2, migrations[0].endVersion)
         assertEquals(2, migrations[1].startVersion)
@@ -284,6 +284,8 @@ class Phase0TestSuite {
         assertEquals(28, migrations[26].endVersion)
         assertEquals(28, migrations[27].startVersion)
         assertEquals(29, migrations[27].endVersion)
+        assertEquals(29, migrations[28].startVersion)
+        assertEquals(30, migrations[28].endVersion)
     }
 
     // ==========================================

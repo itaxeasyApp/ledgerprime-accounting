@@ -17,3 +17,6 @@ local.properties
 .env
 debug.keystore
 /screenshots
+
+# Firebase client config (project-specific; keep out of version control)
+app/google-services.json

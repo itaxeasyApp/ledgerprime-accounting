@@ -120,6 +120,11 @@ fun CreateVoucherDialog(
      * carried on `Voucher`/`JournalItem` itself - see `AccountingViewModel.correctVoucher`'s doc
      * comment). `null` whenever `prefillFrom` isn't a GST-bearing account-only Sale/Purchase. */
     prefillGstDetail: Pair<Double, String>? = null,
+    /** Step 18 - a Purchase `prefillFrom`'s recorded supplier invoice number/date, read from its GST fact by the
+     * caller. `null` = NOT_RECORDED: the number then falls back to the voucher's own reference (the existing
+     * behaviour) and the date stays empty - never the voucher/booking date. */
+    prefillSupplierInvoiceNumber: String? = null,
+    prefillSupplierInvoiceDate: LocalDate? = null,
     onDismiss: () -> Unit,
     onAddNewParty: (PartyRole) -> Unit = {},
     onAddNewBankLedger: () -> Unit = {},
@@ -135,14 +140,14 @@ fun CreateVoucherDialog(
      * build GST/stock detail only at post time, so a header-only draft would be lossy (see docs/54). */
     onSaveAsDraft: (VoucherType, LocalDate, String, String, Money, String, String) -> Unit = { _, _, _, _, _, _, _ -> },
     onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, com.example.accounting.domain.taxation.gst.GstPricingMode) -> Unit = { _, _, _, _, _, _, _ -> },
-    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, com.example.accounting.domain.taxation.gst.GstPricingMode) -> Unit = { _, _, _, _, _, _, _ -> },
+    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, com.example.accounting.domain.taxation.gst.GstPricingMode, LocalDate?) -> Unit = { _, _, _, _, _, _, _, _ -> },
     /** D1a - Sale/Purchase for an ACCOUNT_ONLY company: Party ledger, Trade ledger, amount, date,
      * reference number, narration, GST rate % (0.0 = no GST), HSN/SAC. Accounting-flow audit fix -
      * the trailing (Double, String) pair was added so Account-Only can still charge/claim GST when
      * [gstApplicable] is true; every existing caller that doesn't pass them keeps posting with
      * gstRatePercent = 0.0 (byte-identical to the pre-fix no-GST behavior). */
     onPostAccountOnlySale: (String, String, Money, LocalDate, String, String, Double, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
-    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String) -> Unit = { _, _, _, _, _, _, _, _ -> },
+    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String, LocalDate?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     onPostCreditNote: (String, LocalDate, String, String) -> Unit = { _, _, _, _ -> },
     onPostDebitNote: (String, LocalDate, String, String) -> Unit = { _, _, _, _ -> },
     onPostSettlement: (VoucherType, LocalDate, String, String, Money, String, String, String, List<Pair<String, Money>>) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
@@ -246,7 +251,13 @@ fun CreateVoucherDialog(
         )
     }
     var narration by remember(prefillFrom) { mutableStateOf(prefillFrom?.narration ?: "") }
-    var referenceNumber by remember(prefillFrom) { mutableStateOf(prefillFrom?.referenceNumber ?: "") }
+    var referenceNumber by remember(prefillFrom) {
+        mutableStateOf(prefillSupplierInvoiceNumber?.takeIf { prefillFrom?.voucherType == VoucherType.PURCHASE } ?: prefillFrom?.referenceNumber ?: "")
+    }
+    // Purchase only: the date printed on the SUPPLIER's invoice. `null` = not recorded; never defaulted to the booking date.
+    var supplierInvoiceDate by remember(prefillFrom) {
+        mutableStateOf(prefillSupplierInvoiceDate?.takeIf { prefillFrom?.voucherType == VoucherType.PURCHASE })
+    }
     var debitDropdownExpanded by remember { mutableStateOf(false) }
     var creditDropdownExpanded by remember { mutableStateOf(false) }
     val ledgersMap = remember(ledgers) { ledgers.associateBy { it.ledgerId } }
@@ -707,6 +718,16 @@ fun CreateVoucherDialog(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (isPurchaseFlow && gstApplicable) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        DateField(
+                            label = "Supplier Invoice Date (Optional)",
+                            selectedDate = supplierInvoiceDate,
+                            onDateSelected = { supplierInvoiceDate = it },
+                            onCleared = { supplierInvoiceDate = null },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = narration, onValueChange = { narration = it },
@@ -831,9 +852,9 @@ fun CreateVoucherDialog(
                                             it.supplyNature, it.chargeType, (it.discountInput.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 100.0)
                                         )
                                     },
-                                    LocalDate.now(), referenceNumber, narration, pricingMode
+                                    LocalDate.now(), referenceNumber, narration, pricingMode, supplierInvoiceDate
                                 )
-                                isPurchaseFlow -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
+                                isPurchaseFlow -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput, supplierInvoiceDate)
                                 isCreditNoteFlow -> onPostCreditNote(originalVoucherId, LocalDate.now(), referenceNumber, narration)
                                 isDebitNoteFlow -> onPostDebitNote(originalVoucherId, LocalDate.now(), referenceNumber, narration)
                                 isSettlementFlow -> {

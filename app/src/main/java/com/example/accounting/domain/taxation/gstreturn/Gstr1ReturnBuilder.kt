@@ -16,11 +16,18 @@ import com.example.accounting.domain.taxation.gst.SupplyType
  * period-filtered, already-active (non-cancelled) OUTPUT-direction transactions
  * (see [com.example.accounting.data.repository.AccountingRepository.getActiveGstTransactionsForPeriod]).
  *
+ * Phase 8, Step 5 corrections: each LINE is classified on its own (a mixed taxable/exempt invoice
+ * no longer follows its first line); a GST-only row (no [Voucher]) is grouped by its transaction
+ * group and reaches the tables that need no invoice number (B2CS, Nil, HSN); a Credit Note against
+ * an export is reported (CDNUR, export type) instead of dropped; and an unregistered Credit Note
+ * nets into B2CS unless it is a genuine B2CL note.
+ *
  * Explicitly out of scope for this pass (never fabricated): Table 11A/11B advances received/
  * adjusted (no advance-receipt model exists anywhere in this codebase), export shipping-bill
- * detail, e-commerce operator GSTIN, and a full B2BA/CDNRA-style separate amendment table (see
+ * detail, e-commerce operator GSTIN, a full B2BA/CDNRA-style separate amendment table (see
  * [Gstr1Note.amendsFiledPeriod]'s own KDoc for the one honest amendment signal this pass does
- * compute).
+ * compute), and any table that needs a document number for a GST-only row (a GST-only B2B/B2CL/
+ * CDNR/EXP row has no invoice number to report, so it is not placed in those tables).
  */
 object Gstr1ReturnBuilder {
     /** Table 5's statutory threshold (Rule 33 follow-up) - an unregistered, inter-state invoice
@@ -29,7 +36,8 @@ object Gstr1ReturnBuilder {
 
     /**
      * @param transactions Active, period-filtered, OUTPUT-direction [GstTransaction] rows for one
-     *   return period (every row's own [GstTransaction.voucherId] must key into [allVouchersById]).
+     *   return period. A row with a [GstTransaction.voucherId] must key into [allVouchersById]; a
+     *   GST-only row (null voucherId) is grouped by its own transaction group.
      * @param allVouchersById EVERY voucher for the company, by id - deliberately not period-scoped:
      *   a Credit Note's original invoice ([Voucher.referenceVoucherId]) is frequently from an
      *   earlier period (or already cancelled by a later correction), so this must be a superset,
@@ -50,14 +58,14 @@ object Gstr1ReturnBuilder {
         allVouchersInPeriodForDocSummary: List<Voucher>,
         originalInvoicePeriodFiled: suspend (Voucher) -> Boolean = { false }
     ): Gstr1ReturnData {
-        // One row per (voucherId, gstRatePercent) - a single invoice/note can carry more than one
-        // tax rate across its lines (Section 12's own reasoning), never collapsed into one blended rate.
-        val byVoucherAndRate: Map<String, List<GstTransaction>> = transactions
-            .filter { it.voucherId != null }
-            .groupBy { it.voucherId!! }
+        val companyStateCode = companyGstin.trim().take(2)
+        fun isInterState(pos: String) = companyStateCode.length == 2 && pos.isNotBlank() && pos != companyStateCode
 
-        val saleLikeTypes = setOf(VoucherType.SALES)
-        val noteTypes = setOf(VoucherType.CREDIT_NOTE)
+        // One document per voucher; a GST-only row (no voucher) is keyed by its transaction group,
+        // or - for a row with no group id - by its own id, so it is never silently dropped.
+        val byDocument: Map<String, List<GstTransaction>> = transactions.groupBy {
+            it.voucherId ?: it.transactionGroupId.ifBlank { it.gstTransactionId }
+        }
 
         val b2bParties = linkedMapOf<String, MutableList<Gstr1Invoice>>()
         val b2cl = mutableListOf<Gstr1B2clInvoice>()
@@ -65,81 +73,111 @@ object Gstr1ReturnBuilder {
         val cdnrParties = linkedMapOf<String, MutableList<Gstr1Note>>()
         val cdnur = mutableListOf<Gstr1Note>()
         val exports = mutableListOf<Gstr1ExportInvoice>()
-        val nilRows = linkedMapOf<Pair<SupplyNatureBucket, Boolean>, Money>()
-        val hsnRows = linkedMapOf<Pair<String, Double>, MutableList<GstTransaction>>()
+        val nilRows = linkedMapOf<Triple<SupplyNatureBucket, Boolean, Boolean>, Money>()
+        val hsnRows = linkedMapOf<Triple<String, Double, String>, MutableList<GstTransaction>>()
 
-        for ((voucherId, lines) in byVoucherAndRate) {
-            val voucher = allVouchersById[voucherId] ?: continue
+        fun netIntoB2cs(pos: String, rateLines: List<Gstr1RateLine>) {
+            rateLines.forEach { rl ->
+                val key = pos to rl.gstRatePercent
+                val existing = b2csRows[key]
+                b2csRows[key] = if (existing == null) {
+                    Gstr1B2csRow(pos, rl.gstRatePercent, rl.taxableValue, rl.cgst, rl.sgst, rl.igst, rl.cess)
+                } else {
+                    existing.copy(
+                        taxableValue = existing.taxableValue + rl.taxableValue, cgst = existing.cgst + rl.cgst,
+                        sgst = existing.sgst + rl.sgst, igst = existing.igst + rl.igst, cess = existing.cess + rl.cess
+                    )
+                }
+            }
+        }
+
+        suspend fun noteOf(voucher: Voucher, ls: List<GstTransaction>, isExport: Boolean): Gstr1Note {
+            val first = ls.first()
+            val original = voucher.referenceVoucherId?.let { allVouchersById[it] }
+            return Gstr1Note(
+                voucherId = voucher.voucherId,
+                noteNumber = voucher.voucherNumber,
+                noteDate = voucher.date,
+                noteType = NoteType.CREDIT,
+                originalInvoiceNumber = original?.voucherNumber ?: "",
+                originalInvoiceDate = original?.date ?: voucher.date,
+                posStateCode = first.placeOfSupply,
+                reverseCharge = ls.any { it.chargeType == GstChargeType.REVERSE_CHARGE },
+                rateLines = ls.groupBy { it.gstRatePercent }.map { (rate, rows) -> rows.toRateLine(rate) },
+                amendsFiledPeriod = if (original != null) originalInvoicePeriodFiled(original) else false,
+                isExport = isExport
+            )
+        }
+
+        for ((_, lines) in byDocument) {
             val first = lines.first()
+            val voucher: Voucher? = first.voucherId?.let { allVouchersById[it] }
+            if (first.voucherId != null && voucher == null) continue
+            val docType = first.voucherType
             val isRegistered = first.partyGstin.isNotBlank()
-            val reverseCharge = lines.any { it.chargeType == GstChargeType.REVERSE_CHARGE }
 
             // HSN summary (Table 12) always includes every outward line, regardless of nature.
             lines.forEach { gt ->
-                hsnRows.getOrPut(gt.hsnSacCode to gt.gstRatePercent) { mutableListOf() }.add(gt)
+                hsnRows.getOrPut(Triple(gt.hsnSacCode, gt.gstRatePercent, GstnUqc.fromUnit(gt.quantity?.unit))) { mutableListOf() }.add(gt)
             }
 
-            when {
-                first.supplyNature == GstSupplyNature.EXPORT || first.supplyType == SupplyType.EXPORT -> {
-                    if (voucher.voucherType in saleLikeTypes) {
-                        exports += Gstr1ExportInvoice(
-                            voucherId = voucherId,
-                            invoiceNumber = voucher.voucherNumber,
-                            invoiceDate = voucher.date,
-                            taxableValue = lines.fold(Money.ZERO) { acc, l -> acc + l.taxableAmount }
-                        )
-                    }
-                }
-                first.supplyNature == GstSupplyNature.EXEMPT || first.supplyNature == GstSupplyNature.NIL_RATED ||
-                    first.supplyType == SupplyType.EXEMPT -> {
-                    val bucket = if (first.supplyNature == GstSupplyNature.NIL_RATED) SupplyNatureBucket.NIL_RATED else SupplyNatureBucket.EXEMPT
-                    val interState = false // geography bypassed for EXEMPT/NIL_RATED (see GstCalculationEngine.calculateDetailed) - never guessed.
-                    val key = bucket to interState
-                    val taxable = lines.fold(Money.ZERO) { acc, l -> acc + l.taxableAmount }
-                    nilRows[key] = (nilRows[key] ?: Money.ZERO) + taxable
-                }
-                voucher.voucherType in noteTypes -> {
-                    val original = voucher.referenceVoucherId?.let { allVouchersById[it] }
-                    val rateLines = lines.groupBy { it.gstRatePercent }.map { (rate, rows) -> rows.toRateLine(rate) }
-                    val note = Gstr1Note(
-                        voucherId = voucherId,
-                        noteNumber = voucher.voucherNumber,
-                        noteDate = voucher.date,
-                        noteType = NoteType.CREDIT,
-                        originalInvoiceNumber = original?.voucherNumber ?: "",
-                        originalInvoiceDate = original?.date ?: voucher.date,
-                        posStateCode = first.placeOfSupply,
-                        reverseCharge = reverseCharge,
-                        rateLines = rateLines,
-                        amendsFiledPeriod = if (original != null) originalInvoicePeriodFiled(original) else false
+            // Each line is classified on its own - a mixed invoice is split, never judged by line 1.
+            val exportLines = lines.filter { it.isExportLine() }
+            val nilLines = lines.filter { !it.isExportLine() && it.isNilLine() }
+            val taxLines = lines.filter { !it.isExportLine() && !it.isNilLine() }
+
+            if (exportLines.isNotEmpty() && voucher != null) {
+                when (docType) {
+                    VoucherType.SALES -> exports += Gstr1ExportInvoice(
+                        voucherId = voucher.voucherId,
+                        invoiceNumber = voucher.voucherNumber,
+                        invoiceDate = voucher.date,
+                        taxableValue = exportLines.fold(Money.ZERO) { acc, l -> acc + l.taxableAmount },
+                        igst = exportLines.fold(Money.ZERO) { acc, l -> acc + l.igst },
+                        gstRatePercent = exportLines.first().gstRatePercent
                     )
+                    VoucherType.CREDIT_NOTE -> cdnur += noteOf(voucher, exportLines, isExport = true)
+                    else -> Unit
+                }
+            }
+
+            nilLines.groupBy { Triple(it.nilBucket(), isInterState(it.placeOfSupply), it.partyGstin.isNotBlank()) }
+                .forEach { (key, ls) ->
+                    nilRows[key] = (nilRows[key] ?: Money.ZERO) + ls.fold(Money.ZERO) { acc, l -> acc + l.taxableAmount }
+                }
+
+            if (taxLines.isEmpty()) continue
+            val taxFirst = taxLines.first()
+            val rateLines = taxLines.groupBy { it.gstRatePercent }.map { (rate, rows) -> rows.toRateLine(rate) }
+            val reverseCharge = taxLines.any { it.chargeType == GstChargeType.REVERSE_CHARGE }
+
+            when (docType) {
+                VoucherType.CREDIT_NOTE -> {
                     if (isRegistered) {
-                        cdnrParties.getOrPut(first.partyGstin) { mutableListOf() }.add(note)
+                        if (voucher != null) cdnrParties.getOrPut(first.partyGstin) { mutableListOf() }.add(noteOf(voucher, taxLines, isExport = false))
                     } else {
-                        cdnur += note
+                        // CDNUR is only for notes against B2CL invoices; every other unregistered note
+                        // nets (as negative amounts) into the B2CS state+rate summary.
+                        val noteValue = rateLines.fold(Money.ZERO) { acc, l -> acc + l.invoiceValue }.abs()
+                        val originalValue = voucher?.referenceVoucherId?.let { allVouchersById[it] }?.totalAmount ?: Money.ZERO
+                        val isB2clNote = taxFirst.supplyType == SupplyType.INTER_STATE &&
+                            (noteValue > B2CL_THRESHOLD || originalValue > B2CL_THRESHOLD)
+                        if (isB2clNote && voucher != null) cdnur += noteOf(voucher, taxLines, isExport = false)
+                        else if (!isB2clNote) netIntoB2cs(taxFirst.placeOfSupply, rateLines)
                     }
                 }
-                voucher.voucherType in saleLikeTypes -> {
-                    val rateLines = lines.groupBy { it.gstRatePercent }.map { (rate, rows) -> rows.toRateLine(rate) }
+                VoucherType.SALES -> {
                     val invoiceValue = rateLines.fold(Money.ZERO) { acc, l -> acc + l.invoiceValue }
+                    val isB2clInvoice = taxFirst.supplyType == SupplyType.INTER_STATE && invoiceValue > B2CL_THRESHOLD
                     if (isRegistered) {
-                        val invoice = Gstr1Invoice(voucherId, voucher.voucherNumber, voucher.date, first.placeOfSupply, reverseCharge, rateLines)
-                        b2bParties.getOrPut(first.partyGstin) { mutableListOf() }.add(invoice)
-                    } else if (first.supplyType == SupplyType.INTER_STATE && invoiceValue > B2CL_THRESHOLD) {
-                        b2cl += Gstr1B2clInvoice(voucherId, voucher.voucherNumber, voucher.date, first.placeOfSupply, rateLines)
-                    } else {
-                        rateLines.forEach { rl ->
-                            val key = first.placeOfSupply to rl.gstRatePercent
-                            val existing = b2csRows[key]
-                            b2csRows[key] = if (existing == null) {
-                                Gstr1B2csRow(first.placeOfSupply, rl.gstRatePercent, rl.taxableValue, rl.cgst, rl.sgst, rl.igst, rl.cess)
-                            } else {
-                                existing.copy(
-                                    taxableValue = existing.taxableValue + rl.taxableValue, cgst = existing.cgst + rl.cgst,
-                                    sgst = existing.sgst + rl.sgst, igst = existing.igst + rl.igst, cess = existing.cess + rl.cess
-                                )
-                            }
+                        if (voucher != null) {
+                            b2bParties.getOrPut(first.partyGstin) { mutableListOf() }
+                                .add(Gstr1Invoice(voucher.voucherId, voucher.voucherNumber, voucher.date, taxFirst.placeOfSupply, reverseCharge, rateLines))
                         }
+                    } else if (isB2clInvoice) {
+                        if (voucher != null) b2cl += Gstr1B2clInvoice(voucher.voucherId, voucher.voucherNumber, voucher.date, taxFirst.placeOfSupply, rateLines)
+                    } else {
+                        netIntoB2cs(taxFirst.placeOfSupply, rateLines)
                     }
                 }
                 // Any other outward voucher type carrying GST (none exist today - createsGst is only
@@ -151,7 +189,7 @@ object Gstr1ReturnBuilder {
         }
 
         val hsn = hsnRows.map { (key, rows) ->
-            val (hsnCode, rate) = key
+            val (hsnCode, rate, uqc) = key
             Gstr1HsnRow(
                 hsnSacCode = hsnCode, gstRatePercent = rate,
                 totalQuantity = rows.mapNotNull { it.quantity?.doubleValue }.takeIf { it.size == rows.size }?.sum(),
@@ -159,7 +197,8 @@ object Gstr1ReturnBuilder {
                 cgst = rows.fold(Money.ZERO) { acc, l -> acc + l.cgst },
                 sgst = rows.fold(Money.ZERO) { acc, l -> acc + l.sgst },
                 igst = rows.fold(Money.ZERO) { acc, l -> acc + l.igst },
-                cess = rows.fold(Money.ZERO) { acc, l -> acc + l.cess }
+                cess = rows.fold(Money.ZERO) { acc, l -> acc + l.cess },
+                uqc = uqc
             )
         }
 
@@ -174,11 +213,19 @@ object Gstr1ReturnBuilder {
             cdnr = cdnrParties.map { (gstin, notes) -> Gstr1CdnrParty(gstin, notes) },
             cdnur = cdnur,
             exports = exports,
-            nilRated = nilRows.map { (key, value) -> Gstr1NilRatedRow(key.first, key.second, value) },
+            nilRated = nilRows.map { (key, value) -> Gstr1NilRatedRow(key.first, key.second, value, key.third) },
             hsn = hsn,
             documentsIssued = documentsIssued
         )
     }
+
+    private fun GstTransaction.isExportLine(): Boolean = supplyNature == GstSupplyNature.EXPORT || supplyType == SupplyType.EXPORT
+
+    private fun GstTransaction.isNilLine(): Boolean =
+        supplyNature == GstSupplyNature.EXEMPT || supplyNature == GstSupplyNature.NIL_RATED || supplyType == SupplyType.EXEMPT
+
+    private fun GstTransaction.nilBucket(): SupplyNatureBucket =
+        if (supplyNature == GstSupplyNature.NIL_RATED) SupplyNatureBucket.NIL_RATED else SupplyNatureBucket.EXEMPT
 
     private fun List<GstTransaction>.toRateLine(rate: Double): Gstr1RateLine = Gstr1RateLine(
         gstRatePercent = rate,
@@ -192,6 +239,14 @@ object Gstr1ReturnBuilder {
     /** Table 13 - see [Gstr1DocumentSeriesRow]'s own KDoc for the exact scope/limitations. */
     private val documentVoucherTypes = setOf(VoucherType.SALES, VoucherType.CREDIT_NOTE, VoucherType.DEBIT_NOTE)
 
+    /** GSTN Table 13 nature-of-document codes for the document types this domain issues. */
+    private fun natureCodeOf(type: VoucherType): Int = when (type) {
+        VoucherType.SALES -> 1
+        VoucherType.DEBIT_NOTE -> 4
+        VoucherType.CREDIT_NOTE -> 5
+        else -> 1
+    }
+
     private fun buildDocumentSummary(vouchers: List<Voucher>): List<Gstr1DocumentSeriesRow> =
         vouchers.filter { it.voucherType in documentVoucherTypes }
             .groupBy { it.voucherType }
@@ -202,7 +257,8 @@ object Gstr1ReturnBuilder {
                     seriesFrom = sorted.firstOrNull()?.voucherNumber ?: "",
                     seriesTo = sorted.lastOrNull()?.voucherNumber ?: "",
                     totalCount = list.size,
-                    cancelledCount = list.count { it.isCancelled }
+                    cancelledCount = list.count { it.isCancelled },
+                    natureCode = natureCodeOf(type)
                 )
             }
 }

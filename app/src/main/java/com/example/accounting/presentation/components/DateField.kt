@@ -2,6 +2,7 @@ package com.example.accounting.presentation.components
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -11,6 +12,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,32 +33,42 @@ import java.time.ZoneOffset
  * (a read-only `OutlinedTextField` itself has no click callback to hook into). Never a business
  * rule about which dates are valid - a caller wanting a min/max range would extend this with an
  * explicit parameter once a real consumer needs it, not invented speculatively here.
+ *
+ * [selectedDate] may be `null` ("no date chosen" - shown as an empty field, never defaulted to today);
+ * the picker then opens on today only as a starting point. When [onCleared] is supplied, a chosen
+ * date can be removed again (back to `null`) with a close icon.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DateField(
     label: String,
-    selectedDate: LocalDate,
+    selectedDate: LocalDate?,
     onDateSelected: (LocalDate) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onCleared: (() -> Unit)? = null
 ) {
     var pickerOpen by remember { mutableStateOf(false) }
 
     OutlinedTextField(
-        value = selectedDate.toString(),
+        value = selectedDate?.toString() ?: "",
         onValueChange = {},
         readOnly = true,
         label = { Text(label) },
         trailingIcon = {
-            IconButton(onClick = { pickerOpen = true }) {
-                Icon(Icons.Default.CalendarMonth, contentDescription = "Pick date")
+            Row {
+                if (onCleared != null && selectedDate != null) {
+                    IconButton(onClick = onCleared) { Icon(Icons.Default.Close, contentDescription = "Clear date") }
+                }
+                IconButton(onClick = { pickerOpen = true }) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = "Pick date")
+                }
             }
         },
         modifier = modifier
     )
 
     if (pickerOpen) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = selectedDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
+        val state = rememberDatePickerState(initialSelectedDateMillis = (selectedDate ?: LocalDate.now()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
         DatePickerDialog(
             onDismissRequest = { pickerOpen = false },
             confirmButton = {

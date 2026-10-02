@@ -42,10 +42,17 @@ object GstrJsonSerializer {
         return adapter.toJson(ExportJsonSerializer.envelope(metadata, dataTree))
     }
 
-    private fun GSTTransactionExportDto.toGstrLineTree(): Map<String, Any?> = linkedMapOf(
+    private fun GSTTransactionExportDto.toGstrLineTree(): Map<String, Any?> = linkedMapOf<String, Any?>(
         "voucherId" to voucherId, "voucherType" to voucherType.name, "partyGstin" to partyGstin,
         "placeOfSupply" to placeOfSupply, "supplyType" to supplyType, "hsnSacCode" to hsnSacCode,
         "isService" to isService, "taxableAmountPaise" to taxableAmountPaise, "gstRatePercent" to gstRatePercent,
         "cgstPaise" to cgstPaise, "sgstPaise" to sgstPaise, "igstPaise" to igstPaise, "cessPaise" to cessPaise
-    )
+    ).also {
+        // Step 17: the supplier's document identity belongs to inward (purchase) lines only - an outward line
+        // never carries the keys, so a sale or a note can never be read as having a supplier document.
+        if (direction == "INPUT") {
+            it["supplierDocumentNumber"] = supplierDocumentNumber
+            it["supplierDocumentDate"] = supplierDocumentDate
+        }
+    }
 }

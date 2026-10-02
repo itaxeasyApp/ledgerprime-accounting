@@ -209,7 +209,11 @@ data class GSTSummaryReport(
     val creditNoteTaxableOutward: Money = Money.ZERO,
     val creditNoteTaxOutward: Money = Money.ZERO,
     val debitNoteTaxableOutward: Money = Money.ZERO,
-    val debitNoteTaxOutward: Money = Money.ZERO
+    val debitNoteTaxOutward: Money = Money.ZERO,
+    /** Phase 8 B7 - tax (CGST+SGST+IGST) the business owes under reverse charge on its inward
+     * supplies. It is the recipient's own liability, payable in CASH, and is already included in
+     * [netTaxPayable]; the matching ITC is in [totalTaxInwardITC] but cannot pay it. */
+    val rcmLiability: Money = Money.ZERO
 )
 
 // ==================== PHASE 7C: REPORT MANAGEMENT ====================

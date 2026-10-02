@@ -74,5 +74,44 @@ data class GstTransaction(
      * fact. `null` means the status was genuinely unknown at that time (the same "unknown, never
      * guessed" semantics [Ledger.gstRegistrationStatus] itself already uses) - never defaulted to
      * either real value. */
-    val partyGstRegistrationStatus: GstRegistrationStatus? = null
-)
+    val partyGstRegistrationStatus: GstRegistrationStatus? = null,
+    /** Phase 8 Step 13 - the SUPPLIER's own invoice/bill number, as printed on the supplier's document
+     * (what GSTR-2B lists). Only ever set on a Purchase's INPUT rows; `null` means NOT_RECORDED - never
+     * a guess and never derived from this app's own voucher number. Every row that existed before this
+     * field has `null`. Credit/Debit Notes never inherit it (a note is its own document). */
+    val supplierDocumentNumber: String? = null,
+    /** Phase 8 Step 13 - the date printed on the supplier's document (NOT the booking date, which is
+     * [transactionDate]/the voucher date). `null` means NOT_RECORDED. */
+    val supplierDocumentDate: LocalDate? = null
+) {
+    /** What is known about this row's supplier document identity - see [DocumentIdentityStatus]. */
+    val documentIdentityStatus: DocumentIdentityStatus
+        get() = when {
+            supplierDocumentNumber == null && supplierDocumentDate == null -> DocumentIdentityStatus.NOT_RECORDED
+            supplierDocumentNumber != null && supplierDocumentDate != null -> DocumentIdentityStatus.RECORDED
+            else -> DocumentIdentityStatus.PARTIAL
+        }
+}
+
+/** Whether a purchase row carries the supplier's document number and date a GSTR-2B match needs. */
+enum class DocumentIdentityStatus { NOT_RECORDED, PARTIAL, RECORDED }
+
+/**
+ * Supplier document identity rules, shared by the posting path and (later) the GSTR-2B matcher so they
+ * can never disagree. The identity of a purchase document is supplier + document number, within one
+ * financial year: the supplier is its GSTIN (upper-cased) and, only when the supplier has no GSTIN,
+ * its ledger; the number is compared trimmed and case-insensitively. Nothing else is normalised -
+ * no stripping of zeros or punctuation, which would be a guess about the supplier's numbering.
+ */
+object PurchaseDocumentIdentity {
+    /** `null` when [raw] is blank, i.e. NOT_RECORDED. */
+    fun normalizeNumber(raw: String?): String? = raw?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** The supplier half of the key: GSTIN if the supplier has one, else the supplier ledger. */
+    fun supplierKey(partyGstin: String, partyLedgerId: String): String =
+        partyGstin.trim().uppercase().takeIf { it.isNotEmpty() }?.let { "GSTIN:$it" } ?: "LEDGER:$partyLedgerId"
+
+    /** `null` when the row has no supplier document number (nothing to detect a duplicate on). */
+    fun duplicateKey(partyGstin: String, partyLedgerId: String, number: String?): String? =
+        normalizeNumber(number)?.let { "${supplierKey(partyGstin, partyLedgerId)}|${it.uppercase()}" }
+}

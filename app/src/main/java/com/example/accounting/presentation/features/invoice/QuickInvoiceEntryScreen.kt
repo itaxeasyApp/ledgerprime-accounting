@@ -44,6 +44,7 @@ import com.example.accounting.domain.inventory.StockItem
 import com.example.accounting.domain.party.PartyRole
 import com.example.accounting.domain.taxation.gst.GstPricingMode
 import com.example.accounting.presentation.components.LineFormState
+import com.example.accounting.presentation.components.DateField
 import com.example.accounting.presentation.components.TradingForm
 import com.example.accounting.presentation.viewmodel.AccountingViewModel
 import java.time.LocalDate
@@ -76,9 +77,9 @@ fun QuickInvoiceEntryScreen(
     onAddNewParty: (PartyRole) -> Unit,
     onAddNewTradeLedger: (Boolean) -> Unit,
     onPostSaleInvoice: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, GstPricingMode) -> Unit,
-    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, GstPricingMode) -> Unit,
+    onPostPurchaseBill: (String, String, List<AccountingViewModel.TradingLineForm>, LocalDate, String, String, GstPricingMode, LocalDate?) -> Unit,
     onPostAccountOnlySale: (String, String, Money, LocalDate, String, String, Double, String) -> Unit,
-    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String) -> Unit
+    onPostAccountOnlyPurchase: (String, String, Money, LocalDate, String, String, Double, String, LocalDate?) -> Unit
 ) {
     val groupsById = remember(groups) { groups.associateBy { it.groupId } }
     fun isDebtorLedger(ledger: Ledger) = ledger.groupId.startsWith("${StandardSystemGroups.DEBTORS_GROUP_ID}_") ||
@@ -101,6 +102,8 @@ fun QuickInvoiceEntryScreen(
     var accountOnlyGstRateInput by remember { mutableStateOf("0") }
     var accountOnlyHsnSacInput by remember { mutableStateOf("") }
     var referenceNumber by remember { mutableStateOf("") }
+    // Purchase only: the date printed on the SUPPLIER's invoice. `null` = not recorded; never defaulted to the booking date.
+    var supplierInvoiceDate by remember { mutableStateOf<LocalDate?>(null) }
     var narration by remember { mutableStateOf("") }
     var partyDropdownExpanded by remember { mutableStateOf(false) }
     var tradeDropdownExpanded by remember { mutableStateOf(false) }
@@ -223,6 +226,16 @@ fun QuickInvoiceEntryScreen(
                 label = { Text("Invoice Number (Optional)") },
                 modifier = Modifier.fillMaxWidth()
             )
+            if (!isSale && gstApplicable) {
+                Spacer(modifier = Modifier.height(8.dp))
+                DateField(
+                    label = "Supplier Invoice Date (Optional)",
+                    selectedDate = supplierInvoiceDate,
+                    onDateSelected = { supplierInvoiceDate = it },
+                    onCleared = { supplierInvoiceDate = null },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = narration, onValueChange = { narration = it },
@@ -274,11 +287,11 @@ fun QuickInvoiceEntryScreen(
                             if (isSale) {
                                 onPostSaleInvoice(partyLedgerId, tradeLedgerId, postedLines, LocalDate.now(), referenceNumber, narration, pricingMode)
                             } else {
-                                onPostPurchaseBill(partyLedgerId, tradeLedgerId, postedLines, LocalDate.now(), referenceNumber, narration, pricingMode)
+                                onPostPurchaseBill(partyLedgerId, tradeLedgerId, postedLines, LocalDate.now(), referenceNumber, narration, pricingMode, supplierInvoiceDate)
                             }
                         }
                         isSale -> onPostAccountOnlySale(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
-                        else -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput)
+                        else -> onPostAccountOnlyPurchase(partyLedgerId, tradeLedgerId, amountMoney, LocalDate.now(), referenceNumber, narration, accountOnlyGstRateInput.toDoubleOrNull() ?: 0.0, accountOnlyHsnSacInput, supplierInvoiceDate)
                     }
                     onDismiss()
                 },

@@ -126,7 +126,12 @@ data class SyncGstTransactionDto(
     val transactionDate: String? = null,
     /** D1b - see [com.example.accounting.domain.taxation.gst.GstTransaction.partyGstRegistrationStatus].
      * `null` means UNKNOWN, never guessed. */
-    val partyGstRegistrationStatus: String? = null
+    val partyGstRegistrationStatus: String? = null,
+    /** Step 17 - see [com.example.accounting.domain.taxation.gst.GstTransaction.supplierDocumentNumber]. `null` =
+     * NOT_RECORDED (also what an already-queued pre-Step-13 event reads as) - never guessed. Purchase rows only. */
+    val supplierDocumentNumber: String? = null,
+    /** Step 17 - ISO-8601 supplier document date; `null` = NOT_RECORDED. Purchase rows only. */
+    val supplierDocumentDate: String? = null
 )
 
 @JsonClass(generateAdapter = true)

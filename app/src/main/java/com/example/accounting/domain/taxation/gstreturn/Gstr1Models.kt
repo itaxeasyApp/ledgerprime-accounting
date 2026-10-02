@@ -94,7 +94,9 @@ data class Gstr1Note(
      * status FILED - the one honest, non-fabricated signal this domain can compute for "this note
      * is amendment-relevant" (see [Gstr1ReturnBuilder]'s KDoc for why a full B2BA/CDNRA-style
      * amendment table is explicitly out of scope for this pass). */
-    val amendsFiledPeriod: Boolean = false
+    val amendsFiledPeriod: Boolean = false,
+    /** A note against an EXPORT supply (Table 9B CDNUR, typ EXPWP/EXPWOP) - never a B2CL note. */
+    val isExport: Boolean = false
 ) {
     val noteValue: Money get() = rateLines.fold(Money.ZERO) { acc, l -> acc + l.invoiceValue }
 }
@@ -115,7 +117,10 @@ data class Gstr1ExportInvoice(
     val voucherId: String,
     val invoiceNumber: String,
     val invoiceDate: LocalDate,
-    val taxableValue: Money
+    val taxableValue: Money,
+    /** IGST actually charged on the export (zero under LUT/bond) - the fact that decides WPAY vs WOPAY. */
+    val igst: Money = Money.ZERO,
+    val gstRatePercent: Double = 0.0
 )
 
 /** Table 8 - Nil-rated/Exempt/Non-GST outward supplies, summarized by [SupplyNatureBucket] x
@@ -126,14 +131,15 @@ enum class SupplyNatureBucket { NIL_RATED, EXEMPT }
 data class Gstr1NilRatedRow(
     val bucket: SupplyNatureBucket,
     val interState: Boolean,
-    val taxableValue: Money
+    val taxableValue: Money,
+    /** The recipient is a registered person (B2B) - the third axis of the GSTN `sply_ty` enumeration. */
+    val registered: Boolean = false
 )
 
 /** Table 12 - HSN/SAC-wise summary of ALL outward supplies (taxable, nil, exempt, export alike) -
- * the one table that is genuinely rate+HSN invariant of registration status. [uqc] (unit of
- * measure) is absent - this domain has no per-line unit fact on [com.example.accounting.domain.taxation.gst.GstTransaction]
- * itself (only [com.example.accounting.domain.itemclassification.HsnSacCode] carries a UQC, and
- * only for stock items - a GST-only or service line has none), so it is never fabricated. */
+ * the one table that is genuinely rate+HSN invariant of registration status. [uqc] is the GSTN
+ * unit quantity code mapped from the line's own [com.example.accounting.core.common.Quantity.unit]
+ * ([GstnUqc]) - "NA" for a line with no quantity (a service), never a guessed unit. */
 data class Gstr1HsnRow(
     val hsnSacCode: String,
     val gstRatePercent: Double,
@@ -142,7 +148,10 @@ data class Gstr1HsnRow(
     val cgst: Money,
     val sgst: Money,
     val igst: Money,
-    val cess: Money
+    val cess: Money,
+    /** GSTN unit quantity code from the line's own [com.example.accounting.core.common.Quantity.unit]
+     * (see [GstnUqc]); "NA" for a line with no quantity (services). */
+    val uqc: String = "NA"
 ) {
     val totalValue: Money get() = taxableValue + cgst + sgst + igst + cess
 }
@@ -161,7 +170,10 @@ data class Gstr1DocumentSeriesRow(
     val seriesFrom: String,
     val seriesTo: String,
     val totalCount: Int,
-    val cancelledCount: Int
+    val cancelledCount: Int,
+    /** GSTN Table 13 nature-of-document code (1 = Invoices for outward supply, 4 = Debit Note,
+     * 5 = Credit Note) - never the list position. */
+    val natureCode: Int = 1
 ) {
     val netIssued: Int get() = totalCount - cancelledCount
 }
@@ -193,7 +205,13 @@ data class Gstr1ReturnData(
     val nilRated: List<Gstr1NilRatedRow> = emptyList(),
     val hsn: List<Gstr1HsnRow> = emptyList(),
     val documentsIssued: List<Gstr1DocumentSeriesRow> = emptyList(),
-    val validationIssues: List<Gstr1ValidationIssue> = emptyList()
+    val validationIssues: List<Gstr1ValidationIssue> = emptyList(),
+    /** GSTN `gt` - aggregate (gross) outward turnover of the preceding financial year, computed
+     * from this app's own GST rows (zero when there is no preceding year on file). */
+    val aggregateTurnoverPrevFy: Money = Money.ZERO,
+    /** GSTN `cur_gt` - cumulative outward turnover of the current financial year from its start
+     * through the end of this return's period, computed from this app's own GST rows. */
+    val cumulativeTurnoverCurrentFy: Money = Money.ZERO
 ) {
     val hasBlockingErrors: Boolean get() = validationIssues.any { it.severity == Gstr1ValidationSeverity.ERROR }
 }

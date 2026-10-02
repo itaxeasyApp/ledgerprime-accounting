@@ -538,7 +538,13 @@ data class GstTransactionEntity(
      * UNKNOWN - the exact same plain-nullable-String convention [LedgerEntity.gstRegistrationStatus]
      * already uses (manual `.name`/`.valueOf()` mapping at the repository boundary, no Room
      * converter), deliberately mirrored rather than introduced as a second pattern. */
-    val partyGstRegistrationStatus: String? = null
+    val partyGstRegistrationStatus: String? = null,
+    /** Phase 8 Step 13 - see [com.example.accounting.domain.taxation.gst.GstTransaction.supplierDocumentNumber].
+     * Nullable with NO default: `MIGRATION_29_30` leaves every existing row NULL (NOT_RECORDED) - no
+     * historical supplier invoice number ever existed on this fact, so none is invented. */
+    val supplierDocumentNumber: String? = null,
+    /** Phase 8 Step 13 - ISO-8601 (`YYYY-MM-DD`) supplier document date; NULL = NOT_RECORDED. */
+    val supplierDocumentDate: String? = null
 )
 
 /**

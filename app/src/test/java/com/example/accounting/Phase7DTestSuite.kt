@@ -188,19 +188,20 @@ class Phase7DTestSuite {
 
     private suspend fun postVoucher(
         dao: AccountingDao, targetCompanyId: String, voucherId: String, voucherType: VoucherType, date: String,
-        debitLedgerId: String, creditLedgerId: String, amountPaise: Long
+        debitLedgerId: String, creditLedgerId: String, amountPaise: Long,
+        gstTransactions: List<GstTransactionEntity> = emptyList()
     ) {
         val entity = VoucherEntity(
             voucherId = voucherId, companyId = targetCompanyId, financialYearId = fyId, voucherNumber = voucherId,
             voucherType = voucherType, date = date, referenceNumber = "", narration = "Test $voucherType",
             totalAmountPaise = amountPaise, isPosted = true, isCancelled = false, syncState = SyncState.PENDING,
-            createdAt = 0L, updatedAt = 0L, createdBy = "TESTER", partyGstin = "", isGstApplicable = true
+            createdAt = 0L, updatedAt = 0L, createdBy = "TESTER", partyGstin = "", isGstApplicable = gstTransactions.isNotEmpty()
         )
         val items = listOf(
             JournalItemEntity("$voucherId-1", voucherId, targetCompanyId, fyId, debitLedgerId, DrCr.DEBIT, amountPaise, "", 1),
             JournalItemEntity("$voucherId-2", voucherId, targetCompanyId, fyId, creditLedgerId, DrCr.CREDIT, amountPaise, "", 2)
         )
-        VoucherPostingEngine.post(dao, entity, items, "IK_$voucherId", "TESTER")
+        VoucherPostingEngine.post(dao, entity, items, "IK_$voucherId", "TESTER", gstTransactions = gstTransactions)
     }
 
     /** Posts a Sales voucher AND inserts the matching [GstTransactionEntity]/[InvoiceEntity] rows
@@ -212,16 +213,18 @@ class Phase7DTestSuite {
         debtorsLedgerId: String, salesLedgerId: String, taxableAmountPaise: Long, cgstPaise: Long, sgstPaise: Long
     ): InvoiceEntity {
         val totalPaise = taxableAmountPaise + cgstPaise + sgstPaise
-        postVoucher(dao, targetCompanyId, voucherId, VoucherType.SALES, "2026-05-10", debtorsLedgerId, salesLedgerId, totalPaise)
-        dao.insertGstTransactions(listOf(
-            GstTransactionEntity(
-                gstTransactionId = "GST_$voucherId", companyId = targetCompanyId, financialYearId = fyId, voucherId = voucherId,
-                voucherType = VoucherType.SALES, partyLedgerId = debtorsLedgerId, partyGstin = "27BBBBB1111B1Z5", placeOfSupply = "27",
-                supplyType = SupplyType.INTRA_STATE, itemId = "ITEM_1", hsnSacCode = "8471", quantityRaw = 1000L,
-                taxableAmountPaise = taxableAmountPaise, gstRatePercent = 18.0, cgstPaise = cgstPaise, sgstPaise = sgstPaise,
-                igstPaise = 0L, cessPaise = 0L, direction = GstDirection.OUTPUT, lineOrder = 1, createdAt = 0L
+        postVoucher(
+            dao, targetCompanyId, voucherId, VoucherType.SALES, "2026-05-10", debtorsLedgerId, salesLedgerId, totalPaise,
+            gstTransactions = listOf(
+                GstTransactionEntity(
+                    gstTransactionId = "GST_$voucherId", companyId = targetCompanyId, financialYearId = fyId, voucherId = voucherId,
+                    voucherType = VoucherType.SALES, partyLedgerId = debtorsLedgerId, partyGstin = "27BBBBB1111B1Z5", placeOfSupply = "27",
+                    supplyType = SupplyType.INTRA_STATE, itemId = "ITEM_1", hsnSacCode = "8471", quantityRaw = 1000L,
+                    taxableAmountPaise = taxableAmountPaise, gstRatePercent = 18.0, cgstPaise = cgstPaise, sgstPaise = sgstPaise,
+                    igstPaise = 0L, cessPaise = 0L, direction = GstDirection.OUTPUT, lineOrder = 1, createdAt = 0L
+                )
             )
-        ))
+        )
         val invoice = InvoiceEntity(
             invoiceId = invoiceId, companyId = targetCompanyId, financialYearId = fyId, invoiceType = InvoiceType.SALES_INVOICE,
             invoiceNumber = "SI-2026-0001", partyId = partyId, date = "2026-05-10", dueDate = "2026-06-09",

@@ -86,7 +86,7 @@ class Phase7ETestSuite {
             voucherId = voucherId, companyId = companyId, financialYearId = fyId, voucherNumber = voucherId,
             voucherType = VoucherType.SALES, date = date, referenceNumber = "", narration = narration,
             totalAmountPaise = amountPaise, isPosted = true, isCancelled = false, syncState = SyncState.PENDING,
-            createdAt = 0L, updatedAt = 0L, createdBy = "TESTER", partyGstin = "", isGstApplicable = true
+            createdAt = 0L, updatedAt = 0L, createdBy = "TESTER", partyGstin = "", isGstApplicable = false
         )
         val items = listOf(
             JournalItemEntity("$voucherId-1", voucherId, companyId, fyId, debitLedgerId, DrCr.DEBIT, amountPaise, "", 1),
@@ -330,7 +330,7 @@ class Phase7ETestSuite {
 
         val result = (repo.exportGstTransactionsAs(companyId, fyId, ExportFormat.CSV) as AccountingResult.Success).data
         val headerLine = result.content.lines().first()
-        assertEquals("gstTransactionId,voucherId,voucherType,partyGstin,placeOfSupply,supplyType,hsnSacCode,isService,taxableAmountPaise,gstRatePercent,cgstPaise,sgstPaise,igstPaise,cessPaise,direction,lineOrder", headerLine)
+        assertEquals("gstTransactionId,voucherId,voucherType,partyGstin,placeOfSupply,supplyType,hsnSacCode,isService,taxableAmountPaise,gstRatePercent,cgstPaise,sgstPaise,igstPaise,cessPaise,direction,lineOrder,supplierDocumentNumber,supplierDocumentDate", headerLine) // Step 17: identity columns appended - existing column order unchanged
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.example.accounting.domain.taxation.gst.GstPricingMode
 import com.example.accounting.domain.taxation.gst.GstSupplyNature
 import com.example.accounting.domain.taxation.gst.GstTransaction
 import com.example.accounting.domain.taxation.gst.GstTransactionFacts
+import com.example.accounting.domain.taxation.gst.PurchaseDocumentIdentity
 import com.example.accounting.domain.taxation.gst.SupplyType
 import java.time.LocalDate
 import java.util.UUID
@@ -252,7 +253,10 @@ object TradingWorkflowEngine {
         date: LocalDate,
         partyGstRegistrationStatus: GstRegistrationStatus?,
         /** See [buildSale]'s parameter of the same name. */
-        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE,
+        /** Step 13: the supplier's own invoice number/date; `null` = NOT_RECORDED (see [GstTransaction.supplierDocumentNumber]). */
+        supplierDocumentNumber: String? = null,
+        supplierDocumentDate: LocalDate? = null
     ): List<GstTransaction> {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // Rule 31 (Purchase/RCM Foundation): the same authoritative backstop `build()` enforces for
@@ -298,7 +302,9 @@ object TradingWorkflowEngine {
                 supplyNature = line.supplyNature,
                 transactionGroupId = groupId,
                 transactionDate = date,
-                partyGstRegistrationStatus = partyGstRegistrationStatus
+                partyGstRegistrationStatus = partyGstRegistrationStatus,
+                supplierDocumentNumber = PurchaseDocumentIdentity.normalizeNumber(supplierDocumentNumber),
+                supplierDocumentDate = supplierDocumentDate
             )
         }
     }
@@ -335,7 +341,10 @@ object TradingWorkflowEngine {
                 cess = -gt.cess,
                 lineOrder = index + 1,
                 transactionGroupId = groupId,
-                transactionDate = date
+                transactionDate = date,
+                // A note is its own document: it never inherits the original's supplier document identity.
+                supplierDocumentNumber = null,
+                supplierDocumentDate = null
             )
         }
     }
@@ -410,8 +419,12 @@ object TradingWorkflowEngine {
         roundOffLedgerId: String, roundOffLedgerName: String,
         trackInventory: Boolean = true,
         /** See [buildSale]'s parameter of the same name. */
-        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE,
+        /** Step 13: the supplier's own invoice number/date; `null` = NOT_RECORDED. */
+        supplierDocumentNumber: String? = null,
+        supplierDocumentDate: LocalDate? = null
     ): TradingWorkflowResult = build(
+        supplierDocumentNumber = supplierDocumentNumber, supplierDocumentDate = supplierDocumentDate,
         isSale = false, voucherId = voucherId, companyId = companyId, financialYearId = financialYearId,
         partyLedgerId = supplierLedgerId, partyName = supplierName, partyGstin = supplierGstin,
         tradeLedgerId = purchaseLedgerId, tradeLedgerName = purchaseLedgerName,
@@ -429,7 +442,9 @@ object TradingWorkflowEngine {
         gstLedgers: TradingGstLedgers,
         roundOffLedgerId: String, roundOffLedgerName: String,
         trackInventory: Boolean = true,
-        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE
+        pricingMode: GstPricingMode = GstPricingMode.EXCLUSIVE,
+        supplierDocumentNumber: String? = null,
+        supplierDocumentDate: LocalDate? = null
     ): TradingWorkflowResult {
         require(lines.isNotEmpty()) { "At least one line item is required." }
         // Rule 31 (Purchase/RCM Foundation): authoritative backstops, matching the
@@ -527,7 +542,10 @@ object TradingWorkflowEngine {
                 supplyNature = line.supplyNature,
                 // D1b: the accounting-integrated path already has an unambiguous correlation id -
                 // its own real voucherId - so this is just that same value, never a second one.
-                transactionGroupId = voucherId
+                transactionGroupId = voucherId,
+                // Step 13: only a Purchase carries the supplier's document identity.
+                supplierDocumentNumber = if (isSale) null else PurchaseDocumentIdentity.normalizeNumber(supplierDocumentNumber),
+                supplierDocumentDate = if (isSale) null else supplierDocumentDate
             )
         }
 
@@ -673,7 +691,10 @@ object TradingWorkflowEngine {
                 lineOrder = index + 1,
                 // D1b: the note is its own real voucher, so it is its own correlation id - same
                 // "transactionGroupId mirrors the real voucherId" rule as the rest of this path.
-                transactionGroupId = noteVoucherId
+                transactionGroupId = noteVoucherId,
+                // A note is its own document: it never inherits the original's supplier document identity.
+                supplierDocumentNumber = null,
+                supplierDocumentDate = null
             )
         }
         val totalAmount = originalJournalItems.filter { it.type == DrCr.DEBIT }.fold(Money.ZERO) { acc, i -> acc + i.amount }

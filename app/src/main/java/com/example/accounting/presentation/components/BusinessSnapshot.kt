@@ -1,10 +1,11 @@
 package com.example.accounting.presentation.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Payments
@@ -12,8 +13,8 @@ import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.example.accounting.core.common.Money
+import com.example.accounting.presentation.theme.Spacing
 import com.example.ui.theme.IndigoTax
 
 /**
@@ -56,24 +57,24 @@ fun BusinessSnapshot(
     onOpenGstDashboard: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         // One uniform 4-per-row grid, matching Quick Actions' own card width exactly - 8 real
         // figures split evenly into two full rows, no empty filler slot needed.
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Cash", cashBalance, "Tap to view", Icons.Default.Payments, MaterialTheme.colorScheme.primary, Modifier.weight(1f).clickable { onOpenCash() })
-            StatCard("Bank", bankBalance, "Tap to view", Icons.Default.AccountBalance, MaterialTheme.colorScheme.primary, Modifier.weight(1f).clickable { onOpenBank() })
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            StatCard("Cash", cashBalance, "Tap to view", Icons.Default.Payments, MaterialTheme.colorScheme.primary, Modifier.weight(1f), onClick = onOpenCash)
+            StatCard("Bank", bankBalance, "Tap to view", Icons.Default.AccountBalance, MaterialTheme.colorScheme.primary, Modifier.weight(1f), onClick = onOpenBank)
             ReceiptSummary(receivables, Modifier.weight(1f)) { onViewReceivables() }
             PaymentSummary(payables, Modifier.weight(1f)) { onViewPayables() }
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             // SERVICE-mode audit fix - a SERVICE company has no Sales/Purchase concept (see
             // [com.example.accounting.domain.company.BusinessType]); [income]/[expenditure] are
             // only ever non-null for a SERVICE company (see DashboardScreen), so that alone
             // decides which pair of cards fills the trade-figure slot - never a second flag.
             if (income != null) IncomeSummary(income, Modifier.weight(1f), onViewProfitLoss) else SalesSummary(salesFigure, Modifier.weight(1f), onOpenSales)
             if (expenditure != null) ExpenditureSummary(expenditure, Modifier.weight(1f), onViewProfitLoss) else PurchaseSummary(purchasesFigure, Modifier.weight(1f), onOpenPurchases)
-            StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f).clickable { onViewGstSummary() })
-            StatCard("GST Dashboard", gstPayable, "File & track returns", Icons.Default.Receipt, IndigoTax, Modifier.weight(1f).clickable { onOpenGstDashboard() })
+            StatCard("GST Payable", gstPayable, "Net position", Icons.Default.AccountBalance, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f), onClick = onViewGstSummary)
+            StatCard("GST Dashboard", gstPayable, "File & track returns", Icons.Default.Receipt, IndigoTax, Modifier.weight(1f), onClick = onOpenGstDashboard)
         }
     }
 }

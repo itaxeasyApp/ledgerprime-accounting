@@ -128,7 +128,8 @@ fun GSTTransactionExportDto.toTree(): Map<String, Any?> = linkedMapOf(
     "partyGstin" to partyGstin, "placeOfSupply" to placeOfSupply, "supplyType" to supplyType,
     "hsnSacCode" to hsnSacCode, "isService" to isService, "taxableAmountPaise" to taxableAmountPaise,
     "gstRatePercent" to gstRatePercent, "cgstPaise" to cgstPaise, "sgstPaise" to sgstPaise, "igstPaise" to igstPaise,
-    "cessPaise" to cessPaise, "direction" to direction, "lineOrder" to lineOrder
+    "cessPaise" to cessPaise, "direction" to direction, "lineOrder" to lineOrder,
+    "supplierDocumentNumber" to supplierDocumentNumber, "supplierDocumentDate" to supplierDocumentDate
 )
 
 fun List<GSTTransactionExportDto>.toTree(): Map<String, Any?> = linkedMapOf(

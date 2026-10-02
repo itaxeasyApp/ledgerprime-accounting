@@ -1,12 +1,15 @@
 package com.example.accounting.presentation.components
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
@@ -19,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.accounting.presentation.theme.Radius
@@ -42,32 +44,25 @@ fun QuickAction(
     onClick: () -> Unit
 ) {
     Surface(
-        // Radius.shapeLg (14dp), same as StatCard/the Dashboard's "Reports" card - explicit
-        // follow-up ("dashboard container are not similar"): every Dashboard container now shares
-        // one corner radius and one border treatment, not three independently-tuned looks.
+        onClick = onClick,
         shape = Radius.shapeLg,
         color = containerColor,
-        // A low-alpha dark stroke, not a fixed theme token - this app's `colorScheme.outline`
-        // (`PurpleGrayOutline`, #C9C2D6) is a pale lavender-gray that visually disappears against
-        // these same-toned pastel container colors (confirmed live on-device: no visible ring on
-        // any tile with either `outline` or `outlineVariant`). onSurface at low alpha stays a
-        // visible dark ring against every one of this row's colors, not just the near-white ones -
-        // the same [DashboardCardBorder] token StatCard/the Reports card now also use.
+        shadowElevation = DashboardTileElevation,
         border = DashboardCardBorder(),
-        modifier = modifier.clickable { onClick() }
+        modifier = modifier.fillMaxHeight().heightIn(min = DashboardTileMinHeight)
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 16.dp, horizontal = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier.fillMaxWidth().fillMaxHeight().padding(DashboardTilePadding),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Icon(imageVector = icon, contentDescription = title, tint = contentColor, modifier = Modifier.size(22.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
+            Icon(imageVector = icon, contentDescription = title, tint = contentColor, modifier = Modifier.size(DashboardTileIconSize))
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            FitText(
                 text = title,
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
                 color = contentColor,
-                textAlign = TextAlign.Center,
-                maxLines = 2
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
@@ -89,7 +84,7 @@ data class QuickActionSpec(
 
 @Composable
 fun QuickActions(items: List<QuickActionSpec>, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+    Row(modifier = modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         items.forEach { spec ->
             QuickAction(
                 title = spec.title,

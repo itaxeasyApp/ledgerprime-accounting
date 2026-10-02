@@ -66,4 +66,15 @@ data class Ledger(
         val sign = if (currentBalanceType == primaryGroup.naturalBalance) 1L else -1L
         return currentBalance.paise * sign
     }
+
+    /**
+     * The balance with its side kept: a Debit-side balance is positive, a Credit-side one negative -
+     * the same `debits - credits` sign the Trial Balance and the Balance Sheet use. [currentBalance]
+     * alone is only a magnitude (the side is in [currentBalanceType]), so anything that shows or sums a
+     * Cash/Bank ledger must use this, or an overdrawn (Credit) bank looks like money in hand.
+     */
+    fun debitMinusCredit(): Money = if (currentBalanceType == DrCr.DEBIT) currentBalance else -currentBalance
 }
+
+/** The summed [Ledger.debitMinusCredit] of these ledgers - what the Balance Sheet reports for a group of them. */
+fun List<Ledger>.netDebitBalance(): Money = fold(Money.ZERO) { acc, l -> acc + l.debitMinusCredit() }

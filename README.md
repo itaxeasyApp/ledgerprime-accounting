@@ -99,6 +99,50 @@ flat 10-group subset instead of the canonical 28-group hierarchy, so every compa
 this fix was missing 17 System Groups outright (most importantly Loans/Bank OD/Secured/Unsecured
 Loans); backfilled per-company via an idempotent, purely additive migration.
 
+## Phase 8 Developer Checkpoint (after Crashlytics)
+
+Current state, as of the Crashlytics checkpoint. Phase 8 was a step-gated audit/fix program; every step
+audited first, changed only what was needed, and added regression tests.
+
+**Completed (Steps 1-14, 17-20):** persistence fidelity; one posting gate (GST flag/facts, filed/locked
+period gate, one valid Credit/Debit Note per original); books correctness (COGS/inventory links); GST
+voucher filter; GSTR-1 (official GSTN serializer, validate-before-export); GSTR-3B (+ RCM liability);
+GSTR-9 and GSTR-9C working paper; Bank balance sign consistency across Home/Money/Trial Balance/Balance
+Sheet; GSTR-2B readiness audit and safety fix (unrecorded ITC rows are omitted from the 3B JSON, and
+GSTR-3B cannot become READY while its Table 4 ITC is unreconciled with GSTR-2B); purchase document
+identity (supplier GSTIN, supplier invoice number and date on the GST fact, duplicate-document guard,
+DB v30, NULL = NOT_RECORDED, never backfilled); Supplier Invoice Date input; identity propagation to
+sync/export; correction-flow prefill of the supplier identity and of the account-only GST rate/HSN;
+Firebase Crashlytics.
+
+**Stopped, awaiting an input (Steps 15-16):** real GSTR-2B input verification. No real GST Portal
+GSTR-2B file has been supplied, so the file format has not been documented and no importer exists.
+
+**Crashlytics**
+- Integrated through the existing Firebase BOM / plugin catalog (crashes and non-fatals only; no Analytics).
+- Firebase project: `ledgerprime-2418f` (project id as written in `app/google-services.json`).
+- Android applicationId: `com.ledgerprime.app`.
+- Sensitive-data redaction is implemented (`core/crash/CrashSanitizer.kt`): only exception class names and
+  stack traces are sent, never message text (which can contain GSTIN, PAN, bank, voucher/amount data); no
+  custom keys, user id or logs. `CrashReporter` is the only place that touches the Crashlytics API.
+- Test crash: a DEBUG-only trigger fired a test crash on a real device, the app was reopened, and the
+  report upload request returned HTTP 200. **Console confirmation is still awaiting** - the crash has not
+  yet been seen in the Firebase console, so delivery is not claimed as confirmed.
+- The DEBUG test-crash trigger has been removed; the final APK does not contain it.
+
+**Test baseline:** full suite = 1000 tests, 1 deliberate known failure
+(`BROKEN_G7_S7_gstr9AndGstr9c_mustBeAvailableForRegularTaxpayer`, GSTR-9/9C are deliberately not offered
+until an annual-period screen exists). Run: `./gradlew.bat testDebugUnitTest` (JDK 21).
+
+**Known open items**
+- GSTR-2B remains blocked pending a real GST Portal GSTR-2B file (importer, matcher, GSTR-3B READY,
+  GSTR-9 Table 8 all depend on it).
+- GSTR-9/9C annual-period UI is pending.
+- The permissions / Google Play audit (e.g. `READ_CONTACTS`, Data Safety, privacy policy) has not been started.
+- Not yet covered by the supplier identity: the supplier date on already-posted purchases (stays NOT_RECORDED),
+  a Debit Note's own supplier credit-note number/date, and later reference edits (the GST fact keeps the
+  number as posted).
+
 ## Getting Started
 
 This repo has two independently runnable halves - see the Claude Code skills below for verified,

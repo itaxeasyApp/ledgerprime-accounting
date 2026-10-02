@@ -385,9 +385,11 @@ interface AccountingDao {
     // Soft-cancel fix (Step 3 device-testing finding) - same reasoning as getAllJournalItems above:
     // a cancelled voucher's gst_transactions rows are never deleted any more, so every GST
     // summary/GSTR/export query built on this must exclude them itself. voucherId is null for a
-    // GST-only note's own transaction group (see getGstTransactionsByGroupId's KDoc) and therefore
-    // never matches the NOT IN subquery, so those rows are correctly unaffected.
-    @Query("SELECT * FROM gst_transactions WHERE companyId = :companyId AND financialYearId = :fyId AND voucherId NOT IN (SELECT voucherId FROM vouchers WHERE isCancelled = 1) ORDER BY createdAt ASC")
+    // GST-only transaction group (see getGstTransactionsByGroupId's KDoc). In SQL, `NULL NOT IN
+    // (non-empty subquery)` evaluates to NULL, not true, which would silently drop every GST-only
+    // row as soon as any voucher is cancelled - so NULL is kept explicitly here, and the subquery
+    // is scoped to this company.
+    @Query("SELECT * FROM gst_transactions WHERE companyId = :companyId AND financialYearId = :fyId AND (voucherId IS NULL OR voucherId NOT IN (SELECT voucherId FROM vouchers WHERE companyId = :companyId AND isCancelled = 1)) ORDER BY createdAt ASC")
     suspend fun getGstTransactionsForCompanyFY(companyId: String, fyId: String): List<GstTransactionEntity>
 
     /** D1b - fetches every line of ONE business transaction by its [GstTransactionEntity.transactionGroupId],
