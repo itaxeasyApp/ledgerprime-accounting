@@ -1,13 +1,28 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Auto Backup rules for Android 11 and below (this file is ignored on Android 12+, which uses
+    data_extraction_rules.xml - keep the two include lists identical).
+
+    POLICY (Phase 8, Step 22): an explicit ALLOWLIST. When <include> is present, Android backs up ONLY the
+    included files and nothing else, so everything not listed (voucher attachments, generated PDFs, secure
+    prefs, Crashlytics/Firebase state, cache) is excluded by omission. Android lint rejects an <exclude> that is
+    not inside an included path, so only the database side-files (inside the included db path) are excluded
+    explicitly; BackupPolicyTest asserts that every other sensitive path is NOT covered by any include.
+
+    - The MAIN database file only. The -wal/-shm files are never backed up: copied as separate files they
+      could be out of step with the main file and restore as a corrupt database; the main file alone is a
+      consistent (possibly slightly older) state because every accounting write is one transaction.
+    - The Keystore-backed secure prefs and their Tink keyset are never backed up: the Android Keystore key is
+      not restored, so a restored copy would be unreadable (and SecureStorage would silently fall back to a
+      plaintext file). A restored app simply starts with fresh secure prefs.
+    - Voucher attachments and generated documents (receipts, PAN/Aadhaar/GST scans a user attached) are not
+      backed up.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <include domain="database" path="ledgerprime_accounting.db" />
+    <include domain="sharedpref" path="ledgerprime_automation_cycle_prefs.xml" />
+
+    <exclude domain="database" path="ledgerprime_accounting.db-wal" />
+    <exclude domain="database" path="ledgerprime_accounting.db-shm" />
+    <exclude domain="database" path="ledgerprime_accounting.db-journal" />
 </full-backup-content>
