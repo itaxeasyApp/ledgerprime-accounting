@@ -20,6 +20,10 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CurrencyExchange
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
@@ -50,6 +54,8 @@ import com.example.accounting.presentation.components.BusinessSnapshot
 import com.example.accounting.presentation.components.DashboardCardBorder
 import com.example.accounting.presentation.components.QuickActionSpec
 import com.example.accounting.presentation.components.QuickActions
+import com.example.accounting.presentation.components.ReportCardGrid
+import com.example.accounting.presentation.components.ReportCardSpec
 import com.example.accounting.presentation.theme.Radius
 import com.example.accounting.presentation.theme.Spacing
 import com.example.accounting.presentation.viewmodel.AccountingUiState
@@ -86,6 +92,10 @@ fun DashboardScreen(
     onViewTrialBalance: () -> Unit,
     onViewBalanceSheet: () -> Unit,
     onViewCashFlow: () -> Unit,
+    onViewTrading: () -> Unit,
+    onViewCma: () -> Unit,
+    onViewRatioAnalysis: () -> Unit,
+    onViewFundFlow: () -> Unit,
     onOpenCash: () -> Unit,
     onOpenBank: () -> Unit,
     onOpenSales: () -> Unit,
@@ -117,7 +127,7 @@ fun DashboardScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = Spacing.md),
-        contentPadding = PaddingValues(top = Spacing.md, bottom = 80.dp),
+        contentPadding = PaddingValues(top = Spacing.md, bottom = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.md)
     ) {
         item {
@@ -218,24 +228,19 @@ fun DashboardScreen(
             Column {
                 Text("Quick Report", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(Spacing.sm))
-                // Collapsed from two rows of three into one row of four (explicit "too much
-                // screen... make one line four column" follow-up) - Cash Flow and Day Book tiles
-                // dropped from this specific quick-launcher only; both stay reachable elsewhere
-                // (Cash Flow via Reports Center's Financial menu, Day Book via the Money tab's own
-                // entry point) - nothing was actually removed from the app. "Trading" deep-links to
-                // the same real Profit & Loss report - a Trading Account is the goods-trading
-                // section within P&L (Sales - COGS = Gross Profit), never a separate report of its
-                // own in this domain model. CMA Data/Project Report are deliberately not tiles here:
-                // CMA has real domain logic (domain/cma/CmaReportGenerator.kt) but no UI/ViewModel
-                // wiring at all yet, and Project Report does not exist anywhere in this codebase.
-                QuickActions(
+                // Eight report tiles in exactly two rows of four (ReportCardGrid). Fund Flow and CMA have no
+                // report yet - their cards open that category's menu, where they show as "Coming soon".
+                ReportCardGrid(
                     items = listOf(
-                        QuickActionSpec("Trading", Icons.Default.Assessment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
-                        QuickActionSpec("Profit & Loss", Icons.AutoMirrored.Filled.TrendingUp, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewProfitLoss),
-                        QuickActionSpec("Balance Sheet", Icons.Default.AccountBalance, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewBalanceSheet),
-                        QuickActionSpec("Trial Balance", Icons.AutoMirrored.Filled.Assignment, MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, onViewTrialBalance)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                        ReportCardSpec("Trading", Icons.Default.Assessment, onViewTrading),
+                        ReportCardSpec("Profit & Loss", Icons.AutoMirrored.Filled.TrendingUp, onViewProfitLoss),
+                        ReportCardSpec("Balance Sheet", Icons.Default.AccountBalance, onViewBalanceSheet),
+                        ReportCardSpec("Trial Balance", Icons.AutoMirrored.Filled.Assignment, onViewTrialBalance),
+                        ReportCardSpec("Cash Flow", Icons.Default.CurrencyExchange, onViewCashFlow),
+                        ReportCardSpec("CMA", Icons.Default.Calculate, onViewCma),
+                        ReportCardSpec("Ratio Analysis", Icons.Default.Insights, onViewRatioAnalysis),
+                        ReportCardSpec("Fund Flow", Icons.Default.SwapVert, onViewFundFlow)
+                    )
                 )
             }
         }

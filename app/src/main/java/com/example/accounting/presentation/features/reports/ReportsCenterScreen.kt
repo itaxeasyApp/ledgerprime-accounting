@@ -69,14 +69,18 @@ private enum class ReportCategory(val label: String) { FINANCIAL("Financial"), S
  * given report-menu key lives under, so a caller (Dashboard) only ever has to name the report
  * itself, never duplicate this screen's own category layout. */
 private fun reportCategoryForKey(reportKey: String): ReportCategory? = when (reportKey) {
-    "Trial Balance", "Profit & Loss", "Balance Sheet", "Cash Flow" -> ReportCategory.FINANCIAL
+    "Trading", "Trial Balance", "Profit & Loss", "Balance Sheet", "Cash Flow", "Fund Flow" -> ReportCategory.FINANCIAL
     "Sales Register", "Purchase Register", "Credit Note Register", "Debit Note Register",
     "Outstanding Receivables", "Outstanding Payables" -> ReportCategory.SALES_PURCHASE
     "Cash Book", "Bank Book", "Receipt Register", "Payment Register" -> ReportCategory.ACCOUNTS
     "GST Summary", "HSN/SAC Summary", "GST Return Dashboard" -> ReportCategory.GST
-    "Ratio Analysis" -> ReportCategory.ANALYSIS
+    "Ratio Analysis", "CMA" -> ReportCategory.ANALYSIS
     else -> null
 }
+
+/** Deep-link keys whose report is not implemented yet (shown as "Coming soon" in their menu) - the
+ * Dashboard card lands on that category's menu instead of an empty report page. */
+private val unavailableReportKeys = setOf("Fund Flow", "CMA")
 
 /**
  * Phase 7J UI: the Reports Center (bottom-nav item #5) - a category-selector landing screen per
@@ -118,7 +122,7 @@ fun ReportsCenterScreen(
         val targetCategory = reportCategoryForKey(key)
         if (targetCategory != null) {
             category = targetCategory
-            pendingReportKey = key
+            pendingReportKey = key.takeIf { it !in unavailableReportKeys }
         }
         onDeepLinkConsumed()
     }
@@ -155,7 +159,7 @@ fun ReportsCenterScreen(
             ReportCategory.SALES_PURCHASE -> SalesPurchaseCategory(uiState, registerActions, initialReportKey)
             ReportCategory.ACCOUNTS -> AccountsCategory(uiState, onOpenDayBook, onOpenAllLedgers)
             ReportCategory.GST -> GstCategory(uiState, gstReturnActions, initialReportKey)
-            ReportCategory.ANALYSIS -> AnalysisCategory(uiState)
+            ReportCategory.ANALYSIS -> AnalysisCategory(uiState, initialReportKey)
             null -> {}
         }
     }
@@ -166,7 +170,7 @@ private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (Strin
     var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(
-            listOf("Trial Balance" to true, "Profit & Loss" to true, "Balance Sheet" to true, "Cash Flow" to true, "Fund Flow" to false)
+            listOf("Trading" to true, "Trial Balance" to true, "Profit & Loss" to true, "Balance Sheet" to true, "Cash Flow" to true, "Fund Flow" to false)
         ) { reportKey = it }
         return
     }
@@ -213,6 +217,12 @@ private fun FinancialCategory(uiState: AccountingUiState, onExportReport: (Strin
             financialYearLabel = uiState.currentFinancialYear?.fyCode?.let { "Financial Year: $it" } ?: "Financial Year: --"
         )
         when (reportKey) {
+            "Trading" -> if (uiState.currentCompany?.businessType == BusinessType.SERVICE) {
+                // A SERVICE company has no Trading Account - same Income & Expenditure as P&L.
+                IncomeAndExpenditureView(report = uiState.incomeAndExpenditure, trialBalance = uiState.trialBalance)
+            } else {
+                TradingView(report = uiState.profitAndLoss, trialBalance = uiState.trialBalance)
+            }
             "Trial Balance" -> TrialBalanceView(report = uiState.trialBalance)
             "Profit & Loss" -> if (uiState.currentCompany?.businessType == BusinessType.SERVICE) {
                 IncomeAndExpenditureView(report = uiState.incomeAndExpenditure, trialBalance = uiState.trialBalance)
@@ -464,8 +474,8 @@ private fun HsnSacSummaryView(rows: List<HsnSacSummaryRow>) {
 }
 
 @Composable
-private fun AnalysisCategory(uiState: AccountingUiState) {
-    var reportKey by remember { mutableStateOf<String?>(null) }
+private fun AnalysisCategory(uiState: AccountingUiState, initialReportKey: String? = null) {
+    var reportKey by remember { mutableStateOf(initialReportKey) }
     if (reportKey == null) {
         ReportMenu(listOf("Ratio Analysis" to true, "CMA" to false, "Advanced Reports" to false)) { reportKey = it }
         return

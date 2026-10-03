@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.accounting.presentation.theme.Radius
 import com.example.accounting.presentation.theme.Spacing
 
@@ -60,7 +59,7 @@ fun QuickAction(
             Spacer(modifier = Modifier.height(Spacing.xs))
             FitText(
                 text = title,
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = DashboardTileLabelFontSize),
                 color = contentColor,
                 modifier = Modifier.fillMaxWidth()
             )

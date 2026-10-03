@@ -39,18 +39,19 @@ import com.example.accounting.presentation.theme.Spacing
 
 /**
  * One shared border style for every Dashboard container (StatCard, QuickAction) - the theme's own
- * Royal Purple `primary` (no new color token: `RoyalPurple` in light, `RoyalPurpleLight` in dark),
- * so it follows the theme in both modes and no component hardcodes a purple. 1dp keeps it subtle.
+ * theme's own `outlineVariant` (no new color token) so it follows light/dark and stays a quiet
+ * hairline - the purple `primary` is kept for icons and actions, not for 24 box outlines.
  */
 @Composable
-fun DashboardCardBorder(): BorderStroke = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+fun DashboardCardBorder(): BorderStroke = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
 
 /** Shared Dashboard tile metrics - StatCard and QuickAction use these so both card types share one
  * height, icon size, padding, elevation and centered alignment. */
-val DashboardTileMinHeight = 96.dp
+val DashboardTileMinHeight = 80.dp
 val DashboardTileIconSize = 20.dp
 val DashboardTileElevation = 1.dp
-val DashboardTilePadding = PaddingValues(horizontal = Spacing.xs, vertical = Spacing.sm)
+val DashboardTileLabelFontSize = 11.sp
+val DashboardTilePadding = PaddingValues(horizontal = Spacing.xs, vertical = Spacing.xs)
 
 /**
  * Single-line text that steps its font size down (to [minSize]) until it fits the width, so tight
@@ -106,10 +107,13 @@ fun StatCard(
             Spacer(modifier = Modifier.height(Spacing.xs))
             FitText(title, MaterialTheme.typography.labelSmall, Modifier.fillMaxWidth(), MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(modifier = Modifier.height(Spacing.xs))
+            // Indian grouping with the rupee sign (Money.format) - whole rupees on the tile, the exact
+            // paise are one tap away in the report. A negative position (e.g. an overdrawn bank) reads red.
             FitText(
-                amount.formatPlain(),
+                amount.format().removeSuffix(".00"),
                 MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 15.sp, fontFamily = FontFamily.Monospace),
-                Modifier.fillMaxWidth()
+                Modifier.fillMaxWidth(),
+                if (amount.paise < 0) MaterialTheme.colorScheme.error else Color.Unspecified
             )
             // Blank subtitle renders nothing - the row's equal-height rule keeps siblings aligned.
             if (subtitle.isNotBlank()) {

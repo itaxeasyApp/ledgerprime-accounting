@@ -152,4 +152,20 @@ class LedgerEditPreservationTest {
         repo.updateLedger(dialogEdit(dao.getLedgerById(companyId, "LED_E1")!!, phone = "9999999999"))
         assertNull(dao.getLedgerById(companyId, "LED_E1")!!.gstRegistrationStatus)
     }
+
+    @Test fun legacyPrimaryBankAccountCanBeRenamedToARealBank_andIsUnlocked() = runBlocking {
+        val (dao, repo) = setup(persisted(id = "LED_BANK_$companyId", name = "Primary Bank Account", isSystem = true))
+        val r = repo.updateLedger(dialogEdit(dao.getLedgerById(companyId, "LED_BANK_$companyId")!!, name = "SBI Current A/c"))
+        assertTrue("the legacy seeded bank ledger must be renamable", r is AccountingResult.Success)
+        val saved = dao.getLedgerById(companyId, "LED_BANK_$companyId")!!
+        assertEquals("SBI Current A/c", saved.name)
+        assertFalse("it becomes an ordinary, independent bank ledger", saved.isSystem)
+    }
+
+    @Test fun otherSystemLedgersStillCannotBeRenamed() = runBlocking {
+        val (dao, repo) = setup(persisted(id = "LED_CASH_$companyId", name = "Cash in Hand", isSystem = true))
+        val r = repo.updateLedger(dialogEdit(dao.getLedgerById(companyId, "LED_CASH_$companyId")!!, name = "Petty Cash"))
+        assertTrue(r is AccountingResult.Failure)
+        assertEquals("Cash in Hand", dao.getLedgerById(companyId, "LED_CASH_$companyId")!!.name)
+    }
 }

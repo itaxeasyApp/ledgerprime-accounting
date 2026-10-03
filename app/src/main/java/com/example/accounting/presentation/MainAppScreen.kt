@@ -16,7 +16,9 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.Handyman
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
@@ -52,6 +54,7 @@ import androidx.activity.compose.BackHandler
 import com.example.accounting.presentation.navigation.AppRoute
 import com.example.accounting.presentation.components.AppDivider
 import com.example.accounting.presentation.components.AppTopBar
+import com.example.accounting.presentation.components.CompactNavigationBar
 import com.example.accounting.presentation.components.CreateBankUpiProfileDialog
 import com.example.accounting.presentation.components.CreateGroupDialog
 import com.example.accounting.presentation.components.CreateLedgerDialog
@@ -395,10 +398,9 @@ fun MainAppScreen(
 
     val navItems = listOf(
         NavItem(NavigationTab.HOME, AppRoute.Dashboard, "Home", Icons.Default.Home, "nav_home"),
-        NavItem(NavigationTab.SALES, AppRoute.Sales, "Sales", Icons.Default.Storefront, "nav_sales"),
-        NavItem(NavigationTab.PURCHASES, AppRoute.Purchases, "Purchase", Icons.Default.ShoppingCart, "nav_purchases"),
         NavItem(NavigationTab.MONEY, AppRoute.Money, "Money", Icons.Default.AccountBalanceWallet, "nav_money"),
-        NavItem(NavigationTab.REPORTS, AppRoute.Reports, "Reports", Icons.Default.Assessment, "nav_reports")
+        NavItem(NavigationTab.UTILITY, AppRoute.DataTools, "Utility", Icons.Default.Handyman, "nav_utility"),
+        NavItem(NavigationTab.SETTINGS, AppRoute.SettingsAndSync, "Settings", Icons.Default.Settings, "nav_settings")
     )
 
     // Product decision - single-business app: a business-less user must still see the Dashboard
@@ -501,8 +503,8 @@ fun MainAppScreen(
                             )
                         }
                     } else {
-                        NavigationBar {
-                            navItems.forEach { item ->
+                        CompactNavigationBar {
+                            navItems.forEachIndexed { index, item ->
                                 NavigationBarItem(
                                     selected = uiState.selectedTab == item.tab,
                                     onClick = { viewModel.selectTab(item.tab) },
@@ -510,6 +512,18 @@ fun MainAppScreen(
                                     label = { Text(item.label, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
                                     modifier = Modifier.testTag(item.tag)
                                 )
+                                // OCR sits in the centre slot (Home, Money, OCR, Utility, Settings). It reuses the existing document-scan
+                                // pipeline (type auto-detected, review via the existing OCR review
+                                // dialog / Money > Pending Reviews) - no new screen or popup.
+                                if (index == 1) {
+                                    NavigationBarItem(
+                                        selected = false,
+                                        onClick = { launchDocumentScan(OcrDocumentType.UNKNOWN) },
+                                        icon = { Icon(Icons.Default.DocumentScanner, contentDescription = "OCR") },
+                                        label = { Text("OCR", maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false) },
+                                        modifier = Modifier.testTag("nav_ocr")
+                                    )
+                                }
                             }
                         }
                     }
@@ -637,6 +651,10 @@ fun MainAppScreen(
                             onViewTrialBalance = { viewModel.viewReport("Trial Balance") },
                             onViewBalanceSheet = { viewModel.viewReport("Balance Sheet") },
                             onViewCashFlow = { viewModel.viewReport("Cash Flow") },
+                            onViewTrading = { viewModel.viewReport("Trading") },
+                            onViewCma = { viewModel.viewReport("CMA") },
+                            onViewRatioAnalysis = { viewModel.viewReport("Ratio Analysis") },
+                            onViewFundFlow = { viewModel.viewReport("Fund Flow") },
                             onOpenCash = { viewModel.navigateTo(AppRoute.Money) },
                             onOpenBank = { viewModel.navigateTo(AppRoute.Money) },
                             onOpenSales = { viewModel.navigateTo(AppRoute.Sales) },

@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Gavel
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Star
@@ -71,6 +74,24 @@ fun AppDrawerContent(
                 "GSTIN: ${(businessProfile?.gstin?.ifBlank { null } ?: currentCompany?.gstin)?.ifBlank { "Unregistered / Composition" } ?: "--"}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        HorizontalDivider()
+
+        // Sales / Purchase / Reports left the bottom bar (Home, Money, OCR, Utility, Settings) -
+        // they live here so they stay one tap away without crowding the Dashboard.
+        val workItems = listOf(
+            Triple(AppRoute.Sales, "Sales", Icons.Default.Storefront),
+            Triple(AppRoute.Purchases, "Purchase", Icons.Default.ShoppingCart),
+            Triple(AppRoute.Reports, "Reports", Icons.Default.Assessment)
+        )
+        workItems.forEach { (route, label, icon) ->
+            NavigationDrawerItem(
+                label = { Text(label) },
+                icon = { Icon(icon, contentDescription = null) },
+                selected = currentRoute == route,
+                onClick = { onNavigate(route) },
+                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
             )
         }
         HorizontalDivider()

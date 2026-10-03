@@ -367,6 +367,54 @@ fun TrialBalanceWarningBanner(trialBalance: TrialBalanceReport?) {
     }
 }
 
+/** The Trading Account (Gross Profit) card - shared by Profit & Loss and the standalone Trading report. */
+@Composable
+fun TradingAccountCard(report: ProfitAndLossReport) {
+    ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Trading Account", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ReportLineItem(label = "Sales & Invoiced Revenue", amount = report.salesRevenue, isPositive = true)
+            ReportLineItem(label = "Direct Incomes", amount = report.directIncomes, isPositive = true)
+            if (report.isInventoryAware) {
+                ReportLineItem(label = "Opening Stock", amount = report.openingStock, isPositive = false)
+                ReportLineItem(label = "Purchases", amount = report.purchases, isPositive = false)
+                ReportLineItem(label = "Closing Stock", amount = report.closingStock, isPositive = true)
+                ReportLineItem(label = "Cost of Goods Sold", amount = report.cogs, isPositive = false)
+            } else {
+                ReportLineItem(label = "Purchases", amount = report.purchases, isPositive = false)
+            }
+            ReportLineItem(label = "Direct Expenses", amount = report.directExpenses, isPositive = false)
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Gross Profit / (Loss)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                Text(report.grossProfit.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary))
+            }
+        }
+    }
+}
+
+/** Standalone Trading report: the same Trading Account card Profit & Loss opens with, on its own. */
+@Composable
+fun TradingView(report: ProfitAndLossReport?, trialBalance: TrialBalanceReport? = null) {
+    if (report == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Calculating Trading Account...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 80.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        TrialBalanceWarningBanner(trialBalance)
+        TradingAccountCard(report)
+    }
+}
+
 @Composable
 fun ProfitAndLossView(report: ProfitAndLossReport?, trialBalance: TrialBalanceReport? = null) {
     if (report == null) {
@@ -384,32 +432,7 @@ fun ProfitAndLossView(report: ProfitAndLossReport?, trialBalance: TrialBalanceRe
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         TrialBalanceWarningBanner(trialBalance)
-        // Trading Account (Gross Profit) Card
-        ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Trading Account", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
-                Spacer(modifier = Modifier.height(10.dp))
-
-                ReportLineItem(label = "Sales & Invoiced Revenue", amount = report.salesRevenue, isPositive = true)
-                ReportLineItem(label = "Direct Incomes", amount = report.directIncomes, isPositive = true)
-                if (report.isInventoryAware) {
-                    ReportLineItem(label = "Opening Stock", amount = report.openingStock, isPositive = false)
-                    ReportLineItem(label = "Purchases", amount = report.purchases, isPositive = false)
-                    ReportLineItem(label = "Closing Stock", amount = report.closingStock, isPositive = true)
-                    ReportLineItem(label = "Cost of Goods Sold", amount = report.cogs, isPositive = false)
-                } else {
-                    ReportLineItem(label = "Purchases", amount = report.purchases, isPositive = false)
-                }
-                ReportLineItem(label = "Direct Expenses", amount = report.directExpenses, isPositive = false)
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Gross Profit / (Loss)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
-                    Text(report.grossProfit.formatPlain(), style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary))
-                }
-            }
-        }
+        TradingAccountCard(report)
 
         // Operating & Indirect P&L (Net Profit) Card
         ElevatedCard(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {

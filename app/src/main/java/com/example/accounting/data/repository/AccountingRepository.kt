@@ -668,13 +668,8 @@ class AccountingRepository(
                 email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
                 isSystem = true, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
             ),
-            LedgerEntity(
-                ledgerId = "LED_BANK_${company.companyId}", companyId = company.companyId, groupId = "GRP_BANK_${company.companyId}",
-                name = "Primary Bank Account", code = "1002", openingBalancePaise = 0L, openingBalanceType = DrCr.DEBIT,
-                currentBalancePaise = 0L, currentBalanceType = DrCr.DEBIT, gstin = "", pan = "", stateCode = company.stateCode,
-                email = "", phone = "", address = "", bankName = "", bankAccountNumber = "", bankIfsc = "", bankBranch = "",
-                isSystem = true, isActive = true, hsnSacCode = "", defaultTaxRate = 0.0
-            ),
+            // No bank ledger is seeded: a company has as many bank accounts (SBI, HDFC, OD/CC ...) as it
+            // really has, each an independent ledger the user adds - there is no "Primary Bank Account".
             LedgerEntity(
                 ledgerId = "LED_SALES_${company.companyId}", companyId = company.companyId, groupId = "GRP_SALES_${company.companyId}",
                 name = salesLedgerName, code = "3001", openingBalancePaise = 0L, openingBalanceType = DrCr.CREDIT,
@@ -1500,8 +1495,11 @@ class AccountingRepository(
         val existing = dao.getLedgerById(ledger.companyId, ledger.ledgerId)
             ?: return AccountingResult.Failure(AppError.ValidationError("Ledger not found"))
 
+        // Legacy "Primary Bank Account" (auto-seeded by older versions as a locked system ledger): it is
+        // an ordinary bank ledger, so it may be renamed to the real bank and is unlocked on save.
+        val isLegacyPrimaryBank = existing.isSystem && existing.ledgerId.startsWith("LED_BANK_") && existing.name == LEGACY_PRIMARY_BANK_NAME
         if (existing.isSystem || ledger.ledgerId.let { id -> id.startsWith(StandardSystemGroups.SUSPENSE_LEDGER_ID) || id.startsWith(StandardSystemGroups.ROUND_OFF_LEDGER_ID) }) {
-            if (existing.name != ledger.name) {
+            if (existing.name != ledger.name && !isLegacyPrimaryBank) {
                 return AccountingResult.Failure(AppError.BusinessRuleViolation("System ledgers and Suspense A/c name is protected and cannot be renamed."))
             }
             if (existing.groupId != ledger.groupId) {
@@ -1598,7 +1596,7 @@ class AccountingRepository(
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
             bankBranch = ledger.bankBranch,
-            isSystem = existing.isSystem,
+            isSystem = existing.isSystem && !isLegacyPrimaryBank,
             isActive = existing.isActive,
             hsnSacCode = ledger.hsnSacCode,
             defaultTaxRate = existing.defaultTaxRate
@@ -6473,3 +6471,6 @@ class AccountingRepository(
         return AccountingResult.Success(dao.getGstReturnById(companyId, gstReturnId)!!.toDomain())
     }
 }
+
+/** Name older versions gave the auto-seeded bank ledger; only used to recognise and unlock that legacy ledger. */
+private const val LEGACY_PRIMARY_BANK_NAME = "Primary Bank Account"

@@ -127,7 +127,9 @@ enum class NavigationTab {
     SALES,
     PURCHASES,
     MONEY,
-    REPORTS
+    REPORTS,
+    UTILITY,
+    SETTINGS
 }
 
 data class AccountingUiState(
@@ -443,14 +445,14 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
                         refreshFinancialReports()
                         refreshGstAutomationNotifications()
                     }
-                    is AppRoute.SettingsAndSync -> { /* reached from Profile - keep whatever tab was active */ }
+                    is AppRoute.SettingsAndSync -> _uiState.update { it.copy(selectedTab = NavigationTab.SETTINGS) }
                     is AppRoute.Login -> { /* reached from Settings' Cloud Sync card - keep whatever tab was active */ }
                     is AppRoute.LedgerStatement -> { /* keep whatever tab was active (Home or Reports) */ }
                     is AppRoute.Parties -> { /* keep whatever tab was active (Sales or Purchases) */ }
                     is AppRoute.Profile -> { /* top-bar entry point - keep whatever tab was active */ }
                     is AppRoute.ProfileWizard -> { /* reached from Profile - keep whatever tab was active */ }
                     is AppRoute.Subscription -> { loadSubscription() }
-                    is AppRoute.DataTools -> { /* reached from Profile - keep whatever tab was active */ }
+                    is AppRoute.DataTools -> _uiState.update { it.copy(selectedTab = NavigationTab.UTILITY) }
                     is AppRoute.Search -> { /* top-bar entry point - keep whatever tab was active */ }
                     is AppRoute.About, is AppRoute.PrivacyPolicy, is AppRoute.TermsAndConditions, is AppRoute.Support ->
                         { /* drawer entry point - keep whatever tab was active */ }
@@ -629,6 +631,8 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
             NavigationTab.PURCHASES -> AppRoute.Purchases
             NavigationTab.MONEY -> AppRoute.Money
             NavigationTab.REPORTS -> AppRoute.Reports
+            NavigationTab.UTILITY -> AppRoute.DataTools
+            NavigationTab.SETTINGS -> AppRoute.SettingsAndSync
         }
         router.navigate(destination)
     }
