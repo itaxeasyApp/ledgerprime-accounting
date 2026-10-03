@@ -536,7 +536,7 @@ fun BalanceSheetView(report: BalanceSheetReport?, trialBalance: TrialBalanceRepo
                 Spacer(modifier = Modifier.height(10.dp))
 
                 ReportLineItem(label = "Capital Accounts", amount = report.capitalAccounts)
-                if (report.reservesAndSurplus.isPositive) {
+                if (report.reservesAndSurplus.paise != 0L) {
                     ReportLineItem(label = "Reserves & Surplus", amount = report.reservesAndSurplus)
                 }
                 ReportLineItem(label = if (report.netProfitForYear.isNegative) "Net Loss (from P&L)" else "Net Profit (from P&L)", amount = report.netProfitForYear.abs())
@@ -548,6 +548,9 @@ fun BalanceSheetView(report: BalanceSheetReport?, trialBalance: TrialBalanceRepo
                 ReportLineItem(label = "Duties & Taxes (GST Payable)", amount = report.dutiesAndTaxesLiability)
                 if (report.suspenseCredit.isPositive) {
                     ReportLineItem(label = "Suspense A/c (Control Credit)", amount = report.suspenseCredit)
+                }
+                if (report.openingDifferenceCredit.isPositive) {
+                    ReportLineItem(label = "Difference in Opening Balances", amount = report.openingDifferenceCredit)
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -584,6 +587,9 @@ fun BalanceSheetView(report: BalanceSheetReport?, trialBalance: TrialBalanceRepo
                 }
                 if (report.suspenseDebit.isPositive) {
                     ReportLineItem(label = "Suspense A/c (Control Debit)", amount = report.suspenseDebit)
+                }
+                if (report.openingDifferenceDebit.isPositive) {
+                    ReportLineItem(label = "Difference in Opening Balances", amount = report.openingDifferenceDebit)
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

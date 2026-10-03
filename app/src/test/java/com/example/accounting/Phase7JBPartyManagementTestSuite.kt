@@ -170,13 +170,22 @@ class Phase7JBPartyManagementTestSuite {
 
         val dao = EntryCountOverrideDao(baseDao, fixedCount = 1)
         val repository = AccountingRepository(dao, db = null)
-        val updateResult = repository.updateLedger(
+
+        // L4 contract: an attempt to CHANGE the opening balance once entries exist is rejected explicitly (it used
+        // to be silently dropped while the rest of the edit saved), and the whole ledger stays unchanged.
+        val before = baseDao.getLedgerById(companyId, created.ledgerId)!!
+        val rejected = repository.updateLedger(
             created.copy(name = "Office Supplies (Renamed)", openingBalance = Money.fromPaise(99_999_00L), openingBalanceType = DrCr.CREDIT)
         )
+        assertTrue("Changing the opening balance after entries exist must be rejected", rejected is AccountingResult.Failure)
+        assertEquals("A rejected update must leave the whole ledger unchanged", before, baseDao.getLedgerById(companyId, created.ledgerId))
+
+        // Other fields stay editable as long as the opening balance is the unchanged, stored one.
+        val updateResult = repository.updateLedger(created.copy(name = "Office Supplies (Renamed)"))
         val updated = (updateResult as AccountingResult.Success).data
 
         assertEquals("Name must still be editable after entries exist", "Office Supplies (Renamed)", updated.name)
-        assertEquals("Opening balance must be silently preserved once entries exist", 5000_00L, updated.openingBalance.paise)
+        assertEquals("Opening balance must be unchanged once entries exist", 5000_00L, updated.openingBalance.paise)
         assertEquals(DrCr.DEBIT, updated.openingBalanceType)
     }
 

@@ -173,7 +173,8 @@ class LedgerGroupChangeTest {
         assertAllowed(indirectExp, fixedAssets, posted = false)
         assertAllowed(debtors, bank, posted = false, opening = 7_500_00L)
         assertAllowed(bank, cash, posted = false, opening = 7_500_00L)
-        assertAllowed(sales, indirectExp, posted = false, opening = 1_000_00L)
+        // Income/Expense are period accounts and carry no opening balance (P2-3), so this move has none.
+        assertAllowed(sales, indirectExp, posted = false)
         assertAllowed(indirectExp, suspense, posted = false)   // control groups are S2, deliberately untouched here
     }
 

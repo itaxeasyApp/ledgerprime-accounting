@@ -17,6 +17,10 @@ enum class PrimaryGroup(
     EXPENSES("EXPENSES", "Expenses", DrCr.DEBIT, StatementType.PROFIT_AND_LOSS),
     SPECIAL_CONTROL("SPECIAL_CONTROL", "Special Control Accounts", DrCr.DEBIT, StatementType.BALANCE_SHEET, isSpecialControl = true);
 
+    /** Balance-Sheet positions (incl. the Suspense/Round Off control accounts the Balance Sheet presents) carry
+     * their balance into the next financial year; Income/Expense are period accounts and never do. */
+    fun isCarriedForward(): Boolean = this != INCOME && this != EXPENSES
+
     companion object {
         fun fromCode(code: String): PrimaryGroup {
             return entries.find { it.code.equals(code, ignoreCase = true) || it.name.equals(code, ignoreCase = true) } ?: ASSETS

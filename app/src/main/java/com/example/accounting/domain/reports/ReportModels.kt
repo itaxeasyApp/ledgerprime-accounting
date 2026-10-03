@@ -35,7 +35,11 @@ data class TrialBalanceReport(
     val totalClosingDebit: Money,
     val totalClosingCredit: Money,
     /** Recursive group-hierarchy totals (Section 21/22) - each group's total already includes all descendants. */
-    val groupHierarchy: List<GroupBalanceNode> = emptyList()
+    val groupHierarchy: List<GroupBalanceNode> = emptyList(),
+    /** Net profit/loss of all PRIOR financial years, carried into this year as a Balance Sheet position
+     * (Reserves & Surplus). Already included in the opening and closing totals; zero in a company's first FY. */
+    val priorYearsResultDebit: Money = Money.ZERO,
+    val priorYearsResultCredit: Money = Money.ZERO
 ) {
     val isBalanced: Boolean get() = totalClosingDebit.paise == totalClosingCredit.paise
     val difference: Money get() = (totalClosingDebit - totalClosingCredit).abs()
@@ -137,7 +141,13 @@ data class BalanceSheetReport(
     /** See [roundOffCredit]'s own doc - the same Round Off control-account balance, Debit-natured
      * side. */
     val roundOffDebit: Money = Money.ZERO,
-    val totalAssets: Money
+    val totalAssets: Money,
+    /** Entered opening balances (and stock opening values) that do not balance: shown as an explicit,
+     * derived difference on the side that makes the statement balance - never posted, never Suspense, never
+     * hidden. [openingDifferenceCredit] sits on the Liabilities side (debit openings exceed credit openings);
+     * [openingDifferenceDebit] on the Assets side. Already included in the totals. */
+    val openingDifferenceCredit: Money = Money.ZERO,
+    val openingDifferenceDebit: Money = Money.ZERO
 ) {
     val isBalanced: Boolean get() = totalLiabilities.paise == totalAssets.paise
     val difference: Money get() = (totalLiabilities - totalAssets).abs()

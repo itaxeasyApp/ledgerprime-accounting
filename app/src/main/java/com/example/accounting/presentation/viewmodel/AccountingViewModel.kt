@@ -1920,7 +1920,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
     fun loadLedgerStatement(ledger: Ledger) {
         viewModelScope.launch {
             val compId = _uiState.value.currentCompany?.companyId ?: return@launch
-            val statement = repository.generateLedgerStatement(compId, ledger.ledgerId)
+            val statement = repository.generateLedgerStatement(compId, ledger.ledgerId, _uiState.value.currentFinancialYear?.financialYearId)
             _uiState.update { it.copy(selectedLedgerStatement = statement) }
             router.navigate(AppRoute.LedgerStatement(ledger.ledgerId))
         }
@@ -1941,7 +1941,7 @@ class AccountingViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val compId = _uiState.value.currentCompany?.companyId ?: return@launch
             val ledgerId = _uiState.value.selectedLedgerStatement?.ledgerId ?: return@launch
-            val statement = repository.generateLedgerStatement(compId, ledgerId)
+            val statement = repository.generateLedgerStatement(compId, ledgerId, _uiState.value.currentFinancialYear?.financialYearId)
             _uiState.update { it.copy(selectedLedgerStatement = statement) }
         }
     }

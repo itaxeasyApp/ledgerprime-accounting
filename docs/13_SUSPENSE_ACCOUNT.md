@@ -17,6 +17,6 @@
      - If Suspense carries a net **Debit** balance, it is presented dynamically on the **Assets** side under Suspense Control Debit.
      - If Suspense carries a net **Credit** balance, it is presented dynamically on the **Liabilities** side under Suspense Control Credit.
 5. **Balancing Buffer & Period Locking**:
-   - When opening balances entered for a company do not balance ($\sum \text{Opening Dr} \neq \sum \text{Opening Cr}$), the delta is absorbed by the Suspense A/c.
+   - Suspense holds only what is posted to it. An opening-balance difference ($\sum \text{Opening Dr} \neq \sum \text{Opening Cr}$) is shown as its own "Difference in Opening Balances" line and is never absorbed by the Suspense A/c.
    - Having a non-zero Suspense balance does NOT block period locking, allowing operational continuity while tracking reconciliation.
 

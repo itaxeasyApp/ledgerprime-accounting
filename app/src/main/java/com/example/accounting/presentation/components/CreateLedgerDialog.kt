@@ -231,7 +231,9 @@ fun CreateLedgerDialog(
                                 text = { Text("${grp.name} (${grp.primaryGroup.displayName})") },
                                 onClick = {
                                     selectedGroupId = grp.groupId
-                                    balanceType = grp.primaryGroup.naturalBalance
+                                    // Only a NEW ledger takes its group's natural side; when editing, the existing
+                                    // opening-balance side is the user's data and must not be overwritten by choosing a group.
+                                    if (existingLedger == null) balanceType = grp.primaryGroup.naturalBalance
                                     groupDropdownExpanded = false
                                 }
                             )

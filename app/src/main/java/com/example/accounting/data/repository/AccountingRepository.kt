@@ -37,6 +37,7 @@ import com.example.accounting.data.local.entity.RecurringVoucherScheduleEntity
 import com.example.accounting.data.local.entity.RenderedDocumentRecordEntity
 import com.example.accounting.data.local.entity.SettlementAllocationEntity
 import com.example.accounting.data.local.entity.StockItemEntity
+import com.example.accounting.data.local.entity.StockMovementEntity
 import com.example.accounting.data.local.entity.TradeDocumentEntity
 import com.example.accounting.data.local.entity.TradeDocumentLineEntity
 import com.example.accounting.data.local.entity.VoucherEntity
@@ -1538,11 +1539,27 @@ class AccountingRepository(
             }
         }
 
-        // 13-point correctness pass, item 8 (Editable Ledgers) - Opening Balance may only be
-        // changed while the ledger has zero posted journal entries; once any entry exists,
-        // changing it would silently corrupt every balance derived from it since. Rather than
-        // failing the whole edit (name/GSTIN/phone/bank details should stay editable regardless),
-        // the caller's opening-balance intent is simply not applied - `existing`'s value wins.
+        // Opening Balance may only be changed while the ledger has zero posted journal entries (13-point
+        // correctness pass, item 8): once any entry exists the stored running balance is opening + postings,
+        // so changing the opening alone would desync it from the Trial Balance. An attempt to change it (L4) is
+        // therefore rejected explicitly - never silently dropped - and, like every other protected change here,
+        // before anything is written. A request that carries the SAME opening (an untouched dialog) is fine, so
+        // name/GSTIN/phone/bank details stay editable. The side is only meaningful for a non-zero amount.
+        if (hasEntries) {
+            val amountChanged = ledger.openingBalance.paise != existing.openingBalancePaise
+            val sideChanged = existing.openingBalancePaise != 0L && ledger.openingBalanceType != existing.openingBalanceType
+            if (amountChanged || sideChanged) {
+                return AccountingResult.Failure(
+                    AppError.BusinessRuleViolation(
+                        "The opening balance of '${existing.name}' can no longer be changed because it has posted accounting entries. " +
+                            "Record a journal entry to correct the balance instead."
+                    )
+                )
+            }
+        }
+
+        if (!hasEntries) periodAccountOpeningRejection(ledger)?.let { return it }
+
         val openingBalancePaise = if (hasEntries) existing.openingBalancePaise else ledger.openingBalance.paise
         val openingBalanceType = if (hasEntries) existing.openingBalanceType else ledger.openingBalanceType
         // Step 4 live-device fix - with zero posted entries, current balance IS the opening
@@ -1638,7 +1655,22 @@ class AccountingRepository(
         )
     )
 
+    /** Income and Expense are period accounts: a ledger under one cannot carry an opening balance (P2-3). Null when
+     * the request is fine. Checked before anything is written; the group is resolved from the company's own groups. */
+    private suspend fun periodAccountOpeningRejection(ledger: Ledger): AccountingResult.Failure? {
+        if (ledger.openingBalance.paise == 0L) return null
+        val primaryGroup = dao.getGroupsByCompany(ledger.companyId).first().firstOrNull { it.groupId == ledger.groupId }?.primaryGroup
+            ?: return null
+        if (primaryGroup.isCarriedForward()) return null
+        return AccountingResult.Failure(
+            AppError.ValidationError(
+                "'${ledger.name}' is an ${primaryGroup.displayName} account. Income and expense accounts are period accounts and cannot have an opening balance."
+            )
+        )
+    }
+
     suspend fun createLedger(ledger: Ledger): AccountingResult<Ledger> {
+        periodAccountOpeningRejection(ledger)?.let { return it }
         val entity = LedgerEntity(
             ledgerId = ledger.ledgerId.ifBlank { "LED_${UUID.randomUUID().toString().take(8)}_${ledger.companyId}" },
             companyId = ledger.companyId,
@@ -2902,23 +2934,35 @@ class AccountingRepository(
                 items.sumOf { if (it.type == DrCr.DEBIT) it.amountPaise else -it.amountPaise }
             }
 
-        var totalOpDr = 0L
-        var totalOpCr = 0L
+        // Prior years' profit/loss (P0-1): Income/Expense ledgers are period-only and are not carried, but the
+        // journals that produced them were balanced by Balance-Sheet postings that ARE carried above - so without
+        // this the FY's opening would be short by exactly the previous years' net result. That result is a Balance
+        // Sheet position (Reserves & Surplus) of the new year: derived here from the same prior-FY postings,
+        // never stored or posted, and never an auto-adjustment of an entered opening difference.
+        val priorYearsResultSigned = ledgers.sumOf { led ->
+            val pg = groupsById[led.groupId]?.primaryGroup ?: PrimaryGroup.ASSETS
+            if (pg.isCarriedForward()) 0L else (priorFyNetDeltaByLedger[led.ledgerId] ?: 0L)
+        }
+        val priorResultDr = if (priorYearsResultSigned > 0) priorYearsResultSigned else 0L
+        val priorResultCr = if (priorYearsResultSigned < 0) -priorYearsResultSigned else 0L
+
+        var totalOpDr = priorResultDr
+        var totalOpCr = priorResultCr
         var totalTxDr = 0L
         var totalTxCr = 0L
-        var totalClDr = 0L
-        var totalClCr = 0L
+        var totalClDr = priorResultDr
+        var totalClCr = priorResultCr
 
         val allRows = ledgers.map { led ->
             val group = groupsById[led.groupId]
             val primaryGroup = group?.primaryGroup ?: PrimaryGroup.ASSETS
 
             val storedOpeningSigned = if (led.openingBalanceType == DrCr.DEBIT) led.openingBalancePaise else -led.openingBalancePaise
-            val isBalanceSheetNature = primaryGroup == PrimaryGroup.ASSETS || primaryGroup == PrimaryGroup.LIABILITIES || primaryGroup == PrimaryGroup.EQUITY
+            val isBalanceSheetNature = primaryGroup.isCarriedForward()
             val carriedForwardSigned = if (isBalanceSheetNature) {
                 storedOpeningSigned + (priorFyNetDeltaByLedger[led.ledgerId] ?: 0L)
             } else {
-                storedOpeningSigned
+                0L // Income/Expense are period accounts: no opening balance, in any financial year (P2-3)
             }
             val opDr = if (carriedForwardSigned >= 0) carriedForwardSigned else 0L
             val opCr = if (carriedForwardSigned < 0) -carriedForwardSigned else 0L
@@ -2975,7 +3019,9 @@ class AccountingRepository(
             totalTransactionCredit = Money.fromPaise(totalTxCr),
             totalClosingDebit = Money.fromPaise(totalClDr),
             totalClosingCredit = Money.fromPaise(totalClCr),
-            groupHierarchy = hierarchy
+            groupHierarchy = hierarchy,
+            priorYearsResultDebit = Money.fromPaise(priorResultDr),
+            priorYearsResultCredit = Money.fromPaise(priorResultCr)
         )
 
         // Deliberately no throw-on-imbalance here - see this function's own KDoc.
@@ -3129,6 +3175,38 @@ class AccountingRepository(
      * correctly uses the live, always-balanced `purchasePaise`/`salesPaise` ledger totals instead of
      * a guessed COGS figure.
      */
+    /** Non-cancelled stock movements of every OTHER financial year dated before [fyId]'s start, per item. Empty
+     * for a company's first FY (and when the FY is unknown), so single-year behavior is unchanged. */
+    private suspend fun priorFyStockMovementsByItem(
+        companyId: String,
+        fyId: String,
+        cancelledVoucherIds: Set<String>
+    ): Map<String, List<StockMovementEntity>> {
+        val fyStart = dao.getFinancialYearById(fyId)?.startDate?.let { safeParseDate(it) } ?: return emptyMap()
+        return dao.getStockItemsByCompany(companyId).first().associate { item ->
+            item.itemId to dao.getStockMovementsForItem(companyId, item.itemId).filter {
+                it.financialYearId != fyId && it.voucherId !in cancelledVoucherIds && safeParseDate(it.date).isBefore(fyStart)
+            }
+        }
+    }
+
+    /**
+     * Value of the prior years' stock movement on top of the items' original opening value (what the first FY's
+     * Balance Sheet already carries as the Suspense opening-stock reserve): the stock at this FY's start minus the
+     * original opening. Prior years' profit includes it (closing stock is part of their COGS), so the carried
+     * Reserves & Surplus must too. Zero in a company's first FY.
+     */
+    private suspend fun priorYearsStockEffectPaise(companyId: String, fyId: String): Long {
+        val cancelled = dao.getAllVouchersByCompany(companyId).first().filter { it.isCancelled }.map { it.voucherId }.toSet()
+        val prior = priorFyStockMovementsByItem(companyId, fyId, cancelled)
+        return dao.getStockItemsByCompany(companyId).first().sumOf { item ->
+            val moves = prior[item.itemId].orEmpty()
+            if (moves.isEmpty()) 0L
+            else CogsEngine.replayItemValuation(item.openingQuantity, item.openingRatePaise, moves).valuePaise -
+                StockValuationEngine.amountFor(item.openingQuantity, item.openingRatePaise)
+        }
+    }
+
     private suspend fun computeCogsIfInventoryAware(
         companyId: String,
         fyId: String,
@@ -3147,10 +3225,14 @@ class AccountingRepository(
         val movementsByItem = dao.getStockMovementsForCompanyFY(companyId, fyId)
             .filter { it.voucherId !in cancelledVoucherIds }
             .groupBy { it.itemId }
+        // P0-2: stock carries across financial years - the FY's opening position is the item's opening plus
+        // every movement of the PRIOR financial years, not the item's original opening alone.
+        val priorFyMovementsByItem = priorFyStockMovementsByItem(companyId, fyId, cancelledVoucherIds)
 
         val results = items.map { item ->
             val itemMovements = movementsByItem[item.itemId] ?: emptyList()
-            val before = if (dateRange == null) emptyList() else itemMovements.filter { safeParseDate(it.date).isBefore(dateRange.start) }
+            val priorFyMovements = priorFyMovementsByItem[item.itemId] ?: emptyList()
+            val before = priorFyMovements + if (dateRange == null) emptyList() else itemMovements.filter { safeParseDate(it.date).isBefore(dateRange.start) }
             val inPeriod = if (dateRange == null) itemMovements else itemMovements.filter {
                 val d = safeParseDate(it.date)
                 !d.isBefore(dateRange.start) && !d.isAfter(dateRange.endInclusive)
@@ -3194,27 +3276,29 @@ class AccountingRepository(
         val suspenseNode = GroupAggregationEngine.findNode(hierarchy, "${StandardSystemGroups.SUSPENSE_GROUP_ID}_$companyId")
         val suspenseLedgerNetSigned = (suspenseNode?.totalDebitPaise ?: 0L) - (suspenseNode?.totalCreditPaise ?: 0L)
 
-        // Balance Sheet imbalance fix (real-device finding, ₹5,000 diff on a company with stock
-        // items carrying a nonzero Opening Quantity/Opening Rate) - createStockItem() persists that
-        // opening value onto StockItemEntity directly, with no offsetting journal entry anywhere
-        // (unlike an ordinary ledger's opening balance, which is just as real a debit/credit as any
-        // transaction and is naturally covered by this same Suspense safety net when unbalanced).
-        // CogsEngine always replays from item.openingQuantity/openingRatePaise regardless of period
-        // (see computeCogsIfInventoryAware), so this phantom value is a fixed, date-range-independent
-        // amount that flows into stockInHandPaise on the Assets side with nothing backing it on the
-        // Liabilities+Equity side. Folding its total into the same net Suspense figure that already
-        // absorbs any ordinary opening-balance mismatch - as a credit, since an asset that exists
-        // with no capital/liability entry behind it needs a credit-side counterweight - makes the
-        // Balance Sheet identity hold by construction instead of throwing BalanceSheetNotBalanced.
-        val openingStockReservePaise = if (pnl.isInventoryAware) {
+        // Suspense is exactly the Suspense ledger's own balance - never a catch-all for opening differences.
+        val suspenseDebitPaise = if (suspenseLedgerNetSigned > 0) suspenseLedgerNetSigned else 0L
+        val suspenseCreditPaise = if (suspenseLedgerNetSigned < 0) -suspenseLedgerNetSigned else 0L
+
+        // Opening difference (P2-1/P2-2): entered opening balances of Balance-Sheet ledgers, plus the items' opening
+        // stock value (a stock item's opening is persisted on StockItemEntity with no journal and no ledger), need
+        // not balance. The difference is SHOWN as its own derived line (never posted, never Suspense, never hidden)
+        // and keeps the statement's identity intact; a Balance Sheet that is out of balance for any OTHER reason
+        // still throws below. Income/Expense ledgers are period accounts and carry no opening balance.
+        val primaryGroupByLedger = trialBalance.rows.associate { it.ledgerId to it.primaryGroup }
+        val enteredOpeningSigned = dao.getLedgersByCompany(companyId).first().sumOf { led ->
+            if (primaryGroupByLedger[led.ledgerId]?.isCarriedForward() == false) 0L
+            else if (led.openingBalanceType == DrCr.DEBIT) led.openingBalancePaise else -led.openingBalancePaise
+        }
+        val openingStockValuePaise = if (pnl.isInventoryAware) {
             dao.getStockItemsByCompany(companyId).first()
                 .sumOf { StockValuationEngine.amountFor(it.openingQuantity, it.openingRatePaise) }
         } else {
             0L
         }
-        val suspenseNetSigned = suspenseLedgerNetSigned - openingStockReservePaise
-        val suspenseDebitPaise = if (suspenseNetSigned > 0) suspenseNetSigned else 0L
-        val suspenseCreditPaise = if (suspenseNetSigned < 0) -suspenseNetSigned else 0L
+        val openingDifferenceSigned = enteredOpeningSigned + openingStockValuePaise // Dr - Cr
+        val openingDifferenceCreditPaise = if (openingDifferenceSigned > 0) openingDifferenceSigned else 0L
+        val openingDifferenceDebitPaise = if (openingDifferenceSigned < 0) -openingDifferenceSigned else 0L
 
         // Real bug fix (live-device audit finding) - "Round Off" is the SAME PrimaryGroup.SPECIAL_CONTROL
         // control-account treatment as Suspense above, and needs the exact same explicit fold: a
@@ -3231,7 +3315,11 @@ class AccountingRepository(
 
         // EQUITY
         val capitalPaise = netCredit(StandardSystemGroups.CAPITAL_GROUP_ID)
-        val reservesPaise = netCredit(StandardSystemGroups.RESERVES_GROUP_ID)
+        // Previous years' profit/loss is part of this year's opening Reserves & Surplus (P0-1).
+        // plus, for an inventory company, the stock value those years carried into this one (P0-2).
+        val priorYearsStockEffectPaise = if (pnl.isInventoryAware) priorYearsStockEffectPaise(companyId, fyId) else 0L
+        val reservesPaise = netCredit(StandardSystemGroups.RESERVES_GROUP_ID) +
+            trialBalance.priorYearsResultCredit.paise - trialBalance.priorYearsResultDebit.paise + priorYearsStockEffectPaise
 
         // LIABILITIES - named buckets subtracted from the primary-group-wide total, so nested
         // subgroups (e.g. GRP_DUTIES lives under GRP_CURRENT_LIAB) are attributed once, correctly.
@@ -3265,8 +3353,8 @@ class AccountingRepository(
         // above, so COGS is derived exactly once per report.
         val stockInHandPaise = pnl.closingStock.paise
 
-        val totalLiabilitiesPaise = capitalPaise + reservesPaise + pnl.netProfit.paise + loansPaise + currentLiabPaise + dutiesTaxesPaise + branchDivPaise + suspenseCreditPaise + roundOffCreditPaise
-        val totalAssetsPaise = fixedAssetsPaise + investmentsPaise + currentAssetsPaise + debtorsPaise + bankPaise + cashPaise + miscExpPaise + suspenseDebitPaise + stockInHandPaise + gstRecoverablePaise + roundOffDebitPaise
+        val totalLiabilitiesPaise = capitalPaise + reservesPaise + pnl.netProfit.paise + loansPaise + currentLiabPaise + dutiesTaxesPaise + branchDivPaise + suspenseCreditPaise + roundOffCreditPaise + openingDifferenceCreditPaise
+        val totalAssetsPaise = fixedAssetsPaise + investmentsPaise + currentAssetsPaise + debtorsPaise + bankPaise + cashPaise + miscExpPaise + suspenseDebitPaise + stockInHandPaise + gstRecoverablePaise + roundOffDebitPaise + openingDifferenceDebitPaise
 
         val report = BalanceSheetReport(
             companyName = company?.name ?: "Company",
@@ -3293,7 +3381,9 @@ class AccountingRepository(
             gstRecoverable = Money.fromPaise(gstRecoverablePaise),
             suspenseDebit = Money.fromPaise(suspenseDebitPaise),
             roundOffDebit = Money.fromPaise(roundOffDebitPaise),
-            totalAssets = Money.fromPaise(totalAssetsPaise)
+            totalAssets = Money.fromPaise(totalAssetsPaise),
+            openingDifferenceCredit = Money.fromPaise(openingDifferenceCreditPaise),
+            openingDifferenceDebit = Money.fromPaise(openingDifferenceDebitPaise)
         )
 
         if (!report.isBalanced) {
@@ -3305,15 +3395,36 @@ class AccountingRepository(
         return report
     }
 
-    suspend fun generateLedgerStatement(companyId: String, ledgerId: String): LedgerStatementReport {
+    /**
+     * @param fyId when given (P2-4) the statement is scoped to that financial year exactly like the Trial Balance:
+     *   only that year's rows, opening = the stored opening plus every posting dated before the year's start for a
+     *   Balance-Sheet ledger, and zero for an Income/Expense (period) ledger. Null keeps the lifetime statement.
+     */
+    suspend fun generateLedgerStatement(companyId: String, ledgerId: String, fyId: String? = null): LedgerStatementReport {
         val ledger = dao.getLedgerById(companyId, ledgerId)
-        val journalItems = dao.getJournalItemsByLedger(companyId, ledgerId)
+        val allJournalItems = dao.getJournalItemsByLedger(companyId, ledgerId)
         val vouchers = dao.getAllVouchersByCompany(companyId).first().associateBy { it.voucherId }
 
-        val opPaise = ledger?.openingBalancePaise ?: 0L
-        val opType = ledger?.openingBalanceType ?: DrCr.DEBIT
+        val fyEntity = fyId?.let { dao.getFinancialYearById(it) }
+        val scopedToFy = fyId != null && fyEntity != null
+        val journalItems = if (scopedToFy) allJournalItems.filter { it.financialYearId == fyId } else allJournalItems
 
-        var runningSigned = if (opType == DrCr.DEBIT) opPaise else -opPaise
+        var openingSigned = if (ledger?.openingBalanceType == DrCr.CREDIT) -(ledger.openingBalancePaise) else (ledger?.openingBalancePaise ?: 0L)
+        if (scopedToFy && ledger != null) {
+            val primaryGroup = dao.getGroupsByCompany(companyId).first().firstOrNull { it.groupId == ledger.groupId }?.primaryGroup ?: PrimaryGroup.ASSETS
+            if (primaryGroup.isCarriedForward()) {
+                val fyStart = safeParseDate(fyEntity!!.startDate)
+                openingSigned += allJournalItems
+                    .filter { item -> vouchers[item.voucherId]?.date?.let { safeParseDate(it) }?.isBefore(fyStart) == true }
+                    .sumOf { if (it.type == DrCr.DEBIT) it.amountPaise else -it.amountPaise }
+            } else {
+                openingSigned = 0L
+            }
+        }
+        val opPaise = kotlin.math.abs(openingSigned)
+        val opType = if (openingSigned < 0) DrCr.CREDIT else DrCr.DEBIT
+
+        var runningSigned = openingSigned
         var totalDr = 0L
         var totalCr = 0L
 
