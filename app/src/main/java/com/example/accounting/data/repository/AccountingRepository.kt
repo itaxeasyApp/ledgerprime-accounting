@@ -1508,12 +1508,41 @@ class AccountingRepository(
             }
         }
 
+        val hasEntries = dao.countJournalEntriesForLedger(ledger.companyId, ledger.ledgerId) > 0
+
+        // Ledger group change (L3) - every report resolves a ledger's CURRENT group at report time and the journal
+        // rows carry no group, so moving a ledger that has posted history would retroactively reclassify every
+        // past period. Validated here, before any field is written, so a rejected request changes nothing.
+        // A new group must exist in this company. With posted history it must also be classification-neutral: the
+        // same Primary Group and the same nearest System Group anchor (user groups under one System Group, and that
+        // System Group itself, are interchangeable; another System Group, another Primary Group, or Special Control
+        // is not). Without posted history any valid group stays allowed, as before.
+        if (existing.groupId != ledger.groupId) {
+            val groupsById = dao.getGroupsByCompany(ledger.companyId).first().associateBy { it.groupId }
+            val newGroup = groupsById[ledger.groupId]
+                ?: return AccountingResult.Failure(AppError.ValidationError("The selected group does not exist in this company."))
+            if (hasEntries) {
+                val oldGroup = groupsById[existing.groupId]
+                val oldAnchor = oldGroup?.let { systemGroupAnchor(it.groupId, groupsById) }
+                val newAnchor = systemGroupAnchor(newGroup.groupId, groupsById)
+                if (oldGroup == null || oldAnchor == null || newAnchor == null ||
+                    oldGroup.primaryGroup != newGroup.primaryGroup || oldAnchor != newAnchor
+                ) {
+                    return AccountingResult.Failure(
+                        AppError.BusinessRuleViolation(
+                            "Ledger '${existing.name}' has posted accounting entries, so it can only be moved to a group under the same system group " +
+                                "(changing its classification would change past reports). Create a new ledger under the other group instead."
+                        )
+                    )
+                }
+            }
+        }
+
         // 13-point correctness pass, item 8 (Editable Ledgers) - Opening Balance may only be
         // changed while the ledger has zero posted journal entries; once any entry exists,
         // changing it would silently corrupt every balance derived from it since. Rather than
         // failing the whole edit (name/GSTIN/phone/bank details should stay editable regardless),
         // the caller's opening-balance intent is simply not applied - `existing`'s value wins.
-        val hasEntries = dao.countJournalEntriesForLedger(ledger.companyId, ledger.ledgerId) > 0
         val openingBalancePaise = if (hasEntries) existing.openingBalancePaise else ledger.openingBalance.paise
         val openingBalanceType = if (hasEntries) existing.openingBalanceType else ledger.openingBalanceType
         // Step 4 live-device fix - with zero posted entries, current balance IS the opening
@@ -1575,6 +1604,21 @@ class AccountingRepository(
                 defaultTaxRate = entity.defaultTaxRate
             )
         )
+    }
+
+    /**
+     * The nearest System Group at or above [groupId] (the group itself when it is a System Group), walking
+     * `parentGroupId`; `null` when there is none or the chain is cyclic/broken. Two groups with the same
+     * anchor and Primary Group classify every ledger identically in every report.
+     */
+    private fun systemGroupAnchor(groupId: String, groupsById: Map<String, GroupEntity>): String? {
+        var current: GroupEntity? = groupsById[groupId]
+        val visited = mutableSetOf<String>()
+        while (current != null && visited.add(current.groupId)) {
+            if (current.isSystem) return current.groupId
+            current = current.parentGroupId?.let { groupsById[it] }
+        }
+        return null
     }
 
     /** Shared builder for the CREATE_LEDGER/DELETE_LEDGER [SyncEvent]s (Phase 6, Priority 6.4). */
