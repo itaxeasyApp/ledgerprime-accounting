@@ -1526,12 +1526,16 @@ class AccountingRepository(
         val currentBalancePaise = if (hasEntries) existing.currentBalancePaise else openingBalancePaise
         val currentBalanceType = if (hasEntries) existing.currentBalanceType else openingBalanceType
 
+        // Ledger-edit preservation - the edit path (AccountingViewModel.updateLedger) rebuilds a Ledger from
+        // the dialog's fields only, so every attribute it does not collect arrives as a constructor default.
+        // Those must never overwrite what is persisted: the ledger code, the system/control flag, the active
+        // flag, the GST registration status and the default tax rate keep their EXISTING values on an edit.
         val entity = LedgerEntity(
             ledgerId = ledger.ledgerId,
             companyId = ledger.companyId,
             groupId = ledger.groupId,
             name = ledger.name,
-            code = ledger.code,
+            code = existing.code,
             openingBalancePaise = openingBalancePaise,
             openingBalanceType = openingBalanceType,
             currentBalancePaise = currentBalancePaise,
@@ -1539,7 +1543,7 @@ class AccountingRepository(
             gstin = Constants.normalizeTaxId(ledger.gstin),
             pan = Constants.normalizeTaxId(ledger.pan),
             stateCode = ledger.stateCode,
-            gstRegistrationStatus = ledger.gstRegistrationStatus?.name,
+            gstRegistrationStatus = existing.gstRegistrationStatus,
             email = ledger.email,
             phone = ledger.phone,
             address = ledger.address,
@@ -1548,22 +1552,27 @@ class AccountingRepository(
             bankAccountNumber = ledger.bankAccountNumber,
             bankIfsc = ledger.bankIfsc,
             bankBranch = ledger.bankBranch,
-            isSystem = ledger.isSystem,
-            isActive = ledger.isActive,
+            isSystem = existing.isSystem,
+            isActive = existing.isActive,
             hsnSacCode = ledger.hsnSacCode,
-            defaultTaxRate = ledger.defaultTaxRate
+            defaultTaxRate = existing.defaultTaxRate
         )
         dao.updateLedger(entity)
         // Return what was actually persisted, not the caller's raw request - opening balance,
         // current balance, and GSTIN/PAN may all have been overridden above.
         return AccountingResult.Success(
             ledger.copy(
+                code = entity.code,
                 openingBalance = Money.fromPaise(entity.openingBalancePaise),
                 openingBalanceType = entity.openingBalanceType,
                 currentBalance = Money.fromPaise(entity.currentBalancePaise),
                 currentBalanceType = entity.currentBalanceType,
                 gstin = entity.gstin,
-                pan = entity.pan
+                pan = entity.pan,
+                gstRegistrationStatus = entity.gstRegistrationStatus?.let { raw -> runCatching { GstRegistrationStatus.valueOf(raw) }.getOrNull() },
+                isSystem = entity.isSystem,
+                isActive = entity.isActive,
+                defaultTaxRate = entity.defaultTaxRate
             )
         )
     }
